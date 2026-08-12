@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  actions: read
+  contents: write
 
 jobs:
   check:
@@ -45,4 +46,28 @@ jobs:
     uses: ./.github/workflows/sync-game.yml
     with:
       game_version: ${{ needs.check.outputs.game_version }}
+    secrets: inherit
+
+  legacy:
+    needs: sync
+    uses: ./.github/workflows/fetch-legacy-data.yml
+    secrets: inherit
+
+  build-preview:
+    needs: [sync, legacy]
+    uses: ./.github/workflows/build-patch.yml
+    with:
+      revision_id: ${{ needs.sync.outputs.revision_id }}
+      patch_version: ${{ format('v{0}-r{1}-preview.{2}', needs.sync.outputs.game_version, needs.sync.outputs.revision, github.run_number) }}
+      channel: preview
+      legacy_run_id: ${{ needs.legacy.outputs.run_id }}
+      legacy_artifact_name: ${{ needs.legacy.outputs.artifact_name }}
+    secrets: inherit
+
+  release-preview:
+    needs: build-preview
+    uses: ./.github/workflows/release-patch.yml
+    with:
+      build_run_id: ${{ github.run_id }}
+      artifact_name: ${{ needs.build-preview.outputs.artifact_name }}
     secrets: inherit

@@ -1,6 +1,29 @@
 name: Build Patch
 
 on:
+  workflow_call:
+    inputs:
+      revision_id:
+        required: true
+        type: string
+      patch_version:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      legacy_run_id:
+        required: true
+        type: string
+      legacy_artifact_name:
+        required: false
+        default: astral-party-legacy-data
+        type: string
+    outputs:
+      artifact_name:
+        value: ${{ jobs.build.outputs.artifact_name }}
+      build_id:
+        value: ${{ jobs.build.outputs.build_id }}
   workflow_dispatch:
     inputs:
       revision_id:
@@ -34,6 +57,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      build_id: ${{ steps.build.outputs.build_id }}
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
     steps:
@@ -84,10 +110,14 @@ jobs:
           --manifest output/patch/manifest.json
           --assets-dir output/patch/assets
           --route-config routes/int_steam.yaml
+      - name: Define patch artifact metadata
+        id: meta
+        shell: bash
+        run: echo "artifact_name=patch-${{ inputs.patch_version }}-${{ inputs.channel }}" >> "$GITHUB_OUTPUT"
       - name: Upload validated patch artifact
         uses: actions/upload-artifact@v7
         with:
-          name: patch-${{ inputs.patch_version }}-${{ inputs.channel }}
+          name: ${{ steps.meta.outputs.artifact_name }}
           path: output/patch/
           if-no-files-found: error
           compression-level: 0

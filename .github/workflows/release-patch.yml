@@ -1,6 +1,14 @@
 name: Release Patch
 
 on:
+  workflow_call:
+    inputs:
+      build_run_id:
+        required: true
+        type: string
+      artifact_name:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       build_run_id:
@@ -78,7 +86,11 @@ jobs:
               f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/"
               f"{os.environ['TAG']}/"
           )
-          bad = [item["downloadUrl"] for item in data["files"] if not item["downloadUrl"].startswith(prefix)]
+          bad = [
+              item["downloadUrl"]
+              for item in data["files"]
+              if not item["downloadUrl"].startswith(prefix)
+          ]
           if bad:
               raise SystemExit(f"manifest contains unexpected release URLs: {bad}")
           PY
@@ -94,7 +106,12 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             exit 0
           fi
-          args=(release create "$TAG" --title "$TAG" --notes "Astral Party ${GAME_VERSION} revision ${REVISION}")
+          args=(
+            release create "$TAG"
+            --target "$GITHUB_SHA"
+            --title "$TAG"
+            --notes "Astral Party ${GAME_VERSION} revision ${REVISION}"
+          )
           if [ "$CHANNEL" = "preview" ]; then
             args+=(--prerelease)
           fi
@@ -106,14 +123,18 @@ jobs:
           ROOT: ${{ steps.patch.outputs.root }}
         run: |
           set -euo pipefail
-          gh release upload "$TAG" "$ROOT"/assets/* "$ROOT"/manifest.json --clobber
+          gh release upload "$TAG" "$ROOT"/assets/* "$ROOT"/manifest.json
       - name: Prepare patch index release
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .work/index
           if ! gh release view patch-index >/dev/null 2>&1; then
-            gh release create patch-index --title "Patch Index" --notes "Machine-readable patch index" --prerelease
+            gh release create patch-index \
+              --target "$GITHUB_SHA" \
+              --title "Patch Index" \
+              --notes "Machine-readable patch index" \
+              --prerelease
           fi
           gh release download patch-index --pattern release-index.json --dir .work/index || true
       - name: Update release index
