@@ -36,3 +36,35 @@ fonts:
     )
     with pytest.raises(ValueError, match="cn_s/en/jp/cn_t"):
         load_route_sync_config(path)
+
+
+def test_sync_output_contract(tmp_path: Path) -> None:
+    from astral_builder.automation.sync import (
+        PreparedRevision,
+        SyncRevisionResult,
+        write_sync_github_output,
+    )
+    from astral_builder.game.source import DownloadedCatalog, GameSource
+
+    output = tmp_path / "gha-output"
+    prepared = PreparedRevision(
+        source=GameSource(
+            route="INT_STEAM",
+            version="3.2.0",
+            revision="116",
+            source_url="https://example.test/116",
+            catalog_url="https://example.test/116/catalog_3.2.0.json",
+        ),
+        catalog_hash="f" * 32,
+        catalog=DownloadedCatalog(tmp_path / "catalog.json", "a" * 64, 10),
+        units=(),
+        asset_locations=(),
+        downloaded_bundles=(),
+        empty_str_assets=(),
+    )
+    result = SyncRevisionResult("revision-uuid", False, 0, 0, 0, ())
+    write_sync_github_output(result, prepared, output)
+    text = output.read_text()
+    assert "revision_id=revision-uuid" in text
+    assert "revision=116" in text
+    assert f"catalog_hash={'f' * 32}" in text

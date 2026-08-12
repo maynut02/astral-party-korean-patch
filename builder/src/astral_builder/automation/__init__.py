@@ -6,6 +6,7 @@ from astral_builder.automation.sync import (
     load_route_sync_config,
     persist_prepared_revision,
     prepare_revision,
+    write_sync_github_output,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "persist_prepared_revision",
     "prepare_revision",
     "write_github_output",
+    "write_sync_github_output",
 ]

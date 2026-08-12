@@ -254,3 +254,21 @@ def persist_prepared_revision(
         downloaded_bundle_count=len(prepared.downloaded_bundles),
         empty_str_assets=prepared.empty_str_assets,
     )
+
+
+def write_sync_github_output(
+    result: SyncRevisionResult,
+    prepared: PreparedRevision,
+    destination: str | Path,
+) -> None:
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = (
+        f"revision_id={result.revision_id}",
+        f"route={prepared.source.route}",
+        f"game_version={prepared.source.version}",
+        f"revision={prepared.source.revision}",
+        f"catalog_hash={prepared.catalog_hash}",
+    )
+    with path.open("a", encoding="utf-8", newline="\n") as file:
+        file.write("\n".join(lines) + "\n")

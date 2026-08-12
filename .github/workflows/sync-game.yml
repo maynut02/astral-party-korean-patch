@@ -6,6 +6,17 @@ on:
       game_version:
         required: true
         type: string
+    outputs:
+      revision_id:
+        value: ${{ jobs.sync.outputs.revision_id }}
+      route:
+        value: ${{ jobs.sync.outputs.route }}
+      game_version:
+        value: ${{ jobs.sync.outputs.game_version }}
+      revision:
+        value: ${{ jobs.sync.outputs.revision }}
+      catalog_hash:
+        value: ${{ jobs.sync.outputs.catalog_hash }}
   workflow_dispatch:
     inputs:
       game_version:
@@ -20,6 +31,12 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    outputs:
+      revision_id: ${{ steps.sync.outputs.revision_id }}
+      route: ${{ steps.sync.outputs.route }}
+      game_version: ${{ steps.sync.outputs.game_version }}
+      revision: ${{ steps.sync.outputs.revision }}
+      catalog_hash: ${{ steps.sync.outputs.catalog_hash }}
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
@@ -35,8 +52,10 @@ jobs:
       - name: Apply database migrations
         run: python database/migrate.py
       - name: Sync INT Steam revision
+        id: sync
         run: >-
           astral-builder sync
           --game-version '${{ inputs.game_version }}'
           --route-config routes/int_steam.yaml
           --work-dir .work/sync
+          --github-output "$GITHUB_OUTPUT"

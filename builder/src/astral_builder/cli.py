@@ -12,6 +12,7 @@ from astral_builder.automation.sync import (
     load_route_sync_config,
     persist_prepared_revision,
     prepare_revision,
+    write_sync_github_output,
 )
 
 
@@ -32,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--game-version", required=True)
     sync.add_argument("--route-config", required=True)
     sync.add_argument("--work-dir", default=".work/sync")
+    sync.add_argument("--github-output")
     return parser
 
 
@@ -78,6 +80,8 @@ def _run_sync(args: argparse.Namespace) -> int:
     )
     with psycopg.connect(_database_url()) as conn:
         result = persist_prepared_revision(conn, prepared)
+    if args.github_output:
+        write_sync_github_output(result, prepared, args.github_output)
     print(
         json.dumps(
             {
