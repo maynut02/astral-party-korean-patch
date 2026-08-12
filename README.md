@@ -11,4 +11,4 @@ Astral Party 한국어 패치를 자동으로 생성하고 안전하게 설치�
 
 운영 빌드는 로컬 게임 파일을 입력으로 사용하지 않습니다. 게임 에셋 수집부터 패치 생성까지 GitHub Actions에서 수행합니다.
 
-자세한 구현 계획은 [`docs/PLAN.md`](docs/PLAN.md)를 참조하세요.
+자세한 구현 계획은 [`docs/PLAN.md`](docs/PLAN.md)를 참조하세요. 실제 GitHub/Neon/Steam 운영 설정은 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)에 정리되어 있습니다.

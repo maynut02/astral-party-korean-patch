@@ -1,5 +1,11 @@
 # Astral Party Korean Patch - Implementation Plan
 
+## 구현 상태 (2026-08-13)
+
+Phase 0~8의 로컬 구현과 테스트용 통합 검증은 완료했습니다. Builder/DB/Patcher/Release protocol/GitHub Actions workflow가 모두 monorepo에 구현되어 있습니다.
+
+남은 검증은 새 GitHub repository, Neon credential, Steam refresh token을 연결한 뒤 hosted Actions에서 `check -> sync -> legacy -> build -> release` 전체 흐름과 실제 게임 install/remove를 실행하는 운영 integration입니다. 설정 절차는 [`OPERATIONS.md`](OPERATIONS.md)를 참조합니다.
+
 ## 1. 기본 원칙
 
 1. Builder와 Patcher는 하나의 monorepo에 저장한다.
