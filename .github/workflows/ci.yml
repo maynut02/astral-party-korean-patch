@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  builder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: builder/pyproject.toml
+      - name: Install builder
+        run: python -m pip install -e './builder[dev]'
+      - name: Lint
+        run: python -m ruff check builder
+      - name: Test
+        run: python -m pytest builder/tests

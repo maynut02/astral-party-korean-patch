@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://astral-party-korean.local/schemas/patch-manifest.schema.json",
+  "title": "Astral Party Korean patch manifest",
+  "type": "object",
+  "required": ["schemaVersion", "patch", "game", "files"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "patch": {
+      "type": "object",
+      "required": ["version", "channel", "route"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "channel": { "enum": ["preview", "stable"] },
+        "route": { "type": "string", "minLength": 1 }
+      }
+    },
+    "game": {
+      "type": "object",
+      "required": ["version", "revision", "catalogHash"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "catalogHash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/file" }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "file": {
+      "type": "object",
+      "required": ["target", "path", "sha256", "size"],
+      "additionalProperties": false,
+      "properties": {
+        "target": { "enum": ["addressables", "game-data"] },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

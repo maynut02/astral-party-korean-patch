@@ -1,0 +1,16 @@
+schemaVersion: 1
+route: INT_STEAM
+platform: windows
+translation:
+  lang:
+    sourceAsset: English
+  str:
+    assetPrefix: STR
+    targetField: en
+fonts:
+  tmp:
+    asset: Afacad-Regular_TMP
+    replacement: AstralCJK_KO_EN
+  legacy:
+    asset: Afacad-Regular
+    replacement: ONE_Mobile_POP

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://astral-party-korean.local/schemas/route.schema.json",
+  "title": "Astral Party route configuration",
+  "type": "object",
+  "required": ["schemaVersion", "route", "platform", "translation", "fonts"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "route": { "type": "string", "minLength": 1 },
+    "platform": { "enum": ["windows"] },
+    "translation": {
+      "type": "object",
+      "required": ["lang", "str"],
+      "additionalProperties": false,
+      "properties": {
+        "lang": {
+          "type": "object",
+          "required": ["sourceAsset"],
+          "additionalProperties": false,
+          "properties": {
+            "sourceAsset": { "type": "string", "minLength": 1 }
+          }
+        },
+        "str": {
+          "type": "object",
+          "required": ["assetPrefix", "targetField"],
+          "additionalProperties": false,
+          "properties": {
+            "assetPrefix": { "type": "string", "minLength": 1 },
+            "targetField": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "fonts": {
+      "type": "object",
+      "required": ["tmp", "legacy"],
+      "additionalProperties": false,
+      "properties": {
+        "tmp": { "$ref": "#/$defs/fontTarget" },
+        "legacy": { "$ref": "#/$defs/fontTarget" }
+      }
+    }
+  },
+  "$defs": {
+    "fontTarget": {
+      "type": "object",
+      "required": ["asset", "replacement"],
+      "additionalProperties": false,
+      "properties": {
+        "asset": { "type": "string", "minLength": 1 },
+        "replacement": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
