@@ -14,6 +14,7 @@ dependencies = [
   "UnityPy==1.25.2",
   "psycopg[binary]>=3.2,<4",
   "Pillow>=10,<12",
+  "PyYAML>=6.0,<7",
 ]
 
 [project.optional-dependencies]

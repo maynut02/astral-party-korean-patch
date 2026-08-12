@@ -27,6 +27,7 @@ class StrDocument:
 
     entries: tuple[StrEntry, ...]
     paired: bool = True
+    mirrors_grouped: bool = False
 
     def by_id(self) -> dict[int, StrEntry]:
         return {entry.id: entry for entry in self.entries}
@@ -87,7 +88,7 @@ def _skip_field(data: bytes, offset: int, end: int, wire_type: int) -> int:
 
 def _decode_direct_entry(payload: bytes) -> StrEntry:
     offset = 0
-    entry_id: int | None = None
+    entry_id = 0
     fields = {2: "", 3: "", 4: "", 5: ""}
     while offset < len(payload):
         tag, offset = _read_varint(payload, offset)
@@ -108,8 +109,6 @@ def _decode_direct_entry(payload: bytes) -> StrEntry:
             continue
         offset = _skip_field(payload, offset, len(payload), wire_type)
 
-    if entry_id is None or entry_id == 0:
-        raise StrFormatError("STR entry has no non-zero fixed32 id field")
     return StrEntry(
         id=entry_id,
         source=SourceStrings(
@@ -142,7 +141,7 @@ def _decode_mirror_entry(payload: bytes) -> StrEntry:
             continue
         offset = _skip_field(payload, offset, len(payload), wire_type)
 
-    if outer_id is None or outer_id == 0 or nested_payload is None:
+    if outer_id is None or nested_payload is None:
         raise StrFormatError("STR mirror is missing its id or nested entry")
     nested = _decode_direct_entry(nested_payload)
     if outer_id != nested.id:
@@ -159,6 +158,7 @@ def decode_str(data: bytes) -> StrDocument:
     mirrors: dict[int, StrEntry] = {}
     seen_direct_ids: set[int] = set()
     saw_mirror = False
+    wrapper_fields: list[int] = []
 
     while offset < len(data):
         tag, offset = _read_varint(data, offset)
@@ -169,6 +169,7 @@ def decode_str(data: bytes) -> StrDocument:
                 f"unexpected STR wrapper field={field_number} wire_type={wire_type}"
             )
         payload, offset = _read_length_delimited(data, offset, len(data))
+        wrapper_fields.append(field_number)
 
         if field_number == 1:
             entry = _decode_direct_entry(payload)
@@ -198,7 +199,16 @@ def decode_str(data: bytes) -> StrDocument:
             if mirrors[direct.id] != direct:
                 raise StrFormatError(f"STR mirror content differs for id {direct.id}")
 
-    return StrDocument(entries=tuple(direct_entries), paired=saw_mirror)
+    mirrors_grouped = False
+    if saw_mirror and len(direct_entries) > 1:
+        expected_grouped = [1] * len(direct_entries) + [2] * len(direct_entries)
+        mirrors_grouped = wrapper_fields == expected_grouped
+
+    return StrDocument(
+        entries=tuple(direct_entries),
+        paired=saw_mirror,
+        mirrors_grouped=mirrors_grouped,
+    )
 
 
 def _write_string_field(field_number: int, value: str) -> bytes:
@@ -209,8 +219,9 @@ def _write_string_field(field_number: int, value: str) -> bytes:
 def _encode_direct_entry(entry: StrEntry) -> bytes:
     source = entry.source.normalized()
     body = bytearray()
-    body.extend(_write_varint((1 << 3) | 5))
-    body.extend(struct.pack("<I", entry.id))
+    if entry.id != 0:
+        body.extend(_write_varint((1 << 3) | 5))
+        body.extend(struct.pack("<I", entry.id))
     body.extend(_write_string_field(2, source.cn_s))
     body.extend(_write_string_field(3, source.en))
     body.extend(_write_string_field(4, source.jp))
@@ -228,19 +239,31 @@ def encode_str(document: StrDocument) -> bytes:
 
     output = bytearray()
     seen_ids: set[int] = set()
+    encoded_entries: list[tuple[StrEntry, bytes]] = []
     for entry in document.entries:
-        if entry.id <= 0 or entry.id > 0xFFFFFFFF:
+        if entry.id < 0 or entry.id > 0xFFFFFFFF:
             raise StrFormatError(f"STR id is outside uint32 range: {entry.id}")
         if entry.id in seen_ids:
             raise StrFormatError(f"duplicate STR id: {entry.id}")
         seen_ids.add(entry.id)
+        encoded_entries.append((entry, _encode_direct_entry(entry)))
 
-        direct = _encode_direct_entry(entry)
+    def mirror_bytes(entry: StrEntry, direct: bytes) -> bytes:
+        mirror = bytearray()
+        mirror.extend(_write_varint((1 << 3) | 5))
+        mirror.extend(struct.pack("<I", entry.id))
+        mirror.extend(_wrap(2, direct))
+        return _wrap(2, bytes(mirror))
+
+    if document.paired and document.mirrors_grouped:
+        for _entry, direct in encoded_entries:
+            output.extend(_wrap(1, direct))
+        for entry, direct in encoded_entries:
+            output.extend(mirror_bytes(entry, direct))
+        return bytes(output)
+
+    for entry, direct in encoded_entries:
         output.extend(_wrap(1, direct))
         if document.paired:
-            mirror = bytearray()
-            mirror.extend(_write_varint((1 << 3) | 5))
-            mirror.extend(struct.pack("<I", entry.id))
-            mirror.extend(_wrap(2, direct))
-            output.extend(_wrap(2, bytes(mirror)))
+            output.extend(mirror_bytes(entry, direct))
     return bytes(output)

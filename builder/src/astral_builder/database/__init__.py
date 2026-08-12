@@ -38,6 +38,7 @@ __all__ = [
     "assert_idempotent_source_match",
     "load_translation_snapshot",
     "make_snapshot",
+    "mark_revision_processed",
     "plan_source_sync",
     "sync_asset_locations",
     "sync_revision_sources",

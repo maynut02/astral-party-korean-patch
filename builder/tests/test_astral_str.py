@@ -55,3 +55,27 @@ def test_str_rejects_changed_mirror_content() -> None:
     encoded[-1] ^= 1
     with pytest.raises(StrFormatError):
         decode_str(bytes(encoded))
+
+
+def test_str_supports_zero_id_default_entry() -> None:
+    document = StrDocument(
+        entries=(StrEntry(0, SourceStrings(cn_s="默认", en="Default", jp="Default", cn_t="預設")),)
+    )
+    encoded = encode_str(document)
+    decoded = decode_str(encoded)
+    assert decoded == document
+    assert encode_str(decoded) == encoded
+
+
+def test_str_preserves_grouped_mirror_layout() -> None:
+    document = StrDocument(
+        entries=(
+            StrEntry(0, SourceStrings(en="Default")),
+            StrEntry(1001, SourceStrings(en="Server Shut Down")),
+        ),
+        mirrors_grouped=True,
+    )
+    encoded = encode_str(document)
+    decoded = decode_str(encoded)
+    assert decoded == document
+    assert encode_str(decoded) == encoded

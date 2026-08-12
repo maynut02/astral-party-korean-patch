@@ -244,12 +244,17 @@ def sync_revision_sources(
                     """,
                     source_rows,
                 )
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE game_revisions SET processed_at = now() WHERE id = %s",
-                (revision_id,),
-            )
         return SourceSyncResult(revision_id=revision_id, plan=plan)
+
+
+def mark_revision_processed(conn: psycopg.Connection, revision_id: UUID) -> None:
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            "UPDATE game_revisions SET processed_at = COALESCE(processed_at, now()) WHERE id = %s",
+            (revision_id,),
+        )
+        if cur.rowcount != 1:
+            raise KeyError(f"game revision not found: {revision_id}")
 
 
 def load_translation_snapshot(
