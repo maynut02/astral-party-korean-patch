@@ -310,3 +310,114 @@ def load_translation_snapshot(
         locale=locale,
         units=units,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class AssetLocationInput:
+    logical_name: str
+    catalog_key: str
+    origin: str
+    asset_type: str
+    asset_name: str
+    bundle_name: str | None = None
+    bundle_hash: str | None = None
+    cache_root: str | None = None
+    source_sha256: str | None = None
+    source_size: int | None = None
+
+    @property
+    def identity(self) -> tuple[str, str, str]:
+        return (self.logical_name, self.asset_type, self.asset_name)
+
+    def validate(self) -> None:
+        if self.origin not in {"remote", "runtime", "game_data"}:
+            raise ValueError(f"unsupported asset origin: {self.origin}")
+        if self.source_size is not None and self.source_size < 0:
+            raise ValueError("source_size cannot be negative")
+        if self.source_sha256 is not None:
+            if len(self.source_sha256) != 64 or any(
+                char not in "0123456789abcdef" for char in self.source_sha256
+            ):
+                raise ValueError("source_sha256 must be lowercase SHA-256 hex")
+
+
+def _asset_location_map(
+    locations: tuple[AssetLocationInput, ...],
+) -> dict[tuple[str, str, str], AssetLocationInput]:
+    result: dict[tuple[str, str, str], AssetLocationInput] = {}
+    for location in locations:
+        location.validate()
+        if location.identity in result:
+            raise ValueError(f"duplicate asset location identity: {location.identity}")
+        result[location.identity] = location
+    return result
+
+
+def sync_asset_locations(
+    conn: psycopg.Connection,
+    revision_id: UUID,
+    locations: tuple[AssetLocationInput, ...],
+) -> bool:
+    """Persist immutable asset locations. Returns True when the call is idempotent."""
+    incoming = _asset_location_map(locations)
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT logical_name, catalog_key, origin, asset_type, asset_name,
+                   bundle_name, bundle_hash, cache_root, source_sha256, source_size
+            FROM asset_locations
+            WHERE revision_id = %s
+            """,
+            (revision_id,),
+        )
+        rows = cur.fetchall()
+        if rows:
+            persisted = {
+                (row[0], row[3], row[4]): AssetLocationInput(
+                    logical_name=row[0],
+                    catalog_key=row[1],
+                    origin=row[2],
+                    asset_type=row[3],
+                    asset_name=row[4],
+                    bundle_name=row[5],
+                    bundle_hash=row[6],
+                    cache_root=row[7],
+                    source_sha256=row[8],
+                    source_size=row[9],
+                )
+                for row in rows
+            }
+            if persisted != incoming:
+                raise RevisionConflictError("asset locations differ for an existing revision")
+            return True
+
+        insert_rows = [
+            (
+                uuid4(),
+                revision_id,
+                item.logical_name,
+                item.catalog_key,
+                item.origin,
+                item.bundle_name,
+                item.bundle_hash,
+                item.cache_root,
+                item.asset_type,
+                item.asset_name,
+                item.source_sha256,
+                item.source_size,
+            )
+            for item in locations
+        ]
+        if insert_rows:
+            cur.executemany(
+                """
+                INSERT INTO asset_locations(
+                    id, revision_id, logical_name, catalog_key, origin,
+                    bundle_name, bundle_hash, cache_root,
+                    asset_type, asset_name, source_sha256, source_size
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                insert_rows,
+            )
+        return False

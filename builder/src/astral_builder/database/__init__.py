@@ -1,9 +1,11 @@
 from astral_builder.database.repository import (
+    AssetLocationInput,
     RevisionConflictError,
     RevisionInput,
     SourceSyncResult,
     assert_idempotent_source_match,
     load_translation_snapshot,
+    sync_asset_locations,
     sync_revision_sources,
 )
 from astral_builder.database.snapshot import (
@@ -21,6 +23,7 @@ from astral_builder.database.sync import (
 )
 
 __all__ = [
+    "AssetLocationInput",
     "ExistingSourceState",
     "PlannedSource",
     "RevisionConflictError",
@@ -31,9 +34,14 @@ __all__ = [
     "SnapshotUnit",
     "TranslationSnapshot",
     "TranslationState",
+    "TranslationWrite",
     "assert_idempotent_source_match",
     "load_translation_snapshot",
     "make_snapshot",
     "plan_source_sync",
+    "sync_asset_locations",
     "sync_revision_sources",
+    "upsert_translation",
 ]
+
+from astral_builder.database.translations import TranslationWrite, upsert_translation
