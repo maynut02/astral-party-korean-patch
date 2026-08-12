@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from uuid import UUID
 
 import psycopg
 
 from astral_builder import __version__
+from astral_builder.automation.build import build_patch, write_build_github_output
 from astral_builder.automation.check import check_revision, write_github_output
 from astral_builder.automation.sync import (
     load_route_sync_config,
@@ -14,6 +16,8 @@ from astral_builder.automation.sync import (
     prepare_revision,
     write_sync_github_output,
 )
+from astral_builder.automation.validate_build import validate_built_patch
+from astral_builder.patch.translations import BuildChannel
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +38,25 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--route-config", required=True)
     sync.add_argument("--work-dir", default=".work/sync")
     sync.add_argument("--github-output")
+
+    build = subparsers.add_parser("build", help="Build and validate a complete patch manifest.")
+    build.add_argument("--revision-id", required=True)
+    build.add_argument("--route-config", required=True)
+    build.add_argument("--work-dir", default=".work/build")
+    build.add_argument("--output-dir", default="output/patch")
+    build.add_argument("--asset-base-url", required=True)
+    build.add_argument("--patch-version", required=True)
+    build.add_argument("--build-id", required=True)
+    build.add_argument("--channel", choices=["preview", "stable"], default="preview")
+    build.add_argument("--legacy-data", required=True)
+    build.add_argument("--github-output")
+
+    validate_build = subparsers.add_parser(
+        "validate-build", help="Validate a built patch in a fresh process."
+    )
+    validate_build.add_argument("--manifest", required=True)
+    validate_build.add_argument("--assets-dir", required=True)
+    validate_build.add_argument("--route-config", required=True)
     return parser
 
 
@@ -103,6 +126,57 @@ def _run_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_build(args: argparse.Namespace) -> int:
+    with psycopg.connect(_database_url()) as conn:
+        result = build_patch(
+            conn,
+            revision_id=UUID(args.revision_id),
+            route_config=args.route_config,
+            work_dir=args.work_dir,
+            output_dir=args.output_dir,
+            asset_base_url=args.asset_base_url,
+            patch_version=args.patch_version,
+            build_id=args.build_id,
+            channel=BuildChannel(args.channel),
+            legacy_data_path=args.legacy_data,
+        )
+    if args.github_output:
+        write_build_github_output(result, args.github_output)
+    print(
+        json.dumps(
+            {
+                "manifest": str(result.manifest),
+                "translationFingerprint": result.translation_fingerprint,
+                "fileCount": len(result.files),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _run_validate_build(args: argparse.Namespace) -> int:
+    result = validate_built_patch(
+        args.manifest,
+        args.assets_dir,
+        route_config=args.route_config,
+    )
+    print(
+        json.dumps(
+            {
+                "fileCount": result.file_count,
+                "langKeys": result.lang_keys,
+                "strAssets": result.str_assets,
+                "strUnits": result.str_units,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -111,6 +185,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_check(args)
     if args.command == "sync":
         return _run_sync(args)
+    if args.command == "build":
+        return _run_build(args)
+    if args.command == "validate-build":
+        return _run_validate_build(args)
 
     parser.print_help()
     return 0

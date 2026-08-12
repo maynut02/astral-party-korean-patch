@@ -1,0 +1,93 @@
+name: Build Patch
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision_id:
+        description: Processed Neon game revision UUID
+        required: true
+        type: string
+      patch_version:
+        description: Patch version/tag to build
+        required: true
+        type: string
+      channel:
+        description: Translation channel
+        required: true
+        default: preview
+        type: choice
+        options: [preview, stable]
+      legacy_run_id:
+        description: Workflow run ID containing the legacy data.unity3d artifact
+        required: true
+        type: string
+      legacy_artifact_name:
+        description: Artifact containing data.unity3d
+        required: true
+        default: astral-party-legacy-data
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: builder/pyproject.toml
+      - name: Install builder
+        run: python -m pip install -e './builder[dev]'
+      - name: Download legacy game data artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ inputs.legacy_artifact_name }}
+          path: .work/legacy
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.legacy_run_id }}
+      - name: Locate legacy data.unity3d
+        id: legacy
+        shell: bash
+        run: |
+          set -euo pipefail
+          path="$(find .work/legacy -type f -name data.unity3d -print -quit)"
+          test -n "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+      - name: Build complete patch
+        id: build
+        shell: bash
+        env:
+          ASSET_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.patch_version }}
+        run: >-
+          astral-builder build
+          --revision-id '${{ inputs.revision_id }}'
+          --route-config routes/int_steam.yaml
+          --work-dir .work/build
+          --output-dir output/patch
+          --asset-base-url "$ASSET_BASE_URL"
+          --patch-version '${{ inputs.patch_version }}'
+          --build-id '${{ github.run_id }}'
+          --channel '${{ inputs.channel }}'
+          --legacy-data '${{ steps.legacy.outputs.path }}'
+          --github-output "$GITHUB_OUTPUT"
+      - name: Validate built patch in fresh process
+        run: >-
+          astral-builder validate-build
+          --manifest output/patch/manifest.json
+          --assets-dir output/patch/assets
+          --route-config routes/int_steam.yaml
+      - name: Upload validated patch artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-${{ inputs.patch_version }}-${{ inputs.channel }}
+          path: output/patch/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

@@ -1,6 +1,7 @@
 from astral_builder.validate.assets import (
     ValidationError,
     ValidationResult,
+    validate_assetbundle_expected_name,
     validate_assetbundle_name,
     validate_file,
     validate_lang_payload,
@@ -12,6 +13,7 @@ from astral_builder.validate.assets import (
 __all__ = [
     "ValidationError",
     "ValidationResult",
+    "validate_assetbundle_expected_name",
     "validate_assetbundle_name",
     "validate_file",
     "validate_lang_payload",

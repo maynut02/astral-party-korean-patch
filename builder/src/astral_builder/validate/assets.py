@@ -93,6 +93,20 @@ def validate_assetbundle_name(
     return ValidationResult("assetbundle", f"m_Name={before!r}")
 
 
+def validate_assetbundle_expected_name(
+    path: str | Path,
+    expected_name: str,
+    *,
+    loader: Loader = UnityPy.load,
+) -> ValidationResult:
+    actual = _assetbundle_name(path, loader)
+    if actual != expected_name:
+        raise ValidationError(
+            f"AssetBundle m_Name mismatch: expected={expected_name!r} actual={actual!r}"
+        )
+    return ValidationResult("assetbundle", f"m_Name={actual!r}")
+
+
 def validate_tmp_font(
     bundle_path: str | Path,
     *,
