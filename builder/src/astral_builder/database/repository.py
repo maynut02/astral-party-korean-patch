@@ -250,3 +250,63 @@ def sync_revision_sources(
                 (revision_id,),
             )
         return SourceSyncResult(revision_id=revision_id, plan=plan)
+
+
+def load_translation_snapshot(
+    conn: psycopg.Connection,
+    revision_id: UUID,
+    *,
+    locale: str = "ko",
+):
+    from astral_builder.database.snapshot import SnapshotUnit, make_snapshot
+    from astral_builder.formats.model import SourceStrings
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT route, game_version, revision
+            FROM game_revisions
+            WHERE id = %s AND processed_at IS NOT NULL
+            """,
+            (revision_id,),
+        )
+        revision_row = cur.fetchone()
+        if revision_row is None:
+            raise KeyError(f"processed game revision not found: {revision_id}")
+
+        cur.execute(
+            """
+            SELECT
+                tu.kind, tu.namespace, tu.unit_key,
+                st.cn_s, st.en, st.jp, st.cn_t, st.source_fingerprint,
+                COALESCE(tr.text, ''), tr.status, tr.source_fingerprint
+            FROM source_texts st
+            JOIN translation_units tu ON tu.id = st.unit_id
+            LEFT JOIN translations tr ON tr.unit_id = tu.id AND tr.locale = %s
+            WHERE st.revision_id = %s
+            ORDER BY tu.kind, tu.namespace, tu.unit_key
+            """,
+            (locale, revision_id),
+        )
+        units = tuple(
+            SnapshotUnit(
+                kind=row[0],
+                namespace=row[1],
+                key=row[2],
+                source=SourceStrings(cn_s=row[3], en=row[4], jp=row[5], cn_t=row[6]),
+                source_fingerprint=row[7],
+                translation=row[8],
+                translation_status=row[9],
+                translation_source_fingerprint=row[10],
+            )
+            for row in cur.fetchall()
+        )
+
+    return make_snapshot(
+        revision_id=str(revision_id),
+        route=revision_row[0],
+        game_version=revision_row[1],
+        revision=revision_row[2],
+        locale=locale,
+        units=units,
+    )
