@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "MayNut" }]
-dependencies = []
+dependencies = [
+  "UnityPy==1.25.2",
+]
 
 [project.optional-dependencies]
 dev = [

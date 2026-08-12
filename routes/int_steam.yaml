@@ -3,8 +3,11 @@ route: INT_STEAM
 platform: windows
 translation:
   lang:
-    catalogKey: English
-    sourceAsset: English
+    assets:
+      cn_s: Simplified Chinese
+      en: English
+      jp: Japanese
+      cn_t: Traditional Chinese
   str:
     catalogKey: GameData_INT
     assetPrefix: STR

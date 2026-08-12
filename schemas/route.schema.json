@@ -35,18 +35,37 @@
         "lang": {
           "type": "object",
           "required": [
-            "catalogKey",
-            "sourceAsset"
+            "assets"
           ],
           "additionalProperties": false,
           "properties": {
-            "sourceAsset": {
-              "type": "string",
-              "minLength": 1
-            },
-            "catalogKey": {
-              "type": "string",
-              "minLength": 1
+            "assets": {
+              "type": "object",
+              "required": [
+                "cn_s",
+                "en",
+                "jp",
+                "cn_t"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "cn_s": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "en": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "jp": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "cn_t": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
             }
           }
         },
