@@ -42,6 +42,14 @@ fn get_installed_patch() -> Result<Option<crate::service::InstalledPatchInfo>, S
 }
 
 #[tauri::command]
+fn get_default_release_index_url() -> String {
+    option_env!("ASTRAL_PATCH_INDEX_URL")
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+#[tauri::command]
 async fn install_latest(
     release_index_url: String,
     channel: String,
@@ -98,6 +106,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             detect_game,
             get_installed_patch,
+            get_default_release_index_url,
             install_latest,
             remove_installed
         ])

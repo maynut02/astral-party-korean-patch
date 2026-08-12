@@ -76,7 +76,16 @@ const installButton = byId<HTMLButtonElement>("install");
 const removeButton = byId<HTMLButtonElement>("remove");
 
 const savedUrl = localStorage.getItem("releaseIndexUrl");
-if (savedUrl) releaseUrl.value = savedUrl;
+if (savedUrl) {
+  releaseUrl.value = savedUrl;
+} else {
+  void invoke<string>("get_default_release_index_url")
+    .then((url) => {
+      const value = url.trim();
+      if (value) releaseUrl.value = value;
+    })
+    .catch(() => undefined);
+}
 
 function setBusy(busy: boolean): void {
   installButton.disabled = busy;

@@ -106,6 +106,8 @@ Patcher에서 사용할 index URL은 저장소가 확정되면 다음 형식입�
 https://github.com/<owner>/<repo>/releases/download/patch-index/release-index.json
 ```
 
+`Build Patcher` workflow는 이 URL을 `ASTRAL_PATCH_INDEX_URL` compile-time 값으로 installer에 자동 내장합니다. 사용자가 Patcher에서 별도 URL을 저장한 경우에는 그 사용자 설정이 우선합니다.
+
 ## 6. Patcher Windows installer
 
 `Build Patcher` workflow는 소스의 다음 세 version이 모두 같은지 먼저 검증합니다.
@@ -161,7 +163,7 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 6. `CI` workflow 통과 확인.
 7. `Check Game` workflow 수동 실행.
 8. Preview Release와 `patch-index` 생성 확인.
-9. Patcher UI의 release index URL을 새 저장소의 `patch-index` URL로 설정해 install/remove 실게임 검증.
+9. `Build Patcher`로 생성한 installer를 실행해 자동 주입된 `patch-index` URL로 install/remove 실게임 검증.
 10. 검수 완료 후 `Release Stable Patch`를 수동 실행.
 
 실제 credential과 GitHub repository가 연결되기 전까지 로컬 구현만으로는 6~10번의 hosted integration 검증을 수행할 수 없습니다.

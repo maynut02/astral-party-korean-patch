@@ -20,6 +20,7 @@ jobs:
         working-directory: patcher
     env:
       GH_TOKEN: ${{ github.token }}
+      ASTRAL_PATCH_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patch-index/release-index.json
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
