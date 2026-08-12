@@ -1,3 +1,4 @@
+mod app;
 pub mod game;
 pub mod install;
 pub mod network;
@@ -27,3 +28,5 @@ pub use service::{
     DEFAULT_ROUTE, InstallOutcome, InstalledPatchInfo, PatcherPaths, ServiceError, install_roots,
     installed_patch_info, load_ownership, remove_installed_patch,
 };
+
+pub use app::run;
