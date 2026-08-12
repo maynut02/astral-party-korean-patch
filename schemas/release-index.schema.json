@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://astral-party-korean.local/schemas/release-index.schema.json",
+  "title": "Astral Party Korean release index",
+  "type": "object",
+  "required": ["schemaVersion", "releases"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "releases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "route", "gameVersion", "revision", "catalogHash", "channel",
+          "patchVersion", "manifestUrl", "manifestSha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "route": { "type": "string", "minLength": 1 },
+          "gameVersion": { "type": "string", "minLength": 1 },
+          "revision": { "type": "string", "minLength": 1 },
+          "catalogHash": { "$ref": "#/$defs/sha256" },
+          "channel": { "enum": ["preview", "stable"] },
+          "patchVersion": { "type": "string", "minLength": 1 },
+          "manifestUrl": { "type": "string", "format": "uri", "minLength": 1 },
+          "manifestSha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

@@ -9,12 +9,14 @@
     "schemaVersion": { "const": 1 },
     "patch": {
       "type": "object",
-      "required": ["version", "channel", "route"],
+      "required": ["version", "channel", "route", "buildId", "translationFingerprint"],
       "additionalProperties": false,
       "properties": {
         "version": { "type": "string", "minLength": 1 },
         "channel": { "enum": ["preview", "stable"] },
-        "route": { "type": "string", "minLength": 1 }
+        "route": { "type": "string", "minLength": 1 },
+        "buildId": { "type": "string", "minLength": 1 },
+        "translationFingerprint": { "$ref": "#/$defs/sha256" }
       }
     },
     "game": {
@@ -29,6 +31,7 @@
     },
     "files": {
       "type": "array",
+      "minItems": 1,
       "items": { "$ref": "#/$defs/file" }
     }
   },
@@ -39,11 +42,16 @@
     },
     "file": {
       "type": "object",
-      "required": ["target", "path", "sha256", "size"],
+      "required": ["target", "path", "operation", "sha256", "size"],
       "additionalProperties": false,
       "properties": {
         "target": { "enum": ["addressables", "game-data"] },
-        "path": { "type": "string", "minLength": 1 },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "not": { "pattern": "(^/|(^|/)\\.\\.(/|$))" }
+        },
+        "operation": { "enum": ["create", "replace"] },
         "sha256": { "$ref": "#/$defs/sha256" },
         "size": { "type": "integer", "minimum": 1 }
       }
