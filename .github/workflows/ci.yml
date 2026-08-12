@@ -24,3 +24,32 @@ jobs:
         run: python -m ruff check builder
       - name: Test
         run: python -m pytest builder/tests
+
+  patcher:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: patcher
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: patcher/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
+      - name: Rust format
+        working-directory: patcher/src-tauri
+        run: cargo fmt --all -- --check
+      - name: Rust tests
+        working-directory: patcher/src-tauri
+        run: cargo test --all-targets --all-features
+      - name: Rust clippy
+        working-directory: patcher/src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings

@@ -1,0 +1,42 @@
+name: Sync Game
+
+on:
+  workflow_call:
+    inputs:
+      game_version:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      game_version:
+        description: Game version used by the hotaddress endpoint
+        required: true
+        default: "3.2.0"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: builder/pyproject.toml
+      - name: Install builder
+        run: python -m pip install -e './builder[dev]'
+      - name: Apply database migrations
+        run: python database/migrate.py
+      - name: Sync INT Steam revision
+        run: >-
+          astral-builder sync
+          --game-version '${{ inputs.game_version }}'
+          --route-config routes/int_steam.yaml
+          --work-dir .work/sync
