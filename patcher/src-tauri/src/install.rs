@@ -259,37 +259,80 @@ pub fn remove_patch(
     if ownership.schema_version != 1 {
         return Err(InstallError::OwnershipMismatch);
     }
+
+    // Preflight every owned path before mutating anything. If even one file changed outside the
+    // patcher, leave all remaining patch files untouched so uninstall/upgrade does not become
+    // partial.
+    let mut skipped = 0;
+    for created in &ownership.created_files {
+        let path = target_path(roots, created.target, &created.path)?;
+        if path.exists() && sha256_file(&path)? != created.installed_sha256 {
+            skipped += 1;
+        }
+    }
+    for modified in &ownership.modified_files {
+        let destination = target_path(roots, modified.target, &modified.path)?;
+        if !destination.exists() {
+            skipped += 1;
+            continue;
+        }
+        let current_hash = sha256_file(&destination)?;
+        if current_hash == modified.original_sha256 {
+            // Already restored, for example after an interrupted previous cleanup.
+            continue;
+        }
+        if current_hash != modified.patched_sha256 {
+            skipped += 1;
+            continue;
+        }
+        validate_relative_path(&modified.backup_path)?;
+        let backup = backup_root.join(&modified.backup_path);
+        if !backup.is_file() || sha256_file(&backup)? != modified.original_sha256 {
+            skipped += 1;
+        }
+    }
+    if skipped > 0 {
+        return Ok(RemoveReport {
+            removed: 0,
+            restored: 0,
+            skipped,
+        });
+    }
+
     let mut report = RemoveReport {
         removed: 0,
         restored: 0,
         skipped: 0,
     };
-
     for created in &ownership.created_files {
         let path = target_path(roots, created.target, &created.path)?;
         if !path.exists() {
             continue;
         }
         if sha256_file(&path)? != created.installed_sha256 {
-            report.skipped += 1;
-            continue;
+            return Err(InstallError::OwnershipMismatch);
         }
         fs::remove_file(path)?;
         report.removed += 1;
     }
-
     for modified in &ownership.modified_files {
         let destination = target_path(roots, modified.target, &modified.path)?;
-        if !destination.exists() || sha256_file(&destination)? != modified.patched_sha256 {
-            report.skipped += 1;
+        let current_hash = sha256_file(&destination)?;
+        if current_hash == modified.original_sha256 {
             continue;
         }
+        if current_hash != modified.patched_sha256 {
+            return Err(InstallError::OwnershipMismatch);
+        }
+        validate_relative_path(&modified.backup_path)?;
         let backup = backup_root.join(&modified.backup_path);
         if !backup.is_file() || sha256_file(&backup)? != modified.original_sha256 {
-            report.skipped += 1;
-            continue;
+            return Err(InstallError::OwnershipMismatch);
         }
         copy_replace(&backup, &destination)?;
+        if sha256_file(&destination)? != modified.original_sha256 {
+            return Err(InstallError::OwnershipMismatch);
+        }
         report.restored += 1;
     }
 
@@ -402,5 +445,72 @@ mod tests {
         let report = remove_patch(&ownership, &roots, &backup).unwrap();
         assert_eq!(report.skipped, 1);
         assert_eq!(fs::read(&destination).unwrap(), b"external-change");
+    }
+
+    #[test]
+    fn removal_preflight_keeps_other_owned_files_untouched() {
+        let temp = tempdir().unwrap();
+        let roots = roots(temp.path());
+        let backup = temp.path().join("backup");
+        let safe = roots.addressables.join("safe/__data");
+        let changed = roots.addressables.join("changed/__data");
+        fs::create_dir_all(safe.parent().unwrap()).unwrap();
+        fs::create_dir_all(changed.parent().unwrap()).unwrap();
+        fs::write(&safe, b"patched-safe").unwrap();
+        fs::write(&changed, b"external-change").unwrap();
+
+        let ownership = OwnershipManifest {
+            schema_version: 1,
+            patch_version: "v1".into(),
+            catalog_hash: "b".repeat(32),
+            created_files: vec![
+                OwnedCreatedFile {
+                    target: InstallTarget::Addressables,
+                    path: "safe/__data".into(),
+                    installed_sha256: format!("{:x}", Sha256::digest(b"patched-safe")),
+                },
+                OwnedCreatedFile {
+                    target: InstallTarget::Addressables,
+                    path: "changed/__data".into(),
+                    installed_sha256: format!("{:x}", Sha256::digest(b"patched-changed")),
+                },
+            ],
+            modified_files: vec![],
+        };
+
+        let report = remove_patch(&ownership, &roots, &backup).unwrap();
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.restored, 0);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(fs::read(&safe).unwrap(), b"patched-safe");
+        assert_eq!(fs::read(&changed).unwrap(), b"external-change");
+    }
+
+    #[test]
+    fn already_restored_modified_file_is_idempotent() {
+        let temp = tempdir().unwrap();
+        let roots = roots(temp.path());
+        fs::create_dir_all(&roots.game_data).unwrap();
+        let destination = roots.game_data.join("data.unity3d");
+        fs::write(&destination, b"original").unwrap();
+        let ownership = OwnershipManifest {
+            schema_version: 1,
+            patch_version: "v1".into(),
+            catalog_hash: "b".repeat(32),
+            created_files: vec![],
+            modified_files: vec![OwnedModifiedFile {
+                target: InstallTarget::GameData,
+                path: "data.unity3d".into(),
+                original_sha256: format!("{:x}", Sha256::digest(b"original")),
+                patched_sha256: format!("{:x}", Sha256::digest(b"patched")),
+                backup_path: "game-data/data.unity3d".into(),
+            }],
+        };
+
+        let report = remove_patch(&ownership, &roots, &temp.path().join("backup")).unwrap();
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.restored, 0);
+        assert_eq!(report.skipped, 0);
+        assert_eq!(fs::read(&destination).unwrap(), b"original");
     }
 }
