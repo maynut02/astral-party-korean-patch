@@ -24,7 +24,7 @@ def _manifest(tmp_path: Path) -> PatchManifest:
         game=TargetGame(
             version="3.2.0",
             revision="1042",
-            catalog_hash="b" * 64,
+            catalog_hash="b" * 32,
         ),
         files=(
             ManifestFile.from_path(
@@ -54,7 +54,7 @@ def test_release_index_upserts_exact_route_revision_channel() -> None:
         route="INT_STEAM",
         game_version="3.2.0",
         revision="1042",
-        catalog_hash="b" * 64,
+        catalog_hash="b" * 32,
         channel="preview",
         patch_version="v1",
         manifest_url="https://example.test/v1/manifest.json",
@@ -64,7 +64,7 @@ def test_release_index_upserts_exact_route_revision_channel() -> None:
         route="INT_STEAM",
         game_version="3.2.0",
         revision="1042",
-        catalog_hash="b" * 64,
+        catalog_hash="b" * 32,
         channel="preview",
         patch_version="v2",
         manifest_url="https://example.test/v2/manifest.json",

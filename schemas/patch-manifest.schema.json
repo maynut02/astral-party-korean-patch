@@ -3,36 +3,79 @@
   "$id": "https://astral-party-korean.local/schemas/patch-manifest.schema.json",
   "title": "Astral Party Korean patch manifest",
   "type": "object",
-  "required": ["schemaVersion", "patch", "game", "files"],
+  "required": [
+    "schemaVersion",
+    "patch",
+    "game",
+    "files"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": {
+      "const": 1
+    },
     "patch": {
       "type": "object",
-      "required": ["version", "channel", "route", "buildId", "translationFingerprint"],
+      "required": [
+        "version",
+        "channel",
+        "route",
+        "buildId",
+        "translationFingerprint"
+      ],
       "additionalProperties": false,
       "properties": {
-        "version": { "type": "string", "minLength": 1 },
-        "channel": { "enum": ["preview", "stable"] },
-        "route": { "type": "string", "minLength": 1 },
-        "buildId": { "type": "string", "minLength": 1 },
-        "translationFingerprint": { "$ref": "#/$defs/sha256" }
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channel": {
+          "enum": [
+            "preview",
+            "stable"
+          ]
+        },
+        "route": {
+          "type": "string",
+          "minLength": 1
+        },
+        "buildId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "translationFingerprint": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "game": {
       "type": "object",
-      "required": ["version", "revision", "catalogHash"],
+      "required": [
+        "version",
+        "revision",
+        "catalogHash"
+      ],
       "additionalProperties": false,
       "properties": {
-        "version": { "type": "string", "minLength": 1 },
-        "revision": { "type": "string", "minLength": 1 },
-        "catalogHash": { "$ref": "#/$defs/sha256" }
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "catalogHash": {
+          "$ref": "#/$defs/catalogHash"
+        }
       }
     },
     "files": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/file" }
+      "items": {
+        "$ref": "#/$defs/file"
+      }
     }
   },
   "$defs": {
@@ -42,19 +85,46 @@
     },
     "file": {
       "type": "object",
-      "required": ["target", "path", "operation", "sha256", "size"],
+      "required": [
+        "target",
+        "path",
+        "operation",
+        "sha256",
+        "size"
+      ],
       "additionalProperties": false,
       "properties": {
-        "target": { "enum": ["addressables", "game-data"] },
+        "target": {
+          "enum": [
+            "addressables",
+            "game-data"
+          ]
+        },
         "path": {
           "type": "string",
           "minLength": 1,
-          "not": { "pattern": "(^/|(^|/)\\.\\.(/|$))" }
+          "not": {
+            "pattern": "(^/|(^|/)\\.\\.(/|$))"
+          }
         },
-        "operation": { "enum": ["create", "replace"] },
-        "sha256": { "$ref": "#/$defs/sha256" },
-        "size": { "type": "integer", "minimum": 1 }
+        "operation": {
+          "enum": [
+            "create",
+            "replace"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
+    },
+    "catalogHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{32}$"
     }
   }
 }

@@ -90,11 +90,19 @@ pub struct ReleaseIndex {
     pub releases: Vec<ReleaseIndexEntry>,
 }
 
-pub fn valid_sha256(value: &str) -> bool {
-    value.len() == 64
+fn valid_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub fn valid_sha256(value: &str) -> bool {
+    valid_lower_hex(value, 64)
+}
+
+pub fn valid_catalog_hash(value: &str) -> bool {
+    valid_lower_hex(value, 32)
 }
 
 pub fn validate_relative_path(value: &str) -> Result<(), ProtocolError> {
@@ -122,7 +130,7 @@ impl PatchManifest {
         if !valid_sha256(&self.patch.translation_fingerprint) {
             return Err(ProtocolError::InvalidSha256("translationFingerprint"));
         }
-        if !valid_sha256(&self.game.catalog_hash) {
+        if !valid_catalog_hash(&self.game.catalog_hash) {
             return Err(ProtocolError::InvalidSha256("catalogHash"));
         }
         let mut seen = std::collections::HashSet::new();
@@ -181,7 +189,7 @@ mod tests {
             game: TargetGame {
                 version: "3.2.0".into(),
                 revision: "1042".into(),
-                catalog_hash: "b".repeat(64),
+                catalog_hash: "b".repeat(32),
             },
             files: vec![ManifestFile {
                 target: InstallTarget::Addressables,
@@ -209,7 +217,7 @@ mod tests {
                 route: "INT_STEAM".into(),
                 game_version: "3.2.0".into(),
                 revision: "1042".into(),
-                catalog_hash: "b".repeat(64),
+                catalog_hash: "b".repeat(32),
                 channel: "stable".into(),
                 patch_version: "v1".into(),
                 manifest_url: "https://example.test/manifest.json".into(),
@@ -218,12 +226,12 @@ mod tests {
         };
         assert!(
             index
-                .resolve("INT_STEAM", "3.2.0", "1042", &"b".repeat(64), "stable")
+                .resolve("INT_STEAM", "3.2.0", "1042", &"b".repeat(32), "stable")
                 .is_some()
         );
         assert!(
             index
-                .resolve("INT_STEAM", "3.2.0", "1042", &"e".repeat(64), "stable")
+                .resolve("INT_STEAM", "3.2.0", "1042", &"e".repeat(32), "stable")
                 .is_none()
         );
     }

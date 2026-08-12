@@ -3,28 +3,64 @@
   "$id": "https://astral-party-korean.local/schemas/release-index.schema.json",
   "title": "Astral Party Korean release index",
   "type": "object",
-  "required": ["schemaVersion", "releases"],
+  "required": [
+    "schemaVersion",
+    "releases"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": {
+      "const": 1
+    },
     "releases": {
       "type": "array",
       "items": {
         "type": "object",
         "required": [
-          "route", "gameVersion", "revision", "catalogHash", "channel",
-          "patchVersion", "manifestUrl", "manifestSha256"
+          "route",
+          "gameVersion",
+          "revision",
+          "catalogHash",
+          "channel",
+          "patchVersion",
+          "manifestUrl",
+          "manifestSha256"
         ],
         "additionalProperties": false,
         "properties": {
-          "route": { "type": "string", "minLength": 1 },
-          "gameVersion": { "type": "string", "minLength": 1 },
-          "revision": { "type": "string", "minLength": 1 },
-          "catalogHash": { "$ref": "#/$defs/sha256" },
-          "channel": { "enum": ["preview", "stable"] },
-          "patchVersion": { "type": "string", "minLength": 1 },
-          "manifestUrl": { "type": "string", "format": "uri", "minLength": 1 },
-          "manifestSha256": { "$ref": "#/$defs/sha256" }
+          "route": {
+            "type": "string",
+            "minLength": 1
+          },
+          "gameVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1
+          },
+          "catalogHash": {
+            "$ref": "#/$defs/catalogHash"
+          },
+          "channel": {
+            "enum": [
+              "preview",
+              "stable"
+            ]
+          },
+          "patchVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "manifestUrl": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1
+          },
+          "manifestSha256": {
+            "$ref": "#/$defs/sha256"
+          }
         }
       }
     }
@@ -33,6 +69,10 @@
     "sha256": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
+    },
+    "catalogHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{32}$"
     }
   }
 }

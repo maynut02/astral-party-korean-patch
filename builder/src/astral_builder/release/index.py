@@ -26,12 +26,14 @@ class ReleaseIndexEntry:
     def validate(self) -> None:
         if self.channel not in {"preview", "stable"}:
             raise ValueError(f"unsupported release channel: {self.channel}")
-        for field, value in (
-            ("catalog_hash", self.catalog_hash),
-            ("manifest_sha256", self.manifest_sha256),
+        if len(self.catalog_hash) != 32 or any(
+            char not in "0123456789abcdef" for char in self.catalog_hash
         ):
-            if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
-                raise ValueError(f"{field} must be lowercase SHA-256 hex")
+            raise ValueError("catalog_hash must be lowercase 32-character hex")
+        if len(self.manifest_sha256) != 64 or any(
+            char not in "0123456789abcdef" for char in self.manifest_sha256
+        ):
+            raise ValueError("manifest_sha256 must be lowercase SHA-256 hex")
         if not all(
             (
                 self.route,

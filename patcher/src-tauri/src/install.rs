@@ -318,7 +318,7 @@ mod tests {
             game: TargetGame {
                 version: "3.2.0".into(),
                 revision: "1042".into(),
-                catalog_hash: "b".repeat(64),
+                catalog_hash: "b".repeat(32),
             },
             files: vec![file],
         }

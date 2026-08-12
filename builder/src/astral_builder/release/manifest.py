@@ -12,9 +12,17 @@ Operation = Literal["create", "replace"]
 Channel = Literal["preview", "stable"]
 
 
+def _validate_hex(value: str, field: str, length: int) -> None:
+    if len(value) != length or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"{field} must be lowercase {length}-character hex")
+
+
 def _validate_sha256(value: str, field: str) -> None:
-    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
-        raise ValueError(f"{field} must be lowercase SHA-256 hex")
+    _validate_hex(value, field, 64)
+
+
+def _validate_catalog_hash(value: str) -> None:
+    _validate_hex(value, "catalog_hash", 32)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +50,7 @@ class TargetGame:
     def validate(self) -> None:
         if not self.version or not self.revision:
             raise ValueError("game version and revision are required")
-        _validate_sha256(self.catalog_hash, "catalog_hash")
+        _validate_catalog_hash(self.catalog_hash)
 
 
 @dataclass(frozen=True, slots=True)
