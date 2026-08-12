@@ -17,6 +17,7 @@ patcher/dist/
 .env
 .env.*
 !.env.example
+.secrets/
 
 # IDE / OS
 .vscode/

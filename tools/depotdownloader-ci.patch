@@ -1,0 +1,41 @@
+diff --git a/DepotDownloader/Program.cs b/DepotDownloader/Program.cs
+index 26b7f16..fd32c86 100644
+--- a/DepotDownloader/Program.cs
++++ b/DepotDownloader/Program.cs
+@@ -68,6 +68,19 @@ namespace DepotDownloader
+             var password = GetParameter<string>(args, "-password") ?? GetParameter<string>(args, "-pass");
+             ContentDownloader.Config.RememberPassword = HasParameter(args, "-remember-password");
+             ContentDownloader.Config.UseQrCode = HasParameter(args, "-qr");
++
++            var ciLoginToken = Environment.GetEnvironmentVariable("DEPOTDOWNLOADER_LOGIN_TOKEN");
++            if (!string.IsNullOrEmpty(ciLoginToken))
++            {
++                if (string.IsNullOrEmpty(username))
++                {
++                    Console.Error.WriteLine("DEPOTDOWNLOADER_LOGIN_TOKEN requires -username.");
++                    return 1;
++                }
++
++                ContentDownloader.Config.RememberPassword = true;
++                AccountSettingsStore.Instance.LoginTokens[username] = ciLoginToken;
++            }
+             ContentDownloader.Config.SkipAppConfirmation = HasParameter(args, "-no-mobile");
+
+             if (username == null)
+diff --git a/DepotDownloader/Steam3Session.cs b/DepotDownloader/Steam3Session.cs
+index 9104f33..efbc7e7 100644
+--- a/DepotDownloader/Steam3Session.cs
++++ b/DepotDownloader/Steam3Session.cs
+@@ -528,6 +528,12 @@ namespace DepotDownloader
+
+                         AccountSettingsStore.Instance.LoginTokens[result.AccountName] = result.RefreshToken;
+                         AccountSettingsStore.Save();
++
++                        var tokenOutputPath = Environment.GetEnvironmentVariable("DEPOTDOWNLOADER_TOKEN_OUTPUT");
++                        if (!string.IsNullOrEmpty(tokenOutputPath))
++                        {
++                            System.IO.File.WriteAllText(tokenOutputPath, result.RefreshToken);
++                        }
+                     }
+                     catch (TaskCanceledException)
+                     {

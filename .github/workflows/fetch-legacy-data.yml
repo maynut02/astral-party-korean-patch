@@ -1,0 +1,95 @@
+name: Fetch Legacy Game Data
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      artifact_name:
+        value: ${{ jobs.fetch.outputs.artifact_name }}
+      run_id:
+        value: ${{ jobs.fetch.outputs.run_id }}
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      run_id: ${{ github.run_id }}
+    env:
+      STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+      DEPOTDOWNLOADER_LOGIN_TOKEN: ${{ secrets.STEAM_REFRESH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+      - name: Validate Steam credentials are configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STEAM_USERNAME"
+          test -n "$DEPOTDOWNLOADER_LOGIN_TOKEN"
+      - name: Fetch pinned DepotDownloader source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/SteamRE/DepotDownloader.git .work/DepotDownloader
+          git -C .work/DepotDownloader checkout --detach c553ef4d60c00a4f5fd16c9fe017f569001589ff
+          git -C .work/DepotDownloader apply "$GITHUB_WORKSPACE/tools/depotdownloader-ci.patch"
+          test "$(git -C .work/DepotDownloader rev-parse HEAD)" = c553ef4d60c00a4f5fd16c9fe017f569001589ff
+      - name: Build DepotDownloader
+        run: >-
+          dotnet build
+          .work/DepotDownloader/DepotDownloader/DepotDownloader.csproj
+          -c Release
+          --nologo
+      - name: Download only data.unity3d
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .work/steam-download
+          printf '%s\n' '8vJXnINT/AstralParty_INT_Data/data.unity3d' > .work/legacy-filelist.txt
+          dotnet run \
+            --project .work/DepotDownloader/DepotDownloader/DepotDownloader.csproj \
+            -c Release \
+            --no-build \
+            -- \
+            -app 2622000 \
+            -depot 2622001 \
+            -username "$STEAM_USERNAME" \
+            -remember-password \
+            -os windows \
+            -filelist .work/legacy-filelist.txt \
+            -dir .work/steam-download
+      - name: Verify legacy input
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          path='.work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d'
+          test -s "$path"
+          size="$(stat -c '%s' "$path")"
+          sha="$(sha256sum "$path" | cut -d' ' -f1)"
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          printf 'data.unity3d size=%s sha256=%s\n' "$size" "$sha"
+      - name: Stage minimal artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .work/legacy-artifact
+          cp .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d .work/legacy-artifact/data.unity3d
+      - name: Define artifact metadata
+        id: meta
+        run: echo 'artifact_name=astral-party-legacy-data' >> "$GITHUB_OUTPUT"
+      - name: Upload legacy input artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: astral-party-legacy-data
+          path: .work/legacy-artifact/data.unity3d
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
