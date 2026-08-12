@@ -41,8 +41,10 @@ def test_parser_exposes_build_command() -> None:
             "https://example.test/release",
             "--patch-version",
             "v1",
-            "--build-id",
-            "build-1",
+            "--github-run-id",
+            "12345",
+            "--git-commit",
+            "deadbeef",
             "--legacy-data",
             "data.unity3d",
         ]
@@ -65,3 +67,25 @@ def test_parser_exposes_validate_build_command() -> None:
         ]
     )
     assert args.command == "validate-build"
+
+
+def test_parser_exposes_release_commands() -> None:
+    parser = build_parser()
+    info = parser.parse_args(["release-info", "--manifest", "manifest.json"])
+    assert info.command == "release-info"
+    update = parser.parse_args(
+        [
+            "update-index",
+            "--manifest",
+            "manifest.json",
+            "--manifest-url",
+            "https://example.test/manifest.json",
+            "--index",
+            "release-index.json",
+        ]
+    )
+    assert update.command == "update-index"
+    released = parser.parse_args(
+        ["mark-released", "--build-id", "00000000-0000-0000-0000-000000000001"]
+    )
+    assert released.command == "mark-released"

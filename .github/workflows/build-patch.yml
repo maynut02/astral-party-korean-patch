@@ -73,7 +73,8 @@ jobs:
           --output-dir output/patch
           --asset-base-url "$ASSET_BASE_URL"
           --patch-version '${{ inputs.patch_version }}'
-          --build-id '${{ github.run_id }}'
+          --github-run-id '${{ github.run_id }}'
+          --git-commit '${{ github.sha }}'
           --channel '${{ inputs.channel }}'
           --legacy-data '${{ steps.legacy.outputs.path }}'
           --github-output "$GITHUB_OUTPUT"

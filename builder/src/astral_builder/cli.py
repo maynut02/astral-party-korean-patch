@@ -10,6 +10,11 @@ import psycopg
 from astral_builder import __version__
 from astral_builder.automation.build import build_patch, write_build_github_output
 from astral_builder.automation.check import check_revision, write_github_output
+from astral_builder.automation.release import (
+    read_release_metadata,
+    update_release_index,
+    write_release_github_output,
+)
 from astral_builder.automation.sync import (
     load_route_sync_config,
     persist_prepared_revision,
@@ -17,6 +22,7 @@ from astral_builder.automation.sync import (
     write_sync_github_output,
 )
 from astral_builder.automation.validate_build import validate_built_patch
+from astral_builder.database.builds import set_build_status
 from astral_builder.patch.translations import BuildChannel
 
 
@@ -46,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--output-dir", default="output/patch")
     build.add_argument("--asset-base-url", required=True)
     build.add_argument("--patch-version", required=True)
-    build.add_argument("--build-id", required=True)
+    build.add_argument("--github-run-id")
+    build.add_argument("--git-commit")
     build.add_argument("--channel", choices=["preview", "stable"], default="preview")
     build.add_argument("--legacy-data", required=True)
     build.add_argument("--github-output")
@@ -57,6 +64,22 @@ def build_parser() -> argparse.ArgumentParser:
     validate_build.add_argument("--manifest", required=True)
     validate_build.add_argument("--assets-dir", required=True)
     validate_build.add_argument("--route-config", required=True)
+
+    release_info = subparsers.add_parser(
+        "release-info", help="Read release metadata from manifest."
+    )
+    release_info.add_argument("--manifest", required=True)
+    release_info.add_argument("--github-output")
+
+    update_index = subparsers.add_parser(
+        "update-index", help="Upsert a manifest into release index."
+    )
+    update_index.add_argument("--manifest", required=True)
+    update_index.add_argument("--manifest-url", required=True)
+    update_index.add_argument("--index", required=True)
+
+    mark_released = subparsers.add_parser("mark-released", help="Mark a Neon build as released.")
+    mark_released.add_argument("--build-id", required=True)
     return parser
 
 
@@ -136,7 +159,8 @@ def _run_build(args: argparse.Namespace) -> int:
             output_dir=args.output_dir,
             asset_base_url=args.asset_base_url,
             patch_version=args.patch_version,
-            build_id=args.build_id,
+            github_run_id=args.github_run_id,
+            git_commit=args.git_commit,
             channel=BuildChannel(args.channel),
             legacy_data_path=args.legacy_data,
         )
@@ -145,6 +169,7 @@ def _run_build(args: argparse.Namespace) -> int:
     print(
         json.dumps(
             {
+                "buildId": str(result.build_id),
                 "manifest": str(result.manifest),
                 "translationFingerprint": result.translation_fingerprint,
                 "fileCount": len(result.files),
@@ -177,6 +202,39 @@ def _run_validate_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_release_info(args: argparse.Namespace) -> int:
+    metadata = read_release_metadata(args.manifest)
+    if args.github_output:
+        write_release_github_output(metadata, args.github_output)
+    print(json.dumps(metadata.__dict__ if hasattr(metadata, "__dict__") else {
+        "buildId": metadata.build_id,
+        "patchVersion": metadata.patch_version,
+        "channel": metadata.channel,
+        "route": metadata.route,
+        "gameVersion": metadata.game_version,
+        "revision": metadata.revision,
+        "catalogHash": metadata.catalog_hash,
+    }, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _run_update_index(args: argparse.Namespace) -> int:
+    index = update_release_index(
+        manifest_path=args.manifest,
+        manifest_url=args.manifest_url,
+        index_path=args.index,
+    )
+    print(json.dumps({"releaseCount": len(index.releases), "index": args.index}, sort_keys=True))
+    return 0
+
+
+def _run_mark_released(args: argparse.Namespace) -> int:
+    with psycopg.connect(_database_url()) as conn:
+        set_build_status(conn, UUID(args.build_id), "released")
+    print(json.dumps({"buildId": args.build_id, "status": "released"}, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -189,6 +247,12 @@ def main(argv: list[str] | None = None) -> int:
         return _run_build(args)
     if args.command == "validate-build":
         return _run_validate_build(args)
+    if args.command == "release-info":
+        return _run_release_info(args)
+    if args.command == "update-index":
+        return _run_update_index(args)
+    if args.command == "mark-released":
+        return _run_mark_released(args)
 
     parser.print_help()
     return 0

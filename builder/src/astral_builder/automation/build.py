@@ -9,6 +9,12 @@ import psycopg
 from astral_builder.addressables.catalog import AddressablesCatalog
 from astral_builder.addressables.resolver import ResolvedBundle, resolve_target
 from astral_builder.automation.sync import RouteSyncConfig, load_route_sync_config
+from astral_builder.database.builds import (
+    BuildFileRecord,
+    begin_build,
+    record_build_files,
+    set_build_status,
+)
 from astral_builder.database.repository import load_translation_snapshot
 from astral_builder.extract.unity import extract_text_assets
 from astral_builder.game.source import GameSource, GameSourceClient
@@ -49,6 +55,7 @@ class StoredBundle:
 
 @dataclass(frozen=True, slots=True)
 class BuiltPatch:
+    build_id: UUID
     manifest: Path
     files: tuple[ManifestFile, ...]
     translation_fingerprint: str
@@ -155,8 +162,9 @@ def build_patch(
     output_dir: str | Path,
     asset_base_url: str,
     patch_version: str,
-    build_id: str,
     channel: BuildChannel,
+    git_commit: str | None = None,
+    github_run_id: str | None = None,
     legacy_data_path: str | Path | None,
     resources_root: str | Path = "resources/int_steam",
     client: GameSourceClient | None = None,
@@ -168,7 +176,6 @@ def build_patch(
         raise RuntimeError(f"route mismatch: db={revision.route} config={config.route}")
     snapshot = load_translation_snapshot(conn, revision_id)
     stored = load_stored_bundles(conn, revision_id)
-
     source = GameSource(
         route=revision.route,
         version=revision.game_version,
@@ -293,12 +300,22 @@ def build_patch(
         )
     )
 
+    build_record = begin_build(
+        conn,
+        revision_id=revision_id,
+        route=revision.route,
+        channel=channel.value,
+        translation_fingerprint=snapshot.fingerprint,
+        git_commit=git_commit,
+        github_run_id=github_run_id,
+    )
+
     manifest = PatchManifest(
         patch=PatchMetadata(
             version=patch_version,
             channel=channel.value,
             route=revision.route,
-            build_id=build_id,
+            build_id=str(build_record.id),
             translation_fingerprint=snapshot.fingerprint,
         ),
         game=TargetGame(
@@ -309,13 +326,26 @@ def build_patch(
         files=tuple(manifest_files),
     )
     manifest_path = write_manifest(manifest, output / "manifest.json")
-    return BuiltPatch(manifest_path, tuple(manifest_files), snapshot.fingerprint)
+    build_files = tuple(
+        BuildFileRecord(
+            target="game_data" if item.target == "game-data" else item.target,
+            relative_path=item.path,
+            operation=item.operation,
+            sha256=item.sha256,
+            size=item.size,
+        )
+        for item in manifest_files
+    )
+    record_build_files(conn, build_record.id, build_files)
+    set_build_status(conn, build_record.id, "validated")
+    return BuiltPatch(build_record.id, manifest_path, tuple(manifest_files), snapshot.fingerprint)
 
 
 def write_build_github_output(result: BuiltPatch, destination: str | Path) -> None:
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as file:
+        file.write(f"build_id={result.build_id}\n")
         file.write(f"manifest={result.manifest}\n")
         file.write(f"translation_fingerprint={result.translation_fingerprint}\n")
         file.write(f"file_count={len(result.files)}\n")

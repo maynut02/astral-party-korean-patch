@@ -26,5 +26,6 @@ Thumbs.db
 
 # Runtime caches / generated artifacts
 .cache/
+.work/
 artifacts/
 output/
