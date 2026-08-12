@@ -94,20 +94,23 @@ jobs:
           if bad:
               raise SystemExit(f"manifest contains unexpected release URLs: {bad}")
           PY
-      - name: Create GitHub Release if needed
+      - name: Publish immutable patch release transactionally
         shell: bash
         env:
           TAG: ${{ steps.metadata.outputs.patch_version }}
           CHANNEL: ${{ steps.metadata.outputs.channel }}
           GAME_VERSION: ${{ steps.metadata.outputs.game_version }}
           REVISION: ${{ steps.metadata.outputs.revision }}
+          ROOT: ${{ steps.patch.outputs.root }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            exit 0
+            echo "Release $TAG already exists; immutable patch releases cannot be overwritten." >&2
+            exit 1
           fi
           args=(
             release create "$TAG"
+            --draft
             --target "$GITHUB_SHA"
             --title "$TAG"
             --notes "Astral Party ${GAME_VERSION} revision ${REVISION}"
@@ -115,15 +118,14 @@ jobs:
           if [ "$CHANNEL" = "preview" ]; then
             args+=(--prerelease)
           fi
+          cleanup() {
+            gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+          }
+          trap cleanup ERR
           gh "${args[@]}"
-      - name: Upload immutable patch release files
-        shell: bash
-        env:
-          TAG: ${{ steps.metadata.outputs.patch_version }}
-          ROOT: ${{ steps.patch.outputs.root }}
-        run: |
-          set -euo pipefail
           gh release upload "$TAG" "$ROOT"/assets/* "$ROOT"/manifest.json
+          gh release edit "$TAG" --draft=false
+          trap - ERR
       - name: Prepare patch index release
         shell: bash
         run: |
