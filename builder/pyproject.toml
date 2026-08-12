@@ -13,6 +13,7 @@ authors = [{ name = "MayNut" }]
 dependencies = [
   "UnityPy==1.25.2",
   "psycopg[binary]>=3.2,<4",
+  "Pillow>=10,<12",
 ]
 
 [project.optional-dependencies]

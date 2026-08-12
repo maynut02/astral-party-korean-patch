@@ -1,4 +1,10 @@
 from astral_builder.patch.builder import BundlePatchResult, patch_lang_bundle, patch_str_bundle
+from astral_builder.patch.fonts import (
+    FontPatchError,
+    FontPatchResult,
+    patch_legacy_font,
+    patch_tmp_font_bundle,
+)
 from astral_builder.patch.translations import (
     BuildChannel,
     PatchStats,
@@ -9,14 +15,18 @@ from astral_builder.patch.translations import (
 
 __all__ = [
     "BuildChannel",
+    "FontPatchError",
+    "FontPatchResult",
     "BundlePatchResult",
     "PatchStats",
     "UnityPatchError",
     "patch_lang_bundle",
+    "patch_legacy_font",
     "patch_lang_payload",
     "patch_str_bundle",
     "patch_str_payload",
     "patch_text_assets",
+    "patch_tmp_font_bundle",
     "select_translation",
 ]
 
