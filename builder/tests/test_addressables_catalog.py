@@ -23,15 +23,37 @@ def _catalog_json() -> str:
     for key_offset, entry_index in zip(key_offsets, [0, 1], strict=True):
         bucket_data.extend(struct.pack("<iii", key_offset, 1, entry_index))
 
+    bundle_options = json.dumps(
+        {
+            "m_Hash": "a" * 32,
+            "m_Crc": 0,
+            "m_BundleName": "bundle-root",
+            "m_BundleSize": 12345,
+        },
+        separators=(",", ":"),
+    )
+    assembly = b"Unity.ResourceManager"
+    class_name = b"UnityEngine.ResourceManagement.ResourceProviders.AssetBundleRequestOptions"
+    json_bytes = bundle_options.encode("utf-16-le")
+    extra_data = (
+        b"\x07"
+        + bytes([len(assembly)])
+        + assembly
+        + bytes([len(class_name)])
+        + class_name
+        + struct.pack("<i", len(json_bytes))
+        + json_bytes
+    )
+
+    # attach extra data to the bundle location (entry 0)
     entries = bytearray(struct.pack("<i", 2))
-    # internal id, provider, dependency key, dependency hash, extra data, primary key, type
-    entries.extend(struct.pack("<7i", 0, 0, -1, 0, -1, 0, 0))
+    entries.extend(struct.pack("<7i", 0, 0, -1, 0, 0, 0, 0))
     entries.extend(struct.pack("<7i", 1, 1, 0, 1234, -1, 1, 1))
 
     payload = {
         "m_LocatorId": "fixture",
         "m_BuildResultHash": "fixture-hash",
-        "m_InternalIds": ["{Remote}/target.bundle", "english-internal-id"],
+        "m_InternalIds": ["{App.WebServerConfig.Path}/target.bundle", "english-internal-id"],
         "m_ProviderIds": ["AssetBundleProvider", "BundledAssetProvider"],
         "m_resourceTypes": [
             {
@@ -44,6 +66,7 @@ def _catalog_json() -> str:
         "m_KeyDataString": base64.b64encode(key_data).decode(),
         "m_BucketDataString": base64.b64encode(bucket_data).decode(),
         "m_EntryDataString": base64.b64encode(entries).decode(),
+        "m_ExtraDataString": base64.b64encode(extra_data).decode(),
     }
     return json.dumps(payload)
 
@@ -57,8 +80,11 @@ def test_locates_asset_and_bundle_dependency() -> None:
 
     bundles = catalog.bundle_dependencies("English")
     assert len(bundles) == 1
-    assert bundles[0].internal_id == "{Remote}/target.bundle"
+    assert bundles[0].internal_id == "{App.WebServerConfig.Path}/target.bundle"
     assert bundles[0].is_asset_bundle
+    assert bundles[0].bundle_options is not None
+    assert bundles[0].bundle_options.bundle_name == "bundle-root"
+    assert bundles[0].bundle_options.hash == "a" * 32
 
 
 def test_unknown_key_returns_empty_tuple() -> None:

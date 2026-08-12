@@ -3,12 +3,15 @@ route: INT_STEAM
 platform: windows
 translation:
   lang:
+    catalogKey: English
     sourceAsset: English
   str:
+    catalogKey: GameData_INT
     assetPrefix: STR
     targetField: en
 fonts:
   tmp:
+    catalogKey: Afacad-Regular_TMP
     asset: Afacad-Regular_TMP
     replacement: AstralCJK_KO_EN
   legacy:

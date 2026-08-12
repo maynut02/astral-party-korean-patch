@@ -15,6 +15,27 @@ class CatalogFormatError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class SerializedJsonObject:
+    assembly_name: str
+    class_name: str
+    json_text: str
+
+    def as_dict(self) -> dict[str, Any]:
+        value = json.loads(self.json_text)
+        if not isinstance(value, dict):
+            raise CatalogFormatError("serialized JsonObject payload is not an object")
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class AssetBundleRequestOptions:
+    bundle_name: str
+    hash: str
+    bundle_size: int
+    crc: int
+
+
+@dataclass(frozen=True, slots=True)
 class CatalogLocation:
     index: int
     internal_id: str
@@ -23,10 +44,34 @@ class CatalogLocation:
     dependency_hash: int
     primary_key: object
     resource_type: str
+    data: object | None = None
 
     @property
     def is_asset_bundle(self) -> bool:
         return self.resource_type == _ASSET_BUNDLE_RESOURCE
+
+    @property
+    def bundle_options(self) -> AssetBundleRequestOptions | None:
+        if not self.is_asset_bundle or not isinstance(self.data, SerializedJsonObject):
+            return None
+        if not self.data.class_name.endswith("AssetBundleRequestOptions"):
+            return None
+        payload = self.data.as_dict()
+        try:
+            bundle_name = payload["m_BundleName"]
+            bundle_hash = payload["m_Hash"]
+            bundle_size = int(payload["m_BundleSize"])
+            crc = int(payload["m_Crc"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CatalogFormatError("invalid AssetBundleRequestOptions payload") from exc
+        if not isinstance(bundle_name, str) or not isinstance(bundle_hash, str):
+            raise CatalogFormatError("bundle name/hash must be strings")
+        return AssetBundleRequestOptions(
+            bundle_name=bundle_name,
+            hash=bundle_hash,
+            bundle_size=bundle_size,
+            crc=crc,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +147,7 @@ def _read_serialized_object(data: bytes, offset: int) -> object:
         if json_length < 0 or end > len(data):
             raise CatalogFormatError("JsonObject payload exceeds bounds")
         payload = data[offset:end].decode("utf-16-le")
-        return ("json", assembly, class_name, payload)
+        return SerializedJsonObject(assembly, class_name, payload)
 
     raise CatalogFormatError(f"unsupported serialized object type: {object_type}")
 
@@ -161,6 +206,7 @@ class AddressablesCatalog:
             internal_ids = data["m_InternalIds"]
             provider_ids = data["m_ProviderIds"]
             resource_types = data["m_resourceTypes"]
+            extra_data = base64.b64decode(data.get("m_ExtraDataString", ""), validate=True)
         except (KeyError, TypeError, ValueError) as exc:
             raise CatalogFormatError("catalog is missing required encoded data") from exc
 
@@ -179,6 +225,7 @@ class AddressablesCatalog:
             internal_ids=internal_ids,
             provider_ids=provider_ids,
             resource_types=resource_types,
+            extra_data=extra_data,
         )
 
         for bucket in buckets:
@@ -276,6 +323,7 @@ def _decode_locations(
     internal_ids: Any,
     provider_ids: Any,
     resource_types: Any,
+    extra_data: bytes,
 ) -> tuple[CatalogLocation, ...]:
     if not isinstance(internal_ids, list) or not isinstance(provider_ids, list):
         raise CatalogFormatError("internal/provider id tables must be arrays")
@@ -294,7 +342,7 @@ def _decode_locations(
             provider_index,
             dependency_index,
             dependency_hash,
-            _,
+            data_index,
             primary_key_index,
             type_index,
         ) = struct.unpack_from("<7i", entry_data, offset)
@@ -304,6 +352,7 @@ def _decode_locations(
             primary_key = keys[primary_key_index]
             resource_type = _resource_type_name(resource_types[type_index])
             dependency_key = None if dependency_index < 0 else keys[dependency_index]
+            data = None if data_index < 0 else _read_serialized_object(extra_data, data_index)
         except (IndexError, TypeError) as exc:
             raise CatalogFormatError(f"entry {index} references an invalid table index") from exc
         if not isinstance(internal_id, str) or not isinstance(provider_id, str):
@@ -317,6 +366,7 @@ def _decode_locations(
                 dependency_hash=dependency_hash,
                 primary_key=primary_key,
                 resource_type=resource_type,
+                data=data,
             )
         )
     return tuple(result)
