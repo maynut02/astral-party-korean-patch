@@ -20,6 +20,7 @@ def test_discovers_int_source_revision() -> None:
     assert source.route == "INT_STEAM"
     assert source.revision == "1042"
     assert source.catalog_url == "https://cdn.example/game/1042/catalog_3.2.0.json"
+    assert source.catalog_hash_url == "https://cdn.example/game/1042/catalog_3.2.0.hash"
 
 
 def test_rejects_unknown_route() -> None:
@@ -56,3 +57,24 @@ def test_download_rejects_non_catalog_json(tmp_path: Path) -> None:
     source = client.discover("INT_STEAM", "3.2.0")
     with pytest.raises(SourceDiscoveryError, match="not an Addressables catalog"):
         client.download_catalog(source, tmp_path / "catalog.json")
+
+
+def test_fetches_catalog_hash() -> None:
+    responses = iter([
+        json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
+        b"fd58ba01bbca5e5e389b5b73240df134\n",
+    ])
+    client = GameSourceClient(fetch=lambda _url, _timeout: next(responses))
+    source = client.discover("INT_STEAM", "3.2.0")
+    assert client.fetch_catalog_hash(source) == "fd58ba01bbca5e5e389b5b73240df134"
+
+
+def test_rejects_invalid_catalog_hash() -> None:
+    responses = iter([
+        json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
+        b"not-a-hash",
+    ])
+    client = GameSourceClient(fetch=lambda _url, _timeout: next(responses))
+    source = client.discover("INT_STEAM", "3.2.0")
+    with pytest.raises(SourceDiscoveryError, match="32-character"):
+        client.fetch_catalog_hash(source)

@@ -24,6 +24,10 @@ class GameSource:
     source_url: str
     catalog_url: str
 
+    @property
+    def catalog_hash_url(self) -> str:
+        return f"{self.source_url}/catalog_{self.version}.hash"
+
 
 @dataclass(frozen=True, slots=True)
 class DownloadedCatalog:
@@ -99,6 +103,16 @@ class GameSourceClient:
             source_url=source_url,
             catalog_url=f"{source_url}/catalog_{version}.json",
         )
+
+    def fetch_catalog_hash(self, source: GameSource) -> str:
+        payload = self._fetch(source.catalog_hash_url, self._timeout)
+        try:
+            value = payload.decode("ascii").strip().lower()
+        except UnicodeDecodeError as exc:
+            raise SourceDiscoveryError("catalog hash is not ASCII") from exc
+        if len(value) != 32 or any(char not in "0123456789abcdef" for char in value):
+            raise SourceDiscoveryError("catalog hash is not 32-character lowercase hex")
+        return value
 
     def download_catalog(self, source: GameSource, destination: str | Path) -> DownloadedCatalog:
         payload = self._fetch(source.catalog_url, self._timeout)
