@@ -170,7 +170,9 @@ class AddressablesCatalog:
             raise CatalogFormatError(
                 f"key count ({key_count}) does not match bucket count ({len(buckets)})"
             )
-        keys = tuple(_read_serialized_object(key_data, bucket.key_data_offset) for bucket in buckets)
+        keys = tuple(
+            _read_serialized_object(key_data, bucket.key_data_offset) for bucket in buckets
+        )
         locations = _decode_locations(
             entry_data=entry_data,
             keys=keys,
@@ -209,7 +211,9 @@ class AddressablesCatalog:
             return ()
         return self.locate(location.dependency_key)
 
-    def bundle_dependencies(self, key: object, *, recursive: bool = True) -> tuple[CatalogLocation, ...]:
+    def bundle_dependencies(
+        self, key: object, *, recursive: bool = True
+    ) -> tuple[CatalogLocation, ...]:
         """Return unique AssetBundle locations needed to load a catalog key."""
         result: list[CatalogLocation] = []
         seen_locations: set[int] = set()
@@ -285,9 +289,15 @@ def _decode_locations(
     result: list[CatalogLocation] = []
     for index in range(count):
         offset = 4 + index * 28
-        internal_id_index, provider_index, dependency_index, dependency_hash, _, primary_key_index, type_index = struct.unpack_from(
-            "<7i", entry_data, offset
-        )
+        (
+            internal_id_index,
+            provider_index,
+            dependency_index,
+            dependency_hash,
+            _,
+            primary_key_index,
+            type_index,
+        ) = struct.unpack_from("<7i", entry_data, offset)
         try:
             internal_id = internal_ids[internal_id_index]
             provider_id = provider_ids[provider_index]

@@ -35,7 +35,9 @@ def _catalog_json() -> str:
         "m_ProviderIds": ["AssetBundleProvider", "BundledAssetProvider"],
         "m_resourceTypes": [
             {
-                "m_ClassName": "UnityEngine.ResourceManagement.ResourceProviders.IAssetBundleResource"
+                "m_ClassName": (
+                    "UnityEngine.ResourceManagement.ResourceProviders.IAssetBundleResource"
+                )
             },
             {"m_ClassName": "UnityEngine.TextAsset"},
         ],
