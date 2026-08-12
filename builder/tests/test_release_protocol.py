@@ -31,6 +31,7 @@ def _manifest(tmp_path: Path) -> PatchManifest:
                 patch_file,
                 target="addressables",
                 path="root/hash/__data",
+                download_url="https://example.test/files/addressables.bin",
             ),
         ),
     )
@@ -46,7 +47,14 @@ def test_manifest_rejects_path_traversal(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     item = manifest.files[0]
     with pytest.raises(ValueError, match="safe"):
-        ManifestFile(item.target, "../escape", item.operation, item.sha256, item.size).validate()
+        ManifestFile(
+            item.target,
+            "../escape",
+            item.operation,
+            item.download_url,
+            item.sha256,
+            item.size,
+        ).validate()
 
 
 def test_release_index_upserts_exact_route_revision_channel() -> None:

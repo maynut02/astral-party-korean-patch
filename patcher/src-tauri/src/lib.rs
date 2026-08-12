@@ -1,5 +1,6 @@
 pub mod game;
 pub mod install;
+pub mod network;
 pub mod protocol;
 
 #[cfg(windows)]
@@ -16,3 +17,5 @@ pub use install::{
 pub use protocol::{
     InstallTarget, ManifestFile, PatchManifest, ProtocolError, ReleaseIndex, ReleaseIndexEntry,
 };
+
+pub use network::{NetworkError, ReleaseClient};

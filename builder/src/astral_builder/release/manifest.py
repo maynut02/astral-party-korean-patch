@@ -58,6 +58,7 @@ class ManifestFile:
     target: Target
     path: str
     operation: Operation
+    download_url: str
     sha256: str
     size: int
 
@@ -68,6 +69,7 @@ class ManifestFile:
         *,
         target: Target,
         path: str,
+        download_url: str,
         operation: Operation = "replace",
     ) -> ManifestFile:
         data = Path(source).read_bytes()
@@ -75,6 +77,7 @@ class ManifestFile:
             target=target,
             path=path.replace("\\", "/"),
             operation=operation,
+            download_url=download_url,
             sha256=hashlib.sha256(data).hexdigest(),
             size=len(data),
         )
@@ -87,6 +90,8 @@ class ManifestFile:
         normalized = self.path.replace("\\", "/")
         if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
             raise ValueError(f"manifest path must be safe and relative: {self.path!r}")
+        if not self.download_url.startswith(("https://", "http://")):
+            raise ValueError("manifest download_url must be an http(s) URL")
         _validate_sha256(self.sha256, "file sha256")
         if self.size <= 0:
             raise ValueError("manifest file size must be positive")
@@ -96,6 +101,7 @@ class ManifestFile:
             "target": self.target,
             "path": self.path,
             "operation": self.operation,
+            "downloadUrl": self.download_url,
             "sha256": self.sha256,
             "size": self.size,
         }

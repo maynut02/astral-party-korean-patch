@@ -347,6 +347,7 @@ mod tests {
             target: InstallTarget::Addressables,
             path: "root/hash/__data".into(),
             operation: "create".into(),
+            download_url: "https://example.test/created".into(),
             sha256: hash,
             size: payload.len() as u64,
         });
@@ -382,6 +383,7 @@ mod tests {
             target: InstallTarget::GameData,
             path: "data.unity3d".into(),
             operation: "replace".into(),
+            download_url: "https://example.test/replaced".into(),
             sha256: hash,
             size: payload.len() as u64,
         });

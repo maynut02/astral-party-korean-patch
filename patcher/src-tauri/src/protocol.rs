@@ -9,6 +9,10 @@ pub enum ProtocolError {
     SchemaVersion(u32),
     #[error("invalid sha256 in {0}")]
     InvalidSha256(&'static str),
+    #[error("invalid catalog hash in {0}")]
+    InvalidCatalogHash(&'static str),
+    #[error("invalid URL in {0}: {1}")]
+    InvalidUrl(&'static str, String),
     #[error("unsafe relative path: {0}")]
     UnsafePath(String),
     #[error("manifest contains no files")]
@@ -57,6 +61,7 @@ pub struct ManifestFile {
     pub target: InstallTarget,
     pub path: String,
     pub operation: String,
+    pub download_url: String,
     pub sha256: String,
     pub size: u64,
 }
@@ -131,11 +136,19 @@ impl PatchManifest {
             return Err(ProtocolError::InvalidSha256("translationFingerprint"));
         }
         if !valid_catalog_hash(&self.game.catalog_hash) {
-            return Err(ProtocolError::InvalidSha256("catalogHash"));
+            return Err(ProtocolError::InvalidCatalogHash("catalogHash"));
         }
         let mut seen = std::collections::HashSet::new();
         for file in &self.files {
             validate_relative_path(&file.path)?;
+            if !file.download_url.starts_with("https://")
+                && !file.download_url.starts_with("http://")
+            {
+                return Err(ProtocolError::InvalidUrl(
+                    "file.downloadUrl",
+                    file.download_url.clone(),
+                ));
+            }
             if !valid_sha256(&file.sha256) {
                 return Err(ProtocolError::InvalidSha256("file.sha256"));
             }
@@ -151,21 +164,50 @@ impl PatchManifest {
 }
 
 impl ReleaseIndex {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != 1 {
+            return Err(ProtocolError::SchemaVersion(self.schema_version));
+        }
+        for entry in &self.releases {
+            if entry.route.is_empty()
+                || entry.game_version.is_empty()
+                || entry.revision.is_empty()
+                || entry.channel.is_empty()
+                || entry.patch_version.is_empty()
+            {
+                return Err(ProtocolError::UnsafePath("empty release field".into()));
+            }
+            if !valid_catalog_hash(&entry.catalog_hash) {
+                return Err(ProtocolError::InvalidCatalogHash("release.catalogHash"));
+            }
+            if !valid_sha256(&entry.manifest_sha256) {
+                return Err(ProtocolError::InvalidSha256("release.manifestSha256"));
+            }
+            if !entry.manifest_url.starts_with("https://")
+                && !entry.manifest_url.starts_with("http://")
+            {
+                return Err(ProtocolError::InvalidUrl(
+                    "release.manifestUrl",
+                    entry.manifest_url.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn resolve(
         &self,
         route: &str,
         game_version: &str,
-        revision: &str,
         catalog_hash: &str,
         channel: &str,
     ) -> Option<&ReleaseIndexEntry> {
-        if self.schema_version != 1 {
+        if self.validate().is_err() {
             return None;
         }
         self.releases.iter().find(|entry| {
             entry.route == route
                 && entry.game_version == game_version
-                && entry.revision == revision
                 && entry.catalog_hash == catalog_hash
                 && entry.channel == channel
         })
@@ -195,6 +237,7 @@ mod tests {
                 target: InstallTarget::Addressables,
                 path: "root/hash/__data".into(),
                 operation: "replace".into(),
+                download_url: "https://example.test/files/data".into(),
                 sha256: "c".repeat(64),
                 size: 10,
             }],
@@ -226,12 +269,12 @@ mod tests {
         };
         assert!(
             index
-                .resolve("INT_STEAM", "3.2.0", "1042", &"b".repeat(32), "stable")
+                .resolve("INT_STEAM", "3.2.0", &"b".repeat(32), "stable")
                 .is_some()
         );
         assert!(
             index
-                .resolve("INT_STEAM", "3.2.0", "1042", &"e".repeat(32), "stable")
+                .resolve("INT_STEAM", "3.2.0", &"e".repeat(32), "stable")
                 .is_none()
         );
     }

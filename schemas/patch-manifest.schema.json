@@ -89,6 +89,7 @@
         "target",
         "path",
         "operation",
+        "downloadUrl",
         "sha256",
         "size"
       ],
@@ -119,6 +120,12 @@
         "size": {
           "type": "integer",
           "minimum": 1
+        },
+        "downloadUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "minLength": 1
         }
       }
     },
