@@ -118,7 +118,11 @@ def patch_str_payload(
             )
         )
 
-    patched = StrDocument(entries=tuple(patched_entries), paired=document.paired)
+    patched = StrDocument(
+        entries=tuple(patched_entries),
+        paired=document.paired,
+        mirrors_grouped=document.mirrors_grouped,
+    )
     return (
         encode_str(patched),
         PatchStats(

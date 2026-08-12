@@ -129,3 +129,24 @@ def test_empty_str_payload_stays_empty() -> None:
     )
     assert payload == b""
     assert stats.total_units == 0
+
+
+def test_str_patch_preserves_grouped_mirror_layout() -> None:
+    source = encode_str(
+        StrDocument(
+            entries=(
+                StrEntry(0, SourceStrings(en="Default")),
+                StrEntry(1001, SourceStrings(en="Server Shut Down")),
+            ),
+            mirrors_grouped=True,
+        )
+    )
+    payload, _stats = patch_str_payload(
+        source,
+        _snapshot(),
+        namespace="STRServer",
+        target_field="en",
+    )
+    decoded = decode_str(payload)
+    assert decoded.mirrors_grouped is True
+    assert payload == source

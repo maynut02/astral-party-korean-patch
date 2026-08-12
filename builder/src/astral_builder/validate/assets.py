@@ -57,7 +57,12 @@ def validate_str_payload(original: bytes, patched: bytes) -> ValidationResult:
         raise ValidationError("STR id order/set changed during patching")
     if before.paired != after.paired:
         raise ValidationError("STR paired representation changed during patching")
-    return ValidationResult("str", f"entries={len(before_ids)} paired={before.paired}")
+    if before.mirrors_grouped != after.mirrors_grouped:
+        raise ValidationError("STR mirror layout changed during patching")
+    return ValidationResult(
+        "str",
+        f"entries={len(before_ids)} paired={before.paired} grouped={before.mirrors_grouped}",
+    )
 
 
 def _assetbundle_name(path: str | Path, loader: Loader) -> str | None:
