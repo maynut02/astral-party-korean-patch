@@ -18,6 +18,17 @@ fi
 export DOTNET_ROOT
 export PATH="$DOTNET_ROOT:$PATH"
 
+if ! find /usr/lib /lib -name 'libicuuc.so*' -print -quit 2>/dev/null | grep -q .; then
+  printf '%s\n' 'WSL에 .NET 실행에 필요한 ICU 라이브러리가 없습니다.' >&2
+  if command -v apt-get >/dev/null 2>&1; then
+    printf '%s\n' '다음 명령으로 설치한 뒤 이 스크립트를 다시 실행하세요:' >&2
+    printf '%s\n' '  sudo apt-get update && sudo apt-get install -y libicu-dev' >&2
+  else
+    printf '%s\n' '사용 중인 Linux 배포판의 패키지 관리자로 ICU(libicu)를 설치한 뒤 다시 실행하세요.' >&2
+  fi
+  exit 1
+fi
+
 rm -rf "$SOURCE"
 git clone --filter=blob:none https://github.com/SteamRE/DepotDownloader.git "$SOURCE"
 git -C "$SOURCE" checkout --detach "$COMMIT"
