@@ -1,0 +1,60 @@
+name: Import Legacy Translations
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision_id:
+        description: Optional processed revision UUID. Leave empty to use the latest INT_STEAM revision.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
+      LEGACY_DATABASE_URL: ${{ secrets.LEGACY_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: builder/pyproject.toml
+      - name: Install builder
+        run: python -m pip install -e './builder[dev]'
+      - name: Apply database migrations
+        run: python database/migrate.py
+      - name: Import legacy Korean translations
+        id: import
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--route INT_STEAM --github-output "$GITHUB_OUTPUT")
+          if [[ -n "${{ inputs.revision_id }}" ]]; then
+            args+=(--revision-id "${{ inputs.revision_id }}")
+          fi
+          python -m astral_builder.database.legacy_import "${args[@]}"
+      - name: Write import summary
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Legacy translation import
+
+          | Item | Count |
+          | --- | ---: |
+          | Imported | ${{ steps.import.outputs.imported_count }} |
+          | Already existed | ${{ steps.import.outputs.existing_count }} |
+          | Missing in current revision | ${{ steps.import.outputs.missing_unit_count }} |
+          | Source unchanged | ${{ steps.import.outputs.source_matching_count }} |
+          | Source changed | ${{ steps.import.outputs.source_changed_count }} |
+          | Legacy translations read | ${{ steps.import.outputs.legacy_translation_count }} |
+
+          Target revision: `${{ steps.import.outputs.revision_id }}`
+
+          Imported rows are stored as `draft`. Existing Korean translations are never overwritten.
+          EOF
