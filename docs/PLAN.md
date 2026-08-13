@@ -172,10 +172,13 @@ Patcher는 Neon DB에 직접 접근하지 않는다.
 
 Workflow 분리:
 
-1. `check-game.yml`: scheduled revision check
+1. `check-game.yml`: scheduled revision check + 새 revision Preview orchestration
 2. `sync-game.yml`: catalog resolve/download/extract/DB sync
-3. `build-patch.yml`: snapshot/build/validate/release
-4. `build-patcher.yml`: patcher build/release
+3. `build-patch.yml`: reusable snapshot/build/validate
+4. `release-patch.yml`: reusable immutable Patch Release + release index 갱신
+5. `release-preview.yml`: 입력값 없이 최신 processed revision을 재빌드/Preview 배포
+6. `release-stable.yml`: 수동 Stable build/release orchestration
+7. `build-patcher.yml`: patcher build/release
 
 운영 흐름:
 

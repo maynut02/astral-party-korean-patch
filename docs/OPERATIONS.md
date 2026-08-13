@@ -181,8 +181,9 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 5. `STEAM_USERNAME`, `STEAM_REFRESH_TOKEN` 등록.
 6. `CI` workflow 통과 확인.
 7. `Check Game` workflow 수동 실행.
-8. Preview Release와 `patch-index` 생성 확인.
-9. `Build Patcher`로 생성한 `AstralAutoPatcher.exe`를 실행해 self-registration, `astral://` URI, Steam/LocalLow 경로 탐지, install/remove를 실게임 검증.
-10. 검수 완료 후 `Release Stable Patch`를 수동 실행.
+8. 이미 처리된 revision을 다시 Preview로 빌드/배포할 때는 입력값 없이 `Release Preview Patch`를 수동 실행. 이 workflow는 최신 processed `INT_STEAM` revision을 Neon에서 조회하고 `v<game-version>-r<revision>-preview.manual.<run-number>` tag를 자동 생성한 뒤 Legacy fetch → Build Patch → Release Patch를 수행합니다.
+9. Preview Release와 `patch-index` 생성 확인.
+10. `Build Patcher`로 생성한 `AstralAutoPatcher.exe`를 실행해 self-registration, `astral://` URI, Steam/LocalLow 경로 탐지, install/remove를 실게임 검증.
+11. 검수 완료 후 `Release Stable Patch`를 수동 실행.
 
 실제 credential과 GitHub repository가 연결되기 전까지 로컬 구현만으로는 6~10번의 hosted integration 검증을 수행할 수 없습니다.
