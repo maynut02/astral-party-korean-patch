@@ -173,7 +173,7 @@ def build_patch(
     git_commit: str | None = None,
     github_run_id: str | None = None,
     legacy_data_path: str | Path | None,
-    resources_root: str | Path = "resources/int_steam",
+    resources_root: str | Path | None = None,
     client: GameSourceClient | None = None,
     downloader: RemoteBundleDownloader | None = None,
 ) -> BuiltPatch:
@@ -211,14 +211,20 @@ def build_patch(
     manifest_files: list[ManifestFile] = []
     bundles_root = work / "bundles"
 
-    english_name = config.lang_assets["en"]
+    lang_name = config.lang_assets[config.lang_target]
     lang_items = _download_target(
-        "lang:en", catalog, source, english_name, stored, bundle_downloader, bundles_root
+        f"lang:{config.lang_target}",
+        catalog,
+        source,
+        lang_name,
+        stored,
+        bundle_downloader,
+        bundles_root,
     )
-    lang_item = _one_bundle_with_text_asset(lang_items, english_name)
+    lang_item = _one_bundle_with_text_asset(lang_items, lang_name)
     lang_release_name = _release_name("lang", lang_item.resolved)
     lang_out = payloads / lang_release_name
-    patch_lang_bundle(lang_item.path, lang_out, snapshot, asset_name=english_name, channel=channel)
+    patch_lang_bundle(lang_item.path, lang_out, snapshot, asset_name=lang_name, channel=channel)
     validate_file(lang_out)
     lang_transport = _package_payload(lang_out, releases, lang_release_name)
     manifest_files.append(
@@ -249,7 +255,7 @@ def build_patch(
         str_out,
         snapshot,
         asset_prefix=config.str_asset_prefix,
-        target_field="en",
+        target_field=config.str_target_field,
         channel=channel,
     )
     validate_file(str_out)
@@ -270,7 +276,7 @@ def build_patch(
     if len(tmp_items) != 1:
         raise RuntimeError("expected exactly one remote TMP font bundle")
     tmp_item = tmp_items[0]
-    resource_root = Path(resources_root)
+    resource_root = Path(resources_root or config.resources_root)
     tmp_release_name = _release_name("tmp-font", tmp_item.resolved)
     tmp_out = payloads / tmp_release_name
     patch_tmp_font_bundle(
@@ -293,29 +299,31 @@ def build_patch(
         )
     )
 
-    if legacy_data_path is None:
-        raise RuntimeError(
-            "legacy data.unity3d input is required before a complete patch manifest can be written"
-        )
-    legacy_release_name = "game-data-data.unity3d"
-    legacy_out = payloads / legacy_release_name
-    patch_legacy_font(
-        legacy_data_path,
-        legacy_out,
-        font_name="Afacad-Regular",
-        font_payload=(resource_root / "legacy-font.ttf").read_bytes(),
-    )
-    validate_file(legacy_out)
-    legacy_transport = _package_payload(legacy_out, releases, legacy_release_name)
-    manifest_files.append(
-        ManifestFile.from_paths(
+    if config.legacy_font_name is not None:
+        if legacy_data_path is None:
+            raise RuntimeError(
+                "legacy data.unity3d input is required for this route before a complete patch "
+                "manifest can be written"
+            )
+        legacy_release_name = "game-data-data.unity3d"
+        legacy_out = payloads / legacy_release_name
+        patch_legacy_font(
+            legacy_data_path,
             legacy_out,
-            legacy_transport,
-            target="game-data",
-            path="data.unity3d",
-            download_url=_download_url(asset_base_url, legacy_transport.name),
+            font_name=config.legacy_font_name,
+            font_payload=(resource_root / "legacy-font.ttf").read_bytes(),
         )
-    )
+        validate_file(legacy_out)
+        legacy_transport = _package_payload(legacy_out, releases, legacy_release_name)
+        manifest_files.append(
+            ManifestFile.from_paths(
+                legacy_out,
+                legacy_transport,
+                target="game-data",
+                path="data.unity3d",
+                download_url=_download_url(asset_base_url, legacy_transport.name),
+            )
+        )
 
     build_record = begin_build(
         conn,

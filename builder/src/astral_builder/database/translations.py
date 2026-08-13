@@ -36,10 +36,10 @@ def upsert_translation(conn: psycopg.Connection, write: TranslationWrite) -> UUI
             """
             SELECT id, text, status
             FROM translations
-            WHERE unit_id = %s AND locale = %s
+            WHERE unit_id = %s AND locale = %s AND source_fingerprint = %s
             FOR UPDATE
             """,
-            (write.unit_id, write.locale),
+            (write.unit_id, write.locale, write.source_fingerprint),
         )
         row = cur.fetchone()
 
@@ -73,7 +73,6 @@ def upsert_translation(conn: psycopg.Connection, write: TranslationWrite) -> UUI
                 UPDATE translations
                 SET text = %s,
                     status = %s,
-                    source_fingerprint = %s,
                     updated_at = now(),
                     updated_by = %s
                 WHERE id = %s
@@ -81,7 +80,6 @@ def upsert_translation(conn: psycopg.Connection, write: TranslationWrite) -> UUI
                 (
                     write.text,
                     write.status,
-                    write.source_fingerprint,
                     write.actor,
                     translation_id,
                 ),

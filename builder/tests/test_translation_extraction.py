@@ -36,3 +36,10 @@ def test_extracts_str_assets_into_namespaced_units() -> None:
 def test_empty_str_asset_is_zero_entries() -> None:
     units = extract_str_units({"STRDynamic": b""})
     assert units == ()
+
+
+def test_extracts_partial_language_assets_for_route_specific_sources() -> None:
+    units = extract_lang_units({"cn_s": _xml({"B": "乙", "A": "甲"})})
+    assert [unit.key for unit in units] == ["B", "A"]
+    assert units[0].source == SourceStrings(cn_s="乙")
+    assert units[1].source == SourceStrings(cn_s="甲")

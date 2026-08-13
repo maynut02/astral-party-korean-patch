@@ -287,7 +287,16 @@ def load_translation_snapshot(
                 COALESCE(tr.text, ''), tr.status, tr.source_fingerprint
             FROM source_texts st
             JOIN translation_units tu ON tu.id = st.unit_id
-            LEFT JOIN translations tr ON tr.unit_id = tu.id AND tr.locale = %s
+            LEFT JOIN LATERAL (
+                SELECT candidate.text, candidate.status, candidate.source_fingerprint
+                FROM translations candidate
+                WHERE candidate.unit_id = tu.id AND candidate.locale = %s
+                ORDER BY
+                    (candidate.source_fingerprint = st.source_fingerprint) DESC,
+                    candidate.updated_at DESC,
+                    candidate.id DESC
+                LIMIT 1
+            ) tr ON TRUE
             WHERE st.revision_id = %s
             ORDER BY tu.kind, tu.namespace, tu.unit_key
             """,

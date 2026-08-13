@@ -14,15 +14,24 @@ def extract_lang_units(
     *,
     namespace: str = "lang",
 ) -> tuple[TranslationUnit, ...]:
-    missing = [code for code in _LANGUAGE_CODES if code not in language_payloads]
-    if missing:
-        raise ValueError(f"missing language payloads: {missing}")
+    unknown = sorted(set(language_payloads) - set(_LANGUAGE_CODES))
+    if unknown:
+        raise ValueError(f"unsupported language payload codes: {unknown}")
+    if not language_payloads:
+        raise ValueError("at least one language payload is required")
 
-    decoded = {code: decode_lang_xml(language_payloads[code]) for code in _LANGUAGE_CODES}
+    decoded = {
+        code: decode_lang_xml(language_payloads[code])
+        for code in _LANGUAGE_CODES
+        if code in language_payloads
+    }
     all_keys = set().union(*(mapping.keys() for mapping in decoded.values()))
 
-    # English order is the most useful stable human-facing order; keys absent there follow sorted.
-    ordered_keys = list(decoded["en"])
+    # Prefer English for human-facing stability, then the first available canonical language.
+    order_code = (
+        "en" if "en" in decoded else next(code for code in _LANGUAGE_CODES if code in decoded)
+    )
+    ordered_keys = list(decoded[order_code])
     ordered_keys.extend(sorted(all_keys - set(ordered_keys)))
 
     return tuple(
@@ -31,10 +40,10 @@ def extract_lang_units(
             namespace=namespace,
             key=key,
             source=SourceStrings(
-                cn_s=decoded["cn_s"].get(key, ""),
-                en=decoded["en"].get(key, ""),
-                jp=decoded["jp"].get(key, ""),
-                cn_t=decoded["cn_t"].get(key, ""),
+                cn_s=decoded.get("cn_s", {}).get(key, ""),
+                en=decoded.get("en", {}).get(key, ""),
+                jp=decoded.get("jp", {}).get(key, ""),
+                cn_t=decoded.get("cn_t", {}).get(key, ""),
             ),
         )
         for key in ordered_keys

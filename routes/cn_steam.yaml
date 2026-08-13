@@ -1,0 +1,21 @@
+schemaVersion: 2
+route: CN_STEAM
+platform: windows
+translation:
+  canonicalFallbackRoute: INT_STEAM
+  lang:
+    assets:
+      cn_s: Simplified Chinese
+    target: cn_s
+  str:
+    catalogKey: GameData_CN
+    assetPrefix: STR
+    targetField: cn_s
+fonts:
+  tmp:
+    catalogKey: JingNanBoBoHei_TMP
+    asset: JingNanBoBoHei_TMP
+  legacy:
+    asset: JingNanBoBoHei
+resources:
+  root: resources/cn_steam

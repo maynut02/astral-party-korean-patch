@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--github-run-id")
     build.add_argument("--git-commit")
     build.add_argument("--channel", choices=["release", "develop"], default="release")
-    build.add_argument("--legacy-data", required=True)
+    build.add_argument("--legacy-data")
     build.add_argument("--github-output")
 
     validate_build = subparsers.add_parser(

@@ -99,7 +99,7 @@ def validate_built_patch(
     assets_dir: str | Path,
     *,
     route_config: str | Path,
-    resources_root: str | Path = "resources/int_steam",
+    resources_root: str | Path | None = None,
 ) -> BuildValidationSummary:
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     if manifest.get("schemaVersion") != 2:
@@ -110,7 +110,7 @@ def validate_built_patch(
 
     config = load_route_sync_config(route_config)
     root = Path(assets_dir)
-    resources = Path(resources_root)
+    resources = Path(resources_root or config.resources_root)
     lang_keys = 0
     str_assets = 0
     str_units = 0
@@ -137,9 +137,9 @@ def validate_built_patch(
                     raise ValidationError(f"invalid Addressables cache path: {relative}")
                 validate_assetbundle_expected_name(payload, f"{parts[0]}.bundle")
                 text_assets = extract_text_assets(payload)
-                english = config.lang_assets["en"]
-                if english in text_assets:
-                    lang_keys = len(decode_lang_xml(text_assets[english]))
+                lang_name = config.lang_assets[config.lang_target]
+                if lang_name in text_assets:
+                    lang_keys = len(decode_lang_xml(text_assets[lang_name]))
                     saw_lang = True
                 matching_str = {
                     name: data
@@ -164,27 +164,27 @@ def validate_built_patch(
                     )
                     saw_tmp = True
             elif target == "game-data":
+                if config.legacy_font_name is None:
+                    raise ValidationError("route does not define a legacy game-data font")
                 if relative != "data.unity3d":
                     raise ValidationError(f"unexpected game-data path: {relative}")
                 validate_legacy_font(
                     payload,
-                    font_name="Afacad-Regular",
+                    font_name=config.legacy_font_name,
                     font_payload=(resources / "legacy-font.ttf").read_bytes(),
                 )
                 saw_legacy = True
             else:
                 raise ValidationError(f"unsupported manifest target: {target}")
 
-    missing = [
-        name
-        for name, present in (
-            ("lang", saw_lang),
-            ("str", saw_str),
-            ("tmp-font", saw_tmp),
-            ("legacy-font", saw_legacy),
-        )
-        if not present
+    required = [
+        ("lang", saw_lang),
+        ("str", saw_str),
+        ("tmp-font", saw_tmp),
     ]
+    if config.legacy_font_name is not None:
+        required.append(("legacy-font", saw_legacy))
+    missing = [name for name, present in required if not present]
     if missing:
         raise ValidationError(f"complete patch is missing validated targets: {missing}")
     return BuildValidationSummary(len(files), lang_keys, str_assets, str_units)

@@ -1,4 +1,4 @@
-schemaVersion: 1
+schemaVersion: 2
 route: INT_STEAM
 platform: windows
 translation:
@@ -8,6 +8,7 @@ translation:
       en: English
       jp: Japanese
       cn_t: Traditional Chinese
+    target: en
   str:
     catalogKey: GameData_INT
     assetPrefix: STR
@@ -16,7 +17,7 @@ fonts:
   tmp:
     catalogKey: Afacad-Regular_TMP
     asset: Afacad-Regular_TMP
-    replacement: AstralCJK_KO_EN
   legacy:
     asset: Afacad-Regular
-    replacement: ONE_Mobile_POP
+resources:
+  root: resources/int_steam

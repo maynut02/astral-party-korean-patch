@@ -18,7 +18,7 @@ from astral_builder.database.repository import (
 )
 from astral_builder.extract.translations import extract_lang_units, extract_str_units
 from astral_builder.extract.unity import extract_text_assets
-from astral_builder.formats.model import TranslationUnit
+from astral_builder.formats.model import SourceStrings, TranslationUnit
 from astral_builder.game.source import DownloadedCatalog, GameSource, GameSourceClient
 from astral_builder.source.downloader import DownloadedBundle, RemoteBundleDownloader
 
@@ -26,11 +26,17 @@ from astral_builder.source.downloader import DownloadedBundle, RemoteBundleDownl
 @dataclass(frozen=True, slots=True)
 class RouteSyncConfig:
     route: str
+    platform: str
+    canonical_fallback_route: str | None
     lang_assets: dict[str, str]
+    lang_target: str
     str_catalog_key: str
     str_asset_prefix: str
+    str_target_field: str
     tmp_catalog_key: str
     tmp_asset_name: str
+    legacy_font_name: str | None
+    resources_root: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +48,7 @@ class PreparedRevision:
     asset_locations: tuple[AssetLocationInput, ...]
     downloaded_bundles: tuple[DownloadedBundle, ...]
     empty_str_assets: tuple[str, ...]
+    canonical_fallback_route: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,21 +66,46 @@ def load_route_sync_config(path: str | Path) -> RouteSyncConfig:
     if not isinstance(data, dict):
         raise ValueError("route config must be a mapping")
     try:
-        lang_assets = dict(data["translation"]["lang"]["assets"])
-        str_config = data["translation"]["str"]
+        route = str(data["route"]).upper()
+        platform = str(data.get("platform", "windows")).lower()
+        translation = data["translation"]
+        lang_config = translation["lang"]
+        lang_assets_raw = dict(lang_config["assets"])
+        lang_assets = {str(key): str(value) for key, value in lang_assets_raw.items()}
+        str_config = translation["str"]
         tmp_config = data["fonts"]["tmp"]
+        legacy_config = data["fonts"].get("legacy")
+        fallback = translation.get("canonicalFallbackRoute")
+        default_lang_target = "en" if "en" in lang_assets else next(iter(lang_assets))
+        lang_target = str(lang_config.get("target", default_lang_target))
         config = RouteSyncConfig(
-            route=str(data["route"]),
-            lang_assets={str(key): str(value) for key, value in lang_assets.items()},
+            route=route,
+            platform=platform,
+            canonical_fallback_route=str(fallback).upper() if fallback else None,
+            lang_assets=lang_assets,
+            lang_target=lang_target,
             str_catalog_key=str(str_config["catalogKey"]),
             str_asset_prefix=str(str_config["assetPrefix"]),
+            str_target_field=str(str_config.get("targetField", "en")),
             tmp_catalog_key=str(tmp_config["catalogKey"]),
             tmp_asset_name=str(tmp_config["asset"]),
+            legacy_font_name=(str(legacy_config["asset"]) if legacy_config else None),
+            resources_root=str(data.get("resources", {}).get("root", f"resources/{route.lower()}")),
         )
-    except (KeyError, TypeError) as exc:
+    except (KeyError, StopIteration, TypeError) as exc:
         raise ValueError("route config is missing required sync fields") from exc
-    if set(config.lang_assets) != {"cn_s", "en", "jp", "cn_t"}:
-        raise ValueError("route config must define cn_s/en/jp/cn_t language assets")
+
+    valid_codes = {"cn_s", "en", "jp", "cn_t"}
+    if not config.lang_assets or not set(config.lang_assets).issubset(valid_codes):
+        raise ValueError("route config language assets must use cn_s/en/jp/cn_t codes")
+    if config.lang_target not in config.lang_assets:
+        raise ValueError("route config lang target must reference a configured language asset")
+    if config.str_target_field not in valid_codes:
+        raise ValueError("route config STR targetField must be cn_s/en/jp/cn_t")
+    if config.canonical_fallback_route == config.route:
+        raise ValueError("canonical fallback route must differ from route")
+    if config.platform not in {"windows", "android"}:
+        raise ValueError(f"unsupported route platform: {config.platform}")
     return config
 
 
@@ -223,7 +255,65 @@ def prepare_revision(
         asset_locations=tuple(asset_locations),
         downloaded_bundles=tuple(all_downloads.values()),
         empty_str_assets=empty_str_assets,
+        canonical_fallback_route=config.canonical_fallback_route,
     )
+
+
+def _canonicalize_units_from_fallback(
+    conn: psycopg.Connection,
+    prepared: PreparedRevision,
+) -> tuple[TranslationUnit, ...]:
+    fallback_route = prepared.canonical_fallback_route
+    if not fallback_route:
+        return prepared.units
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT tu.kind, tu.namespace, tu.unit_key, st.cn_s, st.en, st.jp, st.cn_t
+            FROM source_texts st
+            JOIN translation_units tu ON tu.id = st.unit_id
+            JOIN game_revisions gr ON gr.id = st.revision_id
+            WHERE gr.route = %s
+              AND gr.game_version = %s
+              AND gr.revision = %s
+              AND gr.processed_at IS NOT NULL
+            """,
+            (fallback_route, prepared.source.version, prepared.source.revision),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        raise RuntimeError(
+            "canonical fallback source revision is not processed: "
+            f"{fallback_route}/{prepared.source.version}/{prepared.source.revision}"
+        )
+
+    fallback = {
+        (str(row[0]), str(row[1]), str(row[2])): SourceStrings(
+            cn_s=str(row[3]), en=str(row[4]), jp=str(row[5]), cn_t=str(row[6])
+        )
+        for row in rows
+    }
+    result: list[TranslationUnit] = []
+    for unit in prepared.units:
+        source = unit.source
+        other = fallback.get(unit.identity)
+        if other is not None:
+            source = SourceStrings(
+                cn_s=source.cn_s or other.cn_s,
+                en=source.en or other.en,
+                jp=source.jp or other.jp,
+                cn_t=source.cn_t or other.cn_t,
+            )
+        result.append(
+            TranslationUnit(
+                kind=unit.kind,
+                namespace=unit.namespace,
+                key=unit.key,
+                source=source,
+            )
+        )
+    return tuple(result)
 
 
 def persist_prepared_revision(
@@ -239,7 +329,8 @@ def persist_prepared_revision(
         catalog_sha256=prepared.catalog.sha256,
         catalog_build_hash=prepared.catalog_hash,
     )
-    source_result: SourceSyncResult = sync_revision_sources(conn, revision, prepared.units)
+    canonical_units = _canonicalize_units_from_fallback(conn, prepared)
+    source_result: SourceSyncResult = sync_revision_sources(conn, revision, canonical_units)
     locations_idempotent = sync_asset_locations(
         conn,
         source_result.revision_id,
@@ -249,7 +340,7 @@ def persist_prepared_revision(
     return SyncRevisionResult(
         revision_id=str(source_result.revision_id),
         idempotent=source_result.idempotent and locations_idempotent,
-        unit_count=len(prepared.units),
+        unit_count=len(canonical_units),
         asset_location_count=len(prepared.asset_locations),
         downloaded_bundle_count=len(prepared.downloaded_bundles),
         empty_str_assets=prepared.empty_str_assets,
