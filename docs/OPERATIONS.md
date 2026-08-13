@@ -137,7 +137,7 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo build --locked --release --bin AstralAutoPatcher
 ```
 
-산출물은 단일 `AstralAutoPatcher.exe`와 `.sha256` 파일입니다. 프로그램은 자신을 다음 위치에 복사하고 사용자별 `astral://` protocol handler를 등록합니다.
+Actions artifact에는 `AstralAutoPatcher.exe`만 포함합니다. `publish=true`로 배포하는 버전별 Patcher Release에도 사용자용 asset은 `AstralAutoPatcher.exe` 하나만 올립니다. SHA-256과 파일 크기는 workflow 내부에서 계산해 자동 업데이트용 `patcher-index/patcher-index.json`에 기록하며 별도 `.sha256` 파일은 배포하지 않습니다. 프로그램은 자신을 다음 위치에 복사하고 사용자별 `astral://` protocol handler를 등록합니다.
 
 ```text
 %LOCALAPPDATA%\AstralAutoPatcher\AstralAutoPatcher.exe
@@ -145,9 +145,11 @@ cargo build --locked --release --bin AstralAutoPatcher
 
 같은 폴더에 `settings.json`, `installed.json`, staging/backup 상태를 관리합니다. 최초 실행 시 Steam과 LocalLow 경로를 자동 감지합니다.
 
-Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 0.4.1부터 설치 대상 patch version/asset 목록과 다운로드·적용 진행률을 표시합니다. 0.5.0부터 사용자 channel 선택을 제거하고 항상 `release` channel의 현재 게임 version/catalog에 맞는 최신 entry만 설치합니다. 기존 settings schema v1의 `stable/preview` 값은 무시하고 경로 설정만 보존해 schema v2로 마이그레이션합니다.
+Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 0.4.1부터 설치 대상 patch version/asset 목록과 다운로드·적용 진행률을 표시합니다. 0.5.0부터 사용자 channel 선택을 제거하고 항상 `release` channel의 현재 게임 version/catalog에 맞는 최신 entry만 설치합니다. 기존 settings schema v1의 `stable/preview` 값은 무시하고 경로 설정만 보존해 schema v2로 마이그레이션합니다. 0.6.0부터 시작 시 `patcher-index.json`을 확인해 더 높은 semantic version이 있으면 새 EXE를 다운로드하고 size/SHA-256을 검증한 뒤, 다운로드한 새 EXE 자체를 updater helper로 실행합니다. helper는 기존 프로세스 종료를 기다려 `%LOCALAPPDATA%\AstralAutoPatcher\AstralAutoPatcher.exe`를 교체하고 원래 실행 인수(`astral://install` 등)를 그대로 넘겨 새 버전을 재실행합니다. 업데이트 확인이나 다운로드가 실패하면 현재 버전 실행을 차단하지 않고 상태 안내만 남긴 채 기존 작업을 계속합니다.
 
 상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 게임 버전, Catalog hash, 설치된 패치 버전을 표시합니다.
+
+자동 업데이트용 `patcher-index`는 사용자용 버전 Release와 분리된 고정 prerelease입니다. 이 Release에는 `patcher-index.json` 하나만 mutable asset으로 유지합니다. 버전별 `patcher-v<version>` Release는 immutable이며 `AstralAutoPatcher.exe` 하나만 포함합니다. `Build Patcher`를 `publish=true`로 실행하면 버전 Release 공개가 성공한 뒤 마지막 단계에서 `patcher-index.json`을 갱신하므로, index가 아직 존재하지 않는 EXE를 가리키는 상태가 생기지 않습니다.
 
 지원 URI:
 

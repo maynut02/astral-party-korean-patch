@@ -5,12 +5,29 @@ use thiserror::Error;
 use crate::registration::RegistrationError;
 #[cfg(windows)]
 use crate::registration::ensure_self_installed_and_registered;
-use crate::service::{PatcherPaths, ServiceError};
-use crate::settings::{AppSettings, SettingsError};
+#[cfg(windows)]
+use crate::service::PatcherPaths;
+use crate::service::ServiceError;
+#[cfg(windows)]
+use crate::settings::AppSettings;
+use crate::settings::SettingsError;
+#[cfg(windows)]
 use crate::tui;
-use crate::uri::{UriAction, UriError};
+#[cfg(windows)]
+use crate::updater::{
+    UpdateError, apply_update_and_restart, check_and_launch_update, parse_apply_update_request,
+};
+#[cfg(windows)]
+use crate::uri::UriAction;
+use crate::uri::UriError;
 
+#[cfg(windows)]
 const FALLBACK_RELEASE_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/patch-index/release-index.json";
+#[cfg(windows)]
+const FALLBACK_PATCHER_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/patcher-index/patcher-index.json";
+#[cfg(windows)]
+const FALLBACK_PATCHER_RELEASE_BASE_URL: &str =
+    "https://github.com/maynut02/astral-party-korean-patch/releases/download";
 
 #[derive(Debug, Error)]
 pub enum CliError {
@@ -22,18 +39,37 @@ pub enum CliError {
     Registration(#[from] RegistrationError),
     #[error(transparent)]
     Uri(#[from] UriError),
+    #[cfg(windows)]
+    #[error(transparent)]
+    Update(#[from] UpdateError),
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
     #[error("AstralAutoPatcher supports Windows only")]
     UnsupportedPlatform,
 }
 
+#[cfg(windows)]
 fn release_index_url() -> &'static str {
     option_env!("ASTRAL_PATCH_INDEX_URL")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(FALLBACK_RELEASE_INDEX_URL)
 }
 
+#[cfg(windows)]
+fn patcher_index_url() -> &'static str {
+    option_env!("ASTRAL_PATCHER_INDEX_URL")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(FALLBACK_PATCHER_INDEX_URL)
+}
+
+#[cfg(windows)]
+fn patcher_release_base_url() -> &'static str {
+    option_env!("ASTRAL_PATCHER_RELEASE_BASE_URL")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(FALLBACK_PATCHER_RELEASE_BASE_URL)
+}
+
+#[cfg(windows)]
 fn load_initial_settings(paths: &PatcherPaths) -> Result<AppSettings, CliError> {
     let mut settings = AppSettings::load(&paths.settings_path)?;
     settings.auto_detect_missing();
@@ -45,21 +81,43 @@ fn load_initial_settings(paths: &PatcherPaths) -> Result<AppSettings, CliError> 
 #[cfg(windows)]
 pub fn run() -> Result<(), CliError> {
     let paths = PatcherPaths::windows_default()?;
+    let original_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+
+    if let Some(request) = parse_apply_update_request(&original_args)? {
+        apply_update_and_restart(&paths.state_root, request)?;
+        return Ok(());
+    }
+
+    let mut startup_notices = Vec::new();
+    match check_and_launch_update(
+        patcher_index_url(),
+        patcher_release_base_url(),
+        &paths.state_root,
+        &original_args,
+    ) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(error) => startup_notices.push(format!(
+            "자동 업데이트 확인에 실패해 현재 버전으로 계속합니다: {error}"
+        )),
+    }
+
     let installed_exe = ensure_self_installed_and_registered(&paths.state_root)?;
     let settings = load_initial_settings(&paths)?;
-    let initial_action = match std::env::args().nth(1) {
-        Some(uri) => UriAction::parse(&uri)?,
+    let initial_action = match original_args.first() {
+        Some(uri) => UriAction::parse(&uri.to_string_lossy())?,
         None => UriAction::Menu,
     };
-    let startup_notice = std::env::current_exe()
+    if std::env::current_exe()
         .ok()
-        .filter(|current| current != &installed_exe)
-        .map(|_| {
-            format!(
-                "프로그램 등록 완료: {} · 웹사이트 연동 astral://",
-                installed_exe.display()
-            )
-        });
+        .is_some_and(|current| current != installed_exe)
+    {
+        startup_notices.push(format!(
+            "프로그램 등록 완료: {} · 웹사이트 연동 astral://",
+            installed_exe.display()
+        ));
+    }
+    let startup_notice = (!startup_notices.is_empty()).then(|| startup_notices.join(" · "));
 
     tui::run(
         paths,
