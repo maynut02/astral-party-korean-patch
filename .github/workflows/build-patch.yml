@@ -6,6 +6,9 @@ on:
       revision_id:
         required: true
         type: string
+      route_config:
+        required: true
+        type: string
       patch_version:
         required: true
         type: string
@@ -17,7 +20,7 @@ on:
         type: string
       legacy_artifact_name:
         required: false
-        default: astral-party-legacy-data
+        default: astral-party-legacy-data-int-steam
         type: string
     outputs:
       artifact_name:
@@ -30,6 +33,14 @@ on:
         description: Processed Neon game revision UUID
         required: true
         type: string
+      route_config:
+        description: Route configuration used for the build
+        required: true
+        default: routes/int_steam.yaml
+        type: choice
+        options:
+          - routes/int_steam.yaml
+          - routes/cn_steam.yaml
       patch_version:
         description: Patch version/tag to build
         required: true
@@ -41,13 +52,13 @@ on:
         type: choice
         options: [release, develop]
       legacy_run_id:
-        description: Workflow run ID containing the legacy data.unity3d artifact
+        description: Workflow run ID containing the route data.unity3d artifact
         required: true
         type: string
       legacy_artifact_name:
         description: Artifact containing data.unity3d
         required: true
-        default: astral-party-legacy-data
+        default: astral-party-legacy-data-int-steam
         type: string
 
 permissions:
@@ -94,7 +105,7 @@ jobs:
         run: >-
           astral-builder build
           --revision-id '${{ inputs.revision_id }}'
-          --route-config routes/int_steam.yaml
+          --route-config '${{ inputs.route_config }}'
           --work-dir .work/build
           --output-dir output/patch
           --asset-base-url "$ASSET_BASE_URL"
@@ -109,7 +120,7 @@ jobs:
           astral-builder validate-build
           --manifest output/patch/manifest.json
           --assets-dir output/patch/assets
-          --route-config routes/int_steam.yaml
+          --route-config '${{ inputs.route_config }}'
       - name: Define patch artifact metadata
         id: meta
         shell: bash

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -5,11 +6,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::game::{
-    GameDetectError, GameInstallation, build_installation, normalize_locallow_root,
+    GameDetectError, GameInstallation, GameRoute, build_installation, normalize_locallow_root,
     normalize_steam_root,
 };
 
-pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum SettingsError {
@@ -19,20 +20,34 @@ pub enum SettingsError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Game(#[from] GameDetectError),
-    #[error("Steam game path is not configured")]
-    SteamPathMissing,
-    #[error("LocalLow path is not configured")]
-    LocalLowPathMissing,
+    #[error("Steam game path is not configured for {0}")]
+    SteamPathMissing(GameRoute),
+    #[error("LocalLow path is not configured for {0}")]
+    LocalLowPathMissing(GameRoute),
     #[error("unsupported settings schema version: {0}")]
     UnsupportedSchema(u32),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteSettings {
+    pub steam_game_root: Option<PathBuf>,
+    pub locallow_root: Option<PathBuf>,
+}
+
+impl RouteSettings {
+    #[cfg(windows)]
+    fn is_empty(&self) -> bool {
+        self.steam_game_root.is_none() && self.locallow_root.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub schema_version: u32,
-    pub steam_game_root: Option<PathBuf>,
-    pub locallow_root: Option<PathBuf>,
+    pub selected_route: GameRoute,
+    pub routes: BTreeMap<GameRoute, RouteSettings>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,17 +59,38 @@ struct LegacySettingsV1 {
     _channel: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacySettingsV2 {
+    steam_game_root: Option<PathBuf>,
+    locallow_root: Option<PathBuf>,
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
-            steam_game_root: None,
-            locallow_root: None,
+            selected_route: GameRoute::IntSteam,
+            routes: BTreeMap::new(),
         }
     }
 }
 
 impl AppSettings {
+    fn from_legacy(steam_game_root: Option<PathBuf>, locallow_root: Option<PathBuf>) -> Self {
+        let mut settings = Self::default();
+        if steam_game_root.is_some() || locallow_root.is_some() {
+            settings.routes.insert(
+                GameRoute::IntSteam,
+                RouteSettings {
+                    steam_game_root,
+                    locallow_root,
+                },
+            );
+        }
+        settings
+    }
+
     pub fn load(path: &Path) -> Result<Self, SettingsError> {
         if !path.is_file() {
             return Ok(Self::default());
@@ -68,11 +104,11 @@ impl AppSettings {
         let settings = match schema_version {
             1 => {
                 let legacy: LegacySettingsV1 = serde_json::from_slice(&raw)?;
-                Self {
-                    schema_version: SETTINGS_SCHEMA_VERSION,
-                    steam_game_root: legacy.steam_game_root,
-                    locallow_root: legacy.locallow_root,
-                }
+                Self::from_legacy(legacy.steam_game_root, legacy.locallow_root)
+            }
+            2 => {
+                let legacy: LegacySettingsV2 = serde_json::from_slice(&raw)?;
+                Self::from_legacy(legacy.steam_game_root, legacy.locallow_root)
             }
             SETTINGS_SCHEMA_VERSION => serde_json::from_slice(&raw)?,
             other => return Err(SettingsError::UnsupportedSchema(other)),
@@ -102,41 +138,103 @@ impl AppSettings {
         Ok(())
     }
 
+    pub fn selected_route(&self) -> GameRoute {
+        self.selected_route
+    }
+
+    pub fn route_settings(&self, route: GameRoute) -> Option<&RouteSettings> {
+        self.routes.get(&route)
+    }
+
+    fn route_settings_mut(&mut self, route: GameRoute) -> &mut RouteSettings {
+        self.routes.entry(route).or_default()
+    }
+
+    pub fn selected_route_settings(&self) -> Option<&RouteSettings> {
+        self.route_settings(self.selected_route)
+    }
+
+    pub fn steam_game_root(&self) -> Option<&Path> {
+        self.selected_route_settings()
+            .and_then(|settings| settings.steam_game_root.as_deref())
+    }
+
+    pub fn locallow_root(&self) -> Option<&Path> {
+        self.selected_route_settings()
+            .and_then(|settings| settings.locallow_root.as_deref())
+    }
+
+    pub fn set_selected_route(&mut self, route: GameRoute) {
+        self.selected_route = route;
+    }
+
+    pub fn select_next_route(&mut self) {
+        self.selected_route = match self.selected_route {
+            GameRoute::IntSteam => GameRoute::CnSteam,
+            GameRoute::CnSteam => GameRoute::IntSteam,
+        };
+    }
+
     pub fn set_steam_game_root(&mut self, path: &Path) -> Result<(), SettingsError> {
-        self.steam_game_root = Some(normalize_steam_root(path)?);
+        let route = self.selected_route;
+        let normalized = normalize_steam_root(path, route)?;
+        self.route_settings_mut(route).steam_game_root = Some(normalized);
         Ok(())
     }
 
     pub fn set_locallow_root(&mut self, path: &Path) -> Result<(), SettingsError> {
-        self.locallow_root = Some(normalize_locallow_root(path)?);
+        let route = self.selected_route;
+        let normalized = normalize_locallow_root(path, route)?;
+        self.route_settings_mut(route).locallow_root = Some(normalized);
         Ok(())
     }
 
     pub fn installation(&self) -> Result<GameInstallation, SettingsError> {
-        let steam = self
-            .steam_game_root
-            .clone()
-            .ok_or(SettingsError::SteamPathMissing)?;
-        let locallow = self
-            .locallow_root
-            .clone()
-            .ok_or(SettingsError::LocalLowPathMissing)?;
-        Ok(build_installation(steam, locallow)?)
+        let route = self.selected_route;
+        let settings = self.route_settings(route);
+        let steam = settings
+            .and_then(|value| value.steam_game_root.clone())
+            .ok_or(SettingsError::SteamPathMissing(route))?;
+        let locallow = settings
+            .and_then(|value| value.locallow_root.clone())
+            .ok_or(SettingsError::LocalLowPathMissing(route))?;
+        Ok(build_installation(route, steam, locallow)?)
+    }
+
+    #[cfg(windows)]
+    fn select_only_detected_route_if_unconfigured(&mut self) -> bool {
+        let current_empty = self
+            .route_settings(self.selected_route)
+            .is_none_or(RouteSettings::is_empty);
+        if !current_empty {
+            return false;
+        }
+        let detected = crate::game::detect_windows_routes();
+        if detected.len() == 1 && detected[0] != self.selected_route {
+            self.selected_route = detected[0];
+            return true;
+        }
+        false
     }
 
     #[cfg(windows)]
     pub fn auto_detect_missing(&mut self) -> bool {
-        let mut changed = false;
-        if self.steam_game_root.is_none()
-            && let Ok(path) = crate::game::discover_windows_steam_root()
-        {
-            self.steam_game_root = Some(path);
+        let mut changed = self.select_only_detected_route_if_unconfigured();
+        let route = self.selected_route;
+        let needs_steam = self
+            .route_settings(route)
+            .and_then(|settings| settings.steam_game_root.as_ref())
+            .is_none();
+        if needs_steam && let Ok(path) = crate::game::discover_windows_steam_root(route) {
+            self.route_settings_mut(route).steam_game_root = Some(path);
             changed = true;
         }
-        if self.locallow_root.is_none()
-            && let Ok(path) = crate::game::discover_windows_locallow_root()
-        {
-            self.locallow_root = Some(path);
+        let needs_locallow = self
+            .route_settings(route)
+            .and_then(|settings| settings.locallow_root.as_ref())
+            .is_none();
+        if needs_locallow && let Ok(path) = crate::game::discover_windows_locallow_root(route) {
+            self.route_settings_mut(route).locallow_root = Some(path);
             changed = true;
         }
         changed
@@ -144,10 +242,16 @@ impl AppSettings {
 
     #[cfg(windows)]
     pub fn redetect_all(&mut self) -> Result<(), SettingsError> {
-        let steam_game_root = crate::game::discover_windows_steam_root()?;
-        let locallow_root = crate::game::discover_windows_locallow_root()?;
-        self.steam_game_root = Some(steam_game_root);
-        self.locallow_root = Some(locallow_root);
+        let route = self.selected_route;
+        let steam_game_root = crate::game::discover_windows_steam_root(route)?;
+        let locallow_root = crate::game::discover_windows_locallow_root(route)?;
+        self.routes.insert(
+            route,
+            RouteSettings {
+                steam_game_root: Some(steam_game_root),
+                locallow_root: Some(locallow_root),
+            },
+        );
         Ok(())
     }
 
@@ -158,7 +262,9 @@ impl AppSettings {
 
     #[cfg(not(windows))]
     pub fn redetect_all(&mut self) -> Result<(), SettingsError> {
-        Err(SettingsError::Game(GameDetectError::InstallNotFound))
+        Err(SettingsError::Game(GameDetectError::InstallNotFound(
+            self.selected_route,
+        )))
     }
 }
 
@@ -168,22 +274,37 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn settings_round_trip() {
+    fn settings_round_trip_preserves_route_specific_paths() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("settings.json");
-        let settings = AppSettings {
-            steam_game_root: Some(PathBuf::from("C:/Games/Astral Party")),
-            locallow_root: Some(PathBuf::from(
-                "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_INT",
-            )),
+        let mut settings = AppSettings {
+            selected_route: GameRoute::CnSteam,
             ..AppSettings::default()
         };
+        settings.routes.insert(
+            GameRoute::IntSteam,
+            RouteSettings {
+                steam_game_root: Some(PathBuf::from("C:/Games/Astral Party")),
+                locallow_root: Some(PathBuf::from(
+                    "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_INT",
+                )),
+            },
+        );
+        settings.routes.insert(
+            GameRoute::CnSteam,
+            RouteSettings {
+                steam_game_root: Some(PathBuf::from("D:/Games/Astral Party")),
+                locallow_root: Some(PathBuf::from(
+                    "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_CN",
+                )),
+            },
+        );
         settings.save(&path).unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), settings);
     }
 
     #[test]
-    fn migrates_v1_settings_and_drops_channel() {
+    fn migrates_v1_settings_and_drops_channel_into_int_route() {
         let temp = tempdir().unwrap();
         let path = temp.path().join("settings.json");
         fs::write(
@@ -199,12 +320,14 @@ mod tests {
 
         let settings = AppSettings::load(&path).unwrap();
         assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(settings.selected_route, GameRoute::IntSteam);
+        let int = settings.route_settings(GameRoute::IntSteam).unwrap();
         assert_eq!(
-            settings.steam_game_root,
+            int.steam_game_root,
             Some(PathBuf::from("C:/Games/Astral Party"))
         );
         assert_eq!(
-            settings.locallow_root,
+            int.locallow_root,
             Some(PathBuf::from(
                 "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_INT"
             ))
@@ -213,5 +336,48 @@ mod tests {
         settings.save(&path).unwrap();
         let saved = fs::read_to_string(&path).unwrap();
         assert!(!saved.contains("channel"));
+        assert!(saved.contains("selectedRoute"));
+        assert!(saved.contains("INT_STEAM"));
+    }
+
+    #[test]
+    fn migrates_v2_settings_into_int_route() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{
+  "schemaVersion": 2,
+  "steamGameRoot": "C:/Games/Astral Party",
+  "locallowRoot": "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_INT"
+}"#,
+        )
+        .unwrap();
+        let settings = AppSettings::load(&path).unwrap();
+        assert_eq!(settings.selected_route, GameRoute::IntSteam);
+        assert!(settings.route_settings(GameRoute::IntSteam).is_some());
+    }
+
+    #[test]
+    fn route_selection_keeps_each_routes_paths() {
+        let mut settings = AppSettings::default();
+        settings.routes.insert(
+            GameRoute::IntSteam,
+            RouteSettings {
+                steam_game_root: Some(PathBuf::from("C:/INT")),
+                locallow_root: Some(PathBuf::from("C:/INT_LOCAL")),
+            },
+        );
+        settings.routes.insert(
+            GameRoute::CnSteam,
+            RouteSettings {
+                steam_game_root: Some(PathBuf::from("C:/CN")),
+                locallow_root: Some(PathBuf::from("C:/CN_LOCAL")),
+            },
+        );
+        assert_eq!(settings.steam_game_root(), Some(Path::new("C:/INT")));
+        settings.select_next_route();
+        assert_eq!(settings.selected_route, GameRoute::CnSteam);
+        assert_eq!(settings.steam_game_root(), Some(Path::new("C:/CN")));
     }
 }

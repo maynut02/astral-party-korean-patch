@@ -26,7 +26,7 @@ use crate::settings::AppSettings;
 use crate::uri::UriAction;
 
 const MIN_WIDTH: u16 = 72;
-const MIN_HEIGHT: u16 = 26;
+const MIN_HEIGHT: u16 = 27;
 const MAIN_ITEMS: [&str; 4] = ["패치 설치 / 업데이트", "패치 제거", "프로그램 설정", "종료"];
 const RESULT_ITEMS: [&str; 2] = ["메인 메뉴", "종료"];
 
@@ -270,7 +270,9 @@ impl App {
             .installation()
             .map_err(|error| error.to_string())?;
         let roots = install_roots(&game);
-        match remove_installed_patch(&self.paths, &roots).map_err(|error| error.to_string())? {
+        match remove_installed_patch(&self.paths, &roots, game.route)
+            .map_err(|error| error.to_string())?
+        {
             None => Ok("설치된 패치 기록이 없습니다.".into()),
             Some(report) => Ok(format!(
                 "패치를 제거했습니다. 삭제 {}개, 복구 {}개",
@@ -280,7 +282,8 @@ impl App {
     }
 
     fn path_changes_allowed(&mut self) -> bool {
-        match installed_patch_info(&self.paths.ownership_path) {
+        let state = self.paths.route_state(self.settings.selected_route());
+        match installed_patch_info(&state.ownership_path) {
             Ok(Some(_)) => {
                 self.notice = Some(
                     "패치가 설치된 상태에서는 게임 경로를 변경할 수 없습니다. 먼저 패치를 제거하세요."
@@ -294,6 +297,22 @@ impl App {
                 false
             }
         }
+    }
+
+    fn select_next_route(&mut self) {
+        let old = self.settings.clone();
+        self.settings.select_next_route();
+        self.settings.auto_detect_missing();
+        if let Err(error) = self.settings.save(&self.paths.settings_path) {
+            self.settings = old;
+            self.notice = Some(format!("route 설정을 저장하지 못했습니다: {error}"));
+            return;
+        }
+        self.settings_selected = 0;
+        self.notice = Some(format!(
+            "게임 route를 {}로 변경했습니다.",
+            self.settings.selected_route().as_str()
+        ));
     }
 
     fn begin_path_input(&mut self, kind: PathKind) {
@@ -363,10 +382,11 @@ impl App {
 
     fn activate_settings(&mut self) {
         match self.settings_selected {
-            0 => self.begin_path_input(PathKind::Steam),
-            1 => self.begin_path_input(PathKind::LocalLow),
-            2 => self.redetect_paths(),
-            3 => {
+            0 => self.select_next_route(),
+            1 => self.begin_path_input(PathKind::Steam),
+            2 => self.begin_path_input(PathKind::LocalLow),
+            3 => self.redetect_paths(),
+            4 => {
                 self.screen = Screen::Main;
                 self.notice = None;
             }
@@ -414,8 +434,8 @@ impl App {
 
     fn handle_settings_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Up => self.settings_selected = previous(self.settings_selected, 4),
-            KeyCode::Down => self.settings_selected = next(self.settings_selected, 4),
+            KeyCode::Up => self.settings_selected = previous(self.settings_selected, 5),
+            KeyCode::Down => self.settings_selected = next(self.settings_selected, 5),
             KeyCode::Enter => self.activate_settings(),
             KeyCode::Esc => {
                 self.screen = Screen::Main;
@@ -490,7 +510,7 @@ impl App {
             }
             MouseEventKind::ScrollUp => match self.screen {
                 Screen::Main => self.main_selected = previous(self.main_selected, MAIN_ITEMS.len()),
-                Screen::Settings => self.settings_selected = previous(self.settings_selected, 4),
+                Screen::Settings => self.settings_selected = previous(self.settings_selected, 5),
                 Screen::Operation => {
                     self.result_selected = previous(self.result_selected, RESULT_ITEMS.len());
                 }
@@ -498,7 +518,7 @@ impl App {
             },
             MouseEventKind::ScrollDown => match self.screen {
                 Screen::Main => self.main_selected = next(self.main_selected, MAIN_ITEMS.len()),
-                Screen::Settings => self.settings_selected = next(self.settings_selected, 4),
+                Screen::Settings => self.settings_selected = next(self.settings_selected, 5),
                 Screen::Operation => {
                     self.result_selected = next(self.result_selected, RESULT_ITEMS.len());
                 }
@@ -671,7 +691,7 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),
+            Constraint::Length(9),
             Constraint::Min(9),
             Constraint::Length(3),
         ])
@@ -691,21 +711,18 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Ok(game) => (game.catalog.version, game.catalog.hash),
         Err(error) => (format!("감지 실패 ({error})"), "-".into()),
     };
-    let installed = match installed_patch_info(&app.paths.ownership_path) {
+    let route = app.settings.selected_route();
+    let state = app.paths.route_state(route);
+    let installed = match installed_patch_info(&state.ownership_path) {
         Ok(Some(info)) => info.patch_version,
         Ok(None) => "미설치".into(),
         Err(error) => format!("상태 확인 실패 ({error})"),
     };
     let rows = [
         status_row("Patcher 경로", app.installed_exe.display().to_string()),
-        status_row(
-            "Steam 경로",
-            display_path(app.settings.steam_game_root.as_deref()),
-        ),
-        status_row(
-            "LocalLow 경로",
-            display_path(app.settings.locallow_root.as_deref()),
-        ),
+        status_row("게임 route", route.as_str().to_string()),
+        status_row("Steam 경로", display_path(app.settings.steam_game_root())),
+        status_row("LocalLow 경로", display_path(app.settings.locallow_root())),
         status_row("게임 버전", game_version),
         status_row("Catalog", catalog),
         status_row("설치된 패치", installed),
@@ -746,18 +763,22 @@ fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let rows = [
         Row::new(vec![
+            Cell::from("게임 route"),
+            Cell::from(format!(
+                "[{}]",
+                app.settings.selected_route().display_name()
+            )),
+        ]),
+        Row::new(vec![
             Cell::from("Steam 게임 경로"),
             Cell::from(format!(
                 "[{}]",
-                display_path(app.settings.steam_game_root.as_deref())
+                display_path(app.settings.steam_game_root())
             )),
         ]),
         Row::new(vec![
             Cell::from("LocalLow 게임 경로"),
-            Cell::from(format!(
-                "[{}]",
-                display_path(app.settings.locallow_root.as_deref())
-            )),
+            Cell::from(format!("[{}]", display_path(app.settings.locallow_root()))),
         ]),
         Row::new(vec![Cell::from("게임 경로 자동 감지"), Cell::from("")]),
         Row::new(vec![Cell::from("돌아가기"), Cell::from("")]),
@@ -774,20 +795,27 @@ fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let mut state = TableState::default();
     state.select(Some(app.settings_selected));
     frame.render_stateful_widget(table, area, &mut state);
-    add_list_hits(&mut app.hit_regions, inner, 4, HitTarget::Settings);
+    add_list_hits(&mut app.hit_regions, inner, 5, HitTarget::Settings);
 }
 
 fn render_path_input(frame: &mut Frame<'_>, app: &App, area: Rect, kind: PathKind) {
+    let route = app.settings.selected_route();
     let (title, help, current) = match kind {
         PathKind::Steam => (
             " Steam 게임 경로 입력 ",
-            "Steam의 'Astral Party' 폴더 경로를 입력하세요.",
-            display_path(app.settings.steam_game_root.as_deref()),
+            format!(
+                "Steam의 'Astral Party' 폴더 경로를 입력하세요. 선택 route: {}",
+                route.as_str()
+            ),
+            display_path(app.settings.steam_game_root()),
         ),
         PathKind::LocalLow => (
             " LocalLow 게임 경로 입력 ",
-            "LocalLow의 'AstralParty_INT' 폴더 경로를 입력하세요.",
-            display_path(app.settings.locallow_root.as_deref()),
+            format!(
+                "LocalLow의 '{}' 폴더 경로를 입력하세요.",
+                route.locallow_dir()
+            ),
+            display_path(app.settings.locallow_root()),
         ),
     };
     let text = Text::from(vec![

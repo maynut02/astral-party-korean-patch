@@ -9,6 +9,9 @@ on:
       artifact_name:
         required: true
         type: string
+      route_config:
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -52,7 +55,7 @@ jobs:
           astral-builder validate-build
           --manifest '${{ steps.patch.outputs.manifest }}'
           --assets-dir '${{ steps.patch.outputs.root }}/assets'
-          --route-config routes/int_steam.yaml
+          --route-config '${{ inputs.route_config }}'
       - name: Read release metadata
         id: metadata
         run: >-

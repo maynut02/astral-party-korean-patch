@@ -2,7 +2,20 @@ name: Fetch Legacy Game Data
 
 on:
   workflow_dispatch:
+    inputs:
+      route:
+        description: Steam route whose data.unity3d should be fetched
+        required: true
+        default: INT_STEAM
+        type: choice
+        options:
+          - INT_STEAM
+          - CN_STEAM
   workflow_call:
+    inputs:
+      route:
+        required: true
+        type: string
     outputs:
       artifact_name:
         value: ${{ jobs.fetch.outputs.artifact_name }}
@@ -32,6 +45,29 @@ jobs:
           set -euo pipefail
           test -n "$STEAM_USERNAME"
           test -n "$DEPOTDOWNLOADER_LOGIN_TOKEN"
+      - name: Resolve route game data path
+        id: route
+        shell: bash
+        env:
+          ROUTE: ${{ inputs.route }}
+        run: |
+          set -euo pipefail
+          case "$ROUTE" in
+            INT_STEAM)
+              relative='8vJXnINT/AstralParty_INT_Data/data.unity3d'
+              slug='int-steam'
+              ;;
+            CN_STEAM)
+              relative='8vJXn6CN/AstralParty_CN_Data/data.unity3d'
+              slug='cn-steam'
+              ;;
+            *)
+              echo "Unsupported Steam legacy route: $ROUTE" >&2
+              exit 1
+              ;;
+          esac
+          echo "relative_path=$relative" >> "$GITHUB_OUTPUT"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
       - name: Fetch pinned DepotDownloader source
         shell: bash
         run: |
@@ -46,12 +82,14 @@ jobs:
           .work/DepotDownloader/DepotDownloader/DepotDownloader.csproj
           -c Release
           --nologo
-      - name: Download only data.unity3d
+      - name: Download only route data.unity3d
         shell: bash
+        env:
+          RELATIVE_PATH: ${{ steps.route.outputs.relative_path }}
         run: |
           set -euo pipefail
           mkdir -p .work/steam-download
-          printf '%s\n' '8vJXnINT/AstralParty_INT_Data/data.unity3d' > .work/legacy-filelist.txt
+          printf '%s\n' "$RELATIVE_PATH" > .work/legacy-filelist.txt
           dotnet run \
             --project .work/DepotDownloader/DepotDownloader/DepotDownloader.csproj \
             -c Release \
@@ -67,28 +105,33 @@ jobs:
       - name: Verify legacy input
         id: verify
         shell: bash
+        env:
+          RELATIVE_PATH: ${{ steps.route.outputs.relative_path }}
         run: |
           set -euo pipefail
-          path='.work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d'
+          path=".work/steam-download/$RELATIVE_PATH"
           test -s "$path"
           size="$(stat -c '%s' "$path")"
           sha="$(sha256sum "$path" | cut -d' ' -f1)"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
           echo "size=$size" >> "$GITHUB_OUTPUT"
           echo "sha256=$sha" >> "$GITHUB_OUTPUT"
-          printf 'data.unity3d size=%s sha256=%s\n' "$size" "$sha"
+          printf 'data.unity3d route=%s size=%s sha256=%s\n' '${{ inputs.route }}' "$size" "$sha"
       - name: Stage minimal artifact
         shell: bash
+        env:
+          SOURCE_PATH: ${{ steps.verify.outputs.path }}
         run: |
           set -euo pipefail
           mkdir -p .work/legacy-artifact
-          cp .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d .work/legacy-artifact/data.unity3d
+          cp "$SOURCE_PATH" .work/legacy-artifact/data.unity3d
       - name: Define artifact metadata
         id: meta
-        run: echo 'artifact_name=astral-party-legacy-data' >> "$GITHUB_OUTPUT"
+        run: echo 'artifact_name=astral-party-legacy-data-${{ steps.route.outputs.slug }}' >> "$GITHUB_OUTPUT"
       - name: Upload legacy input artifact
         uses: actions/upload-artifact@v7
         with:
-          name: astral-party-legacy-data
+          name: ${{ steps.meta.outputs.artifact_name }}
           path: .work/legacy-artifact/data.unity3d
           if-no-files-found: error
           compression-level: 0

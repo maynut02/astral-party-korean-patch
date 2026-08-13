@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: check-game-int-steam
+  group: check-game-steam-routes
   cancel-in-progress: false
 
 permissions:
@@ -12,64 +12,21 @@ permissions:
   contents: write
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.check.outputs.changed }}
-      game_version: ${{ steps.check.outputs.game_version }}
-      revision: ${{ steps.check.outputs.revision }}
-      catalog_hash: ${{ steps.check.outputs.catalog_hash }}
-    env:
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-      DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
-      GAME_VERSION: ${{ vars.GAME_VERSION || '3.2.0' }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: builder/pyproject.toml
-      - name: Install builder
-        run: python -m pip install -e './builder[dev]'
-      - name: Apply database migrations
-        run: python database/migrate.py
-      - name: Check remote revision
-        id: check
-        run: >-
-          astral-builder check
-          --route INT_STEAM
-          --game-version "$GAME_VERSION"
-          --github-output "$GITHUB_OUTPUT"
-
-  sync:
-    needs: check
-    if: needs.check.outputs.changed == 'true'
-    uses: ./.github/workflows/sync-game.yml
+  int-steam:
+    uses: ./.github/workflows/process-route.yml
     with:
-      game_version: ${{ needs.check.outputs.game_version }}
+      route: INT_STEAM
+      route_config: routes/int_steam.yaml
+      game_version: ${{ vars.GAME_VERSION || '3.2.0' }}
     secrets: inherit
 
-  legacy:
-    needs: sync
-    uses: ./.github/workflows/fetch-legacy-data.yml
-    secrets: inherit
-
-  build-pre:
-    needs: [sync, legacy]
-    uses: ./.github/workflows/build-patch.yml
+  cn-steam:
+    needs: int-steam
+    if: needs.int-steam.result == 'success'
+    uses: ./.github/workflows/process-route.yml
     with:
-      revision_id: ${{ needs.sync.outputs.revision_id }}
-      patch_version: ${{ format('v{0}-r{1}-pre', needs.sync.outputs.game_version, needs.sync.outputs.revision) }}
-      channel: release
-      legacy_run_id: ${{ needs.legacy.outputs.run_id }}
-      legacy_artifact_name: ${{ needs.legacy.outputs.artifact_name }}
-    secrets: inherit
-
-  release-pre:
-    needs: build-pre
-    uses: ./.github/workflows/release-patch.yml
-    with:
-      build_run_id: ${{ github.run_id }}
-      artifact_name: ${{ needs.build-pre.outputs.artifact_name }}
+      route: CN_STEAM
+      route_config: routes/cn_steam.yaml
+      game_version: ${{ vars.GAME_VERSION || '3.2.0' }}
+      tag_suffix: -cn-steam
     secrets: inherit

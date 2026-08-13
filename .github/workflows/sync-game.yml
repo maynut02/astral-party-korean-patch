@@ -6,6 +6,9 @@ on:
       game_version:
         required: true
         type: string
+      route_config:
+        required: true
+        type: string
     outputs:
       revision_id:
         value: ${{ jobs.sync.outputs.revision_id }}
@@ -24,6 +27,14 @@ on:
         required: true
         default: "3.2.0"
         type: string
+      route_config:
+        description: Route configuration to synchronize
+        required: true
+        default: routes/int_steam.yaml
+        type: choice
+        options:
+          - routes/int_steam.yaml
+          - routes/cn_steam.yaml
 
 permissions:
   contents: read
@@ -51,11 +62,11 @@ jobs:
         run: python -m pip install -e './builder[dev]'
       - name: Apply database migrations
         run: python database/migrate.py
-      - name: Sync INT Steam revision
+      - name: Sync route revision
         id: sync
         run: >-
           astral-builder sync
           --game-version '${{ inputs.game_version }}'
-          --route-config routes/int_steam.yaml
+          --route-config '${{ inputs.route_config }}'
           --work-dir .work/sync
           --github-output "$GITHUB_OUTPUT"

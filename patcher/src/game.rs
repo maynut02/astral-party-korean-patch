@@ -5,8 +5,73 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const STEAM_APP_ID: &str = "2622000";
-pub const LOCALLOW_GAME_RELATIVE: &str = "AppData/LocalLow/feimo/AstralParty_INT";
 pub const ADDRESSABLES_DIR: &str = "com.unity.addressables";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum GameRoute {
+    IntSteam,
+    CnSteam,
+}
+
+impl GameRoute {
+    pub const ALL: [Self; 2] = [Self::IntSteam, Self::CnSteam];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IntSteam => "INT_STEAM",
+            Self::CnSteam => "CN_STEAM",
+        }
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::IntSteam => "INT_STEAM (글로벌 Steam)",
+            Self::CnSteam => "CN_STEAM (중국 Steam)",
+        }
+    }
+
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::IntSteam => "int-steam",
+            Self::CnSteam => "cn-steam",
+        }
+    }
+
+    pub const fn executable_dir(self) -> &'static str {
+        match self {
+            Self::IntSteam => "8vJXnINT",
+            Self::CnSteam => "8vJXn6CN",
+        }
+    }
+
+    pub const fn data_dir(self) -> &'static str {
+        match self {
+            Self::IntSteam => "AstralParty_INT_Data",
+            Self::CnSteam => "AstralParty_CN_Data",
+        }
+    }
+
+    pub const fn locallow_dir(self) -> &'static str {
+        match self {
+            Self::IntSteam => "AstralParty_INT",
+            Self::CnSteam => "AstralParty_CN",
+        }
+    }
+
+    pub fn locallow_relative(self) -> PathBuf {
+        PathBuf::from("AppData")
+            .join("LocalLow")
+            .join("feimo")
+            .join(self.locallow_dir())
+    }
+}
+
+impl std::fmt::Display for GameRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum GameDetectError {
@@ -16,10 +81,10 @@ pub enum GameDetectError {
     Manifest(String),
     #[error("Astral Party Steam manifest was not found")]
     ManifestNotFound,
-    #[error("Astral Party Steam installation directory was not found or is invalid")]
-    InstallNotFound,
-    #[error("Astral Party LocalLow directory was not found or is invalid")]
-    LocalLowNotFound,
+    #[error("Astral Party {0} installation directory was not found or is invalid")]
+    InstallNotFound(GameRoute),
+    #[error("Astral Party {0} LocalLow directory was not found or is invalid")]
+    LocalLowNotFound(GameRoute),
     #[error("Addressables catalog hash was not found")]
     CatalogNotFound,
 }
@@ -34,10 +99,11 @@ pub struct CatalogIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameInstallation {
+    pub route: GameRoute,
     /// Steam's `.../steamapps/common/Astral Party` directory.
     pub game_root: PathBuf,
     pub game_data_root: PathBuf,
-    /// `%USERPROFILE%/AppData/LocalLow/feimo/AstralParty_INT`.
+    /// `%USERPROFILE%/AppData/LocalLow/feimo/AstralParty_{INT|CN}`.
     pub locallow_root: PathBuf,
     pub addressables_root: PathBuf,
     pub catalog: CatalogIdentity,
@@ -78,7 +144,10 @@ pub fn parse_library_folders_vdf(text: &str) -> Vec<PathBuf> {
     roots
 }
 
-pub fn find_install_from_libraries(libraries: &[PathBuf]) -> Result<PathBuf, GameDetectError> {
+pub fn find_install_from_libraries(
+    libraries: &[PathBuf],
+    route: GameRoute,
+) -> Result<PathBuf, GameDetectError> {
     for library in libraries {
         let manifest = library
             .join("steamapps")
@@ -89,11 +158,11 @@ pub fn find_install_from_libraries(libraries: &[PathBuf]) -> Result<PathBuf, Gam
         let manifest_text = fs::read_to_string(&manifest)?;
         let install_dir = parse_install_dir_from_acf(&manifest_text)?;
         let game_root = library.join("steamapps").join("common").join(install_dir);
-        if normalize_steam_root(&game_root).is_ok() {
+        if normalize_steam_root(&game_root, route).is_ok() {
             return Ok(game_root);
         }
     }
-    Err(GameDetectError::InstallNotFound)
+    Err(GameDetectError::InstallNotFound(route))
 }
 
 fn version_key(value: &str) -> Vec<u64> {
@@ -140,26 +209,46 @@ pub fn discover_latest_catalog(
         .ok_or(GameDetectError::CatalogNotFound)
 }
 
-pub fn normalize_steam_root(path: &Path) -> Result<PathBuf, GameDetectError> {
-    if path.join("8vJXnINT").join("AstralParty_INT_Data").is_dir() {
+pub fn normalize_steam_root(path: &Path, route: GameRoute) -> Result<PathBuf, GameDetectError> {
+    let executable = route.executable_dir();
+    let data = route.data_dir();
+
+    if path.join(executable).join(data).is_dir() {
         return Ok(path.to_owned());
     }
-    if path.join("AstralParty_INT_Data").is_dir()
+    if path.join(data).is_dir()
         && path
             .file_name()
             .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case("8vJXnINT"))
+            .is_some_and(|value| value.eq_ignore_ascii_case(executable))
     {
         return path
             .parent()
             .map(Path::to_owned)
-            .ok_or(GameDetectError::InstallNotFound);
+            .ok_or(GameDetectError::InstallNotFound(route));
     }
-    Err(GameDetectError::InstallNotFound)
+    if path.is_dir()
+        && path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(data))
+    {
+        return path
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_owned)
+            .ok_or(GameDetectError::InstallNotFound(route));
+    }
+    Err(GameDetectError::InstallNotFound(route))
 }
 
-pub fn normalize_locallow_root(path: &Path) -> Result<PathBuf, GameDetectError> {
-    if path.join(ADDRESSABLES_DIR).is_dir() {
+pub fn normalize_locallow_root(path: &Path, route: GameRoute) -> Result<PathBuf, GameDetectError> {
+    if path.join(ADDRESSABLES_DIR).is_dir()
+        && path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(route.locallow_dir()))
+    {
         return Ok(path.to_owned());
     }
     if path.is_dir()
@@ -168,24 +257,34 @@ pub fn normalize_locallow_root(path: &Path) -> Result<PathBuf, GameDetectError> 
             .and_then(|value| value.to_str())
             .is_some_and(|value| value.eq_ignore_ascii_case(ADDRESSABLES_DIR))
     {
-        return path
+        let parent = path
             .parent()
-            .map(Path::to_owned)
-            .ok_or(GameDetectError::LocalLowNotFound);
+            .ok_or(GameDetectError::LocalLowNotFound(route))?;
+        if parent
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(route.locallow_dir()))
+        {
+            return Ok(parent.to_owned());
+        }
     }
-    Err(GameDetectError::LocalLowNotFound)
+    Err(GameDetectError::LocalLowNotFound(route))
 }
 
 pub fn build_installation(
+    route: GameRoute,
     steam_root: PathBuf,
     locallow_root: PathBuf,
 ) -> Result<GameInstallation, GameDetectError> {
-    let game_root = normalize_steam_root(&steam_root)?;
-    let locallow_root = normalize_locallow_root(&locallow_root)?;
-    let game_data_root = game_root.join("8vJXnINT").join("AstralParty_INT_Data");
+    let game_root = normalize_steam_root(&steam_root, route)?;
+    let locallow_root = normalize_locallow_root(&locallow_root, route)?;
+    let game_data_root = game_root
+        .join(route.executable_dir())
+        .join(route.data_dir());
     let addressables_root = locallow_root.join(ADDRESSABLES_DIR);
     let catalog = discover_latest_catalog(&addressables_root)?;
     Ok(GameInstallation {
+        route,
         game_root,
         game_data_root,
         locallow_root,
@@ -195,7 +294,7 @@ pub fn build_installation(
 }
 
 #[cfg(windows)]
-pub fn discover_windows_steam_root() -> Result<PathBuf, GameDetectError> {
+fn steam_libraries() -> Result<Vec<PathBuf>, GameDetectError> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
@@ -218,29 +317,70 @@ pub fn discover_windows_steam_root() -> Result<PathBuf, GameDetectError> {
             }
         }
     }
-    find_install_from_libraries(&libraries).and_then(|path| normalize_steam_root(&path))
+    Ok(libraries)
 }
 
 #[cfg(windows)]
-pub fn discover_windows_locallow_root() -> Result<PathBuf, GameDetectError> {
+pub fn discover_windows_steam_root(route: GameRoute) -> Result<PathBuf, GameDetectError> {
+    find_install_from_libraries(&steam_libraries()?, route)
+        .and_then(|path| normalize_steam_root(&path, route))
+}
+
+#[cfg(windows)]
+pub fn discover_windows_locallow_root(route: GameRoute) -> Result<PathBuf, GameDetectError> {
     let user_profile = std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
-        .ok_or(GameDetectError::LocalLowNotFound)?;
-    normalize_locallow_root(&user_profile.join(LOCALLOW_GAME_RELATIVE))
+        .ok_or(GameDetectError::LocalLowNotFound(route))?;
+    normalize_locallow_root(&user_profile.join(route.locallow_relative()), route)
 }
 
 #[cfg(windows)]
-pub fn discover_windows_installation() -> Result<GameInstallation, GameDetectError> {
+pub fn discover_windows_installation(
+    route: GameRoute,
+) -> Result<GameInstallation, GameDetectError> {
     build_installation(
-        discover_windows_steam_root()?,
-        discover_windows_locallow_root()?,
+        route,
+        discover_windows_steam_root(route)?,
+        discover_windows_locallow_root(route)?,
     )
+}
+
+#[cfg(windows)]
+pub fn detect_windows_routes() -> Vec<GameRoute> {
+    GameRoute::ALL
+        .into_iter()
+        .filter(|route| discover_windows_installation(*route).is_ok())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn make_route_tree(root: &Path, route: GameRoute) -> (PathBuf, PathBuf) {
+        let game_root = root.join("Astral Party");
+        fs::create_dir_all(
+            game_root
+                .join(route.executable_dir())
+                .join(route.data_dir()),
+        )
+        .unwrap();
+        let locallow = root.join(route.locallow_dir());
+        let addressables = locallow.join(ADDRESSABLES_DIR);
+        fs::create_dir_all(&addressables).unwrap();
+        fs::write(addressables.join("catalog_3.2.0.hash"), "fd58").unwrap();
+        (game_root, locallow)
+    }
+
+    #[test]
+    fn route_metadata_matches_known_layout() {
+        assert_eq!(GameRoute::IntSteam.executable_dir(), "8vJXnINT");
+        assert_eq!(GameRoute::IntSteam.data_dir(), "AstralParty_INT_Data");
+        assert_eq!(GameRoute::CnSteam.executable_dir(), "8vJXn6CN");
+        assert_eq!(GameRoute::CnSteam.data_dir(), "AstralParty_CN_Data");
+        assert_eq!(GameRoute::CnSteam.locallow_dir(), "AstralParty_CN");
+    }
 
     #[test]
     fn parses_manifest_install_dir() {
@@ -278,32 +418,50 @@ mod tests {
     }
 
     #[test]
-    fn builds_installation_from_separate_roots() {
-        let temp = tempdir().unwrap();
-        let game_root = temp.path().join("Astral Party");
-        fs::create_dir_all(game_root.join("8vJXnINT/AstralParty_INT_Data")).unwrap();
-        let locallow = temp.path().join("AstralParty_INT");
-        let addressables = locallow.join(ADDRESSABLES_DIR);
-        fs::create_dir_all(&addressables).unwrap();
-        fs::write(addressables.join("catalog_3.2.0.hash"), "fd58").unwrap();
-
-        let install = build_installation(game_root.clone(), locallow.clone()).unwrap();
-        assert_eq!(install.game_root, game_root);
-        assert_eq!(install.locallow_root, locallow);
-        assert_eq!(install.catalog.version, "3.2.0");
+    fn builds_installation_for_each_steam_route() {
+        for route in GameRoute::ALL {
+            let temp = tempdir().unwrap();
+            let (game_root, locallow) = make_route_tree(temp.path(), route);
+            let install = build_installation(route, game_root.clone(), locallow.clone()).unwrap();
+            assert_eq!(install.route, route);
+            assert_eq!(install.game_root, game_root);
+            assert_eq!(install.locallow_root, locallow);
+            assert_eq!(
+                install.game_data_root,
+                game_root
+                    .join(route.executable_dir())
+                    .join(route.data_dir())
+            );
+            assert_eq!(install.catalog.version, "3.2.0");
+        }
     }
 
     #[test]
     fn accepts_inner_manual_paths_and_normalizes_them() {
-        let temp = tempdir().unwrap();
-        let game_root = temp.path().join("Astral Party");
-        let executable_root = game_root.join("8vJXnINT");
-        fs::create_dir_all(executable_root.join("AstralParty_INT_Data")).unwrap();
-        let locallow = temp.path().join("AstralParty_INT");
-        let addressables = locallow.join(ADDRESSABLES_DIR);
-        fs::create_dir_all(&addressables).unwrap();
+        for route in GameRoute::ALL {
+            let temp = tempdir().unwrap();
+            let (game_root, locallow) = make_route_tree(temp.path(), route);
+            let executable_root = game_root.join(route.executable_dir());
+            let data_root = executable_root.join(route.data_dir());
+            let addressables = locallow.join(ADDRESSABLES_DIR);
 
-        assert_eq!(normalize_steam_root(&executable_root).unwrap(), game_root);
-        assert_eq!(normalize_locallow_root(&addressables).unwrap(), locallow);
+            assert_eq!(
+                normalize_steam_root(&executable_root, route).unwrap(),
+                game_root
+            );
+            assert_eq!(normalize_steam_root(&data_root, route).unwrap(), game_root);
+            assert_eq!(
+                normalize_locallow_root(&addressables, route).unwrap(),
+                locallow
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_paths_from_the_other_route() {
+        let temp = tempdir().unwrap();
+        let (game_root, locallow) = make_route_tree(temp.path(), GameRoute::IntSteam);
+        assert!(normalize_steam_root(&game_root, GameRoute::CnSteam).is_err());
+        assert!(normalize_locallow_root(&locallow, GameRoute::CnSteam).is_err());
     }
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::game::GameInstallation;
+use crate::game::{GameInstallation, GameRoute};
 use crate::install::{
     ApplyPhase, ApplyProgress, InstallError, InstallRoots, InstallSummary, OwnershipManifest,
     RemoveReport, install_patch_with_progress, remove_patch,
@@ -12,7 +12,6 @@ use crate::install::{
 use crate::network::{NetworkError, ReleaseClient, StageProgress};
 use crate::protocol::PatchManifest;
 
-pub const DEFAULT_ROUTE: &str = "INT_STEAM";
 pub const RELEASE_CHANNEL: &str = "release";
 
 #[derive(Debug, Error)]
@@ -42,6 +41,13 @@ pub struct PatcherPaths {
     pub settings_path: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct RouteStatePaths {
+    pub staging_root: PathBuf,
+    pub backup_root: PathBuf,
+    pub ownership_path: PathBuf,
+}
+
 impl PatcherPaths {
     pub fn below(state_root: PathBuf) -> Self {
         Self {
@@ -63,6 +69,24 @@ impl PatcherPaths {
         Ok(Self::below(local_app_data.join("AstralAutoPatcher")))
     }
 
+    pub fn route_state(&self, route: GameRoute) -> RouteStatePaths {
+        match route {
+            // Preserve all legacy INT paths so existing 0.6.x installations remain removable.
+            GameRoute::IntSteam => RouteStatePaths {
+                staging_root: self.staging_root.clone(),
+                backup_root: self.backup_root.clone(),
+                ownership_path: self.ownership_path.clone(),
+            },
+            GameRoute::CnSteam => RouteStatePaths {
+                staging_root: self.staging_root.join(route.slug()),
+                backup_root: self.backup_root.join(route.slug()),
+                ownership_path: self.state_root.join("installed-cn-steam.json"),
+            },
+        }
+    }
+}
+
+impl RouteStatePaths {
     pub fn reset_staging(&self) -> Result<(), std::io::Error> {
         if self.staging_root.exists() {
             fs::remove_dir_all(&self.staging_root)?;
@@ -153,19 +177,21 @@ pub fn installed_patch_info(path: &Path) -> Result<Option<InstalledPatchInfo>, S
 pub fn remove_installed_patch(
     paths: &PatcherPaths,
     roots: &InstallRoots,
+    route: GameRoute,
 ) -> Result<Option<RemoveReport>, ServiceError> {
-    let Some(ownership) = load_ownership(&paths.ownership_path)? else {
+    let state = paths.route_state(route);
+    let Some(ownership) = load_ownership(&state.ownership_path)? else {
         return Ok(None);
     };
-    let report = remove_patch(&ownership, roots, &paths.backup_root)?;
+    let report = remove_patch(&ownership, roots, &state.backup_root)?;
     if report.skipped > 0 {
         return Err(ServiceError::ExistingPatchChanged(report.skipped));
     }
-    if paths.ownership_path.exists() {
-        fs::remove_file(&paths.ownership_path)?;
+    if state.ownership_path.exists() {
+        fs::remove_file(&state.ownership_path)?;
     }
-    if paths.backup_root.exists() {
-        fs::remove_dir_all(&paths.backup_root)?;
+    if state.backup_root.exists() {
+        fs::remove_dir_all(&state.backup_root)?;
     }
     Ok(Some(report))
 }
@@ -202,18 +228,20 @@ where
     F: FnMut(InstallProgress),
 {
     let roots = install_roots(game);
+    let state = paths.route_state(game.route);
+    let route = game.route.as_str();
     let user_agent = format!("AstralAutoPatcher/{}", env!("CARGO_PKG_VERSION"));
     let client = ReleaseClient::new(&user_agent)?;
     progress(InstallProgress::Resolving);
     let index = client.fetch_release_index(release_index_url)?;
     let (_, manifest) = client.fetch_compatible_manifest(
         &index,
-        DEFAULT_ROUTE,
+        route,
         &game.catalog.version,
         &game.catalog.hash,
         RELEASE_CHANNEL,
     )?;
-    ensure_manifest_compatible(&manifest, game, DEFAULT_ROUTE)?;
+    ensure_manifest_compatible(&manifest, game, route)?;
 
     let files = manifest
         .files
@@ -234,7 +262,7 @@ where
         install_total,
     });
 
-    if let Some(existing) = load_ownership(&paths.ownership_path)? {
+    if let Some(existing) = load_ownership(&state.ownership_path)? {
         if existing.patch_version == manifest.patch.version
             && existing.catalog_hash == manifest.game.catalog_hash
         {
@@ -246,13 +274,13 @@ where
         progress(InstallProgress::RemovingExisting {
             patch_version: existing.patch_version.clone(),
         });
-        remove_installed_patch(paths, &roots)?;
+        remove_installed_patch(paths, &roots, game.route)?;
     }
 
-    paths.reset_staging()?;
+    state.reset_staging()?;
     client.stage_manifest_files_with_progress(
         &manifest,
-        &paths.staging_root,
+        &state.staging_root,
         |event| match event {
             StageProgress::Downloading {
                 file_index,
@@ -284,10 +312,10 @@ where
     )?;
     let summary = install_patch_with_progress(
         &manifest,
-        &paths.staging_root,
+        &state.staging_root,
         &roots,
-        &paths.backup_root,
-        &paths.ownership_path,
+        &state.backup_root,
+        &state.ownership_path,
         |ApplyProgress {
              file_index,
              file_count,
@@ -306,7 +334,7 @@ where
             });
         },
     )?;
-    let _ = fs::remove_dir_all(&paths.staging_root);
+    let _ = fs::remove_dir_all(&state.staging_root);
     Ok(InstallOutcome::Installed(summary))
 }
 
@@ -341,7 +369,7 @@ mod tests {
             patch: PatchMetadata {
                 version: version.into(),
                 channel: "release".into(),
-                route: DEFAULT_ROUTE.into(),
+                route: GameRoute::IntSteam.as_str().into(),
                 build_id: "build".into(),
                 translation_fingerprint: "a".repeat(64),
             },
@@ -390,13 +418,32 @@ mod tests {
         )
         .unwrap();
 
-        let report = remove_installed_patch(&paths, &roots).unwrap().unwrap();
+        let report = remove_installed_patch(&paths, &roots, GameRoute::IntSteam)
+            .unwrap()
+            .unwrap();
         assert_eq!(report.restored, 1);
         assert_eq!(
             fs::read(roots.game_data.join("data.unity3d")).unwrap(),
             b"original"
         );
         assert!(!paths.ownership_path.exists());
+    }
+
+    #[test]
+    fn cn_route_uses_separate_patch_state_without_moving_legacy_int_state() {
+        let temp = tempdir().unwrap();
+        let paths = PatcherPaths::below(temp.path().join("state"));
+        let int = paths.route_state(GameRoute::IntSteam);
+        let cn = paths.route_state(GameRoute::CnSteam);
+        assert_eq!(int.ownership_path, paths.ownership_path);
+        assert_eq!(int.backup_root, paths.backup_root);
+        assert_eq!(int.staging_root, paths.staging_root);
+        assert_eq!(
+            cn.ownership_path,
+            paths.state_root.join("installed-cn-steam.json")
+        );
+        assert_eq!(cn.backup_root, paths.backup_root.join("cn-steam"));
+        assert_eq!(cn.staging_root, paths.staging_root.join("cn-steam"));
     }
 
     #[test]
@@ -426,7 +473,7 @@ mod tests {
         .unwrap();
         fs::write(roots.game_data.join("data.unity3d"), b"changed").unwrap();
 
-        let err = remove_installed_patch(&paths, &roots).unwrap_err();
+        let err = remove_installed_patch(&paths, &roots, GameRoute::IntSteam).unwrap_err();
         assert!(matches!(err, ServiceError::ExistingPatchChanged(1)));
         assert!(paths.ownership_path.exists());
     }
