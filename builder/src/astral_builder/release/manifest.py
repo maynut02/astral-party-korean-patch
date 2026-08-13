@@ -10,6 +10,17 @@ from typing import Literal
 Target = Literal["addressables", "game-data"]
 Operation = Literal["create", "replace"]
 Channel = Literal["preview", "stable"]
+Compression = Literal["gzip"]
+
+
+def _hash_and_size(path: str | Path) -> tuple[str, int]:
+    hasher = hashlib.sha256()
+    size = 0
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            hasher.update(chunk)
+            size += len(chunk)
+    return hasher.hexdigest(), size
 
 
 def _validate_hex(value: str, field: str, length: int) -> None:
@@ -59,27 +70,36 @@ class ManifestFile:
     path: str
     operation: Operation
     download_url: str
+    download_sha256: str
+    download_size: int
+    compression: Compression
     sha256: str
     size: int
 
     @classmethod
-    def from_path(
+    def from_paths(
         cls,
-        source: str | Path,
+        payload: str | Path,
+        transport: str | Path,
         *,
         target: Target,
         path: str,
         download_url: str,
         operation: Operation = "replace",
+        compression: Compression = "gzip",
     ) -> ManifestFile:
-        data = Path(source).read_bytes()
+        payload_sha256, payload_size = _hash_and_size(payload)
+        download_sha256, download_size = _hash_and_size(transport)
         return cls(
             target=target,
             path=path.replace("\\", "/"),
             operation=operation,
             download_url=download_url,
-            sha256=hashlib.sha256(data).hexdigest(),
-            size=len(data),
+            download_sha256=download_sha256,
+            download_size=download_size,
+            compression=compression,
+            sha256=payload_sha256,
+            size=payload_size,
         )
 
     def validate(self) -> None:
@@ -92,7 +112,12 @@ class ManifestFile:
             raise ValueError(f"manifest path must be safe and relative: {self.path!r}")
         if not self.download_url.startswith(("https://", "http://")):
             raise ValueError("manifest download_url must be an http(s) URL")
+        if self.compression != "gzip":
+            raise ValueError(f"unsupported transport compression: {self.compression}")
+        _validate_sha256(self.download_sha256, "download sha256")
         _validate_sha256(self.sha256, "file sha256")
+        if self.download_size <= 0:
+            raise ValueError("manifest download size must be positive")
         if self.size <= 0:
             raise ValueError("manifest file size must be positive")
 
@@ -102,6 +127,9 @@ class ManifestFile:
             "path": self.path,
             "operation": self.operation,
             "downloadUrl": self.download_url,
+            "downloadSha256": self.download_sha256,
+            "downloadSize": self.download_size,
+            "compression": self.compression,
             "sha256": self.sha256,
             "size": self.size,
         }
@@ -112,10 +140,10 @@ class PatchManifest:
     patch: PatchMetadata
     game: TargetGame
     files: tuple[ManifestFile, ...]
-    schema_version: int = 1
+    schema_version: int = 2
 
     def validate(self) -> None:
-        if self.schema_version != 1:
+        if self.schema_version != 2:
             raise ValueError(f"unsupported manifest schema: {self.schema_version}")
         self.patch.validate()
         self.game.validate()

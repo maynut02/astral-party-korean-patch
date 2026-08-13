@@ -140,7 +140,8 @@ Patcher는 Neon DB에 직접 접근하지 않는다.
 
 - `patch-manifest.schema.json`
 - route/version/revision/catalog hash compatibility
-- build file target/path/size/SHA-256
+- build file target/path/final size/SHA-256
+- gzip transport size/SHA-256와 해제 후 payload size/SHA-256 이중 검증
 - release index format
 - immutable manifest 규칙
 
@@ -207,13 +208,14 @@ Stable 승격은 초기에 수동 승인으로 두고 충분히 안정화된 후
 
 1. manifest 확보
 2. game compatibility 검사
-3. 필요한 파일만 다운로드
-4. staging에서 SHA-256 검증
-5. 변경 파일 원본 backup
-6. install plan 적용
-7. 설치 후 SHA-256 재검증
-8. `installed.json` atomic write
-9. 실패 시 rollback
+3. 필요한 gzip transport asset만 다운로드
+4. transport size/SHA-256 검증
+5. staging에서 gzip 해제하며 최종 payload size/SHA-256 재검증
+6. 변경 파일 원본 backup
+7. install plan 적용
+8. 설치 후 SHA-256 재검증
+9. `installed.json` atomic write
+10. 실패 시 rollback
 
 제거 시 remote rule/release를 조회하지 않고 install-time ownership manifest만 사용한다.
 현재 파일 hash가 설치 당시 값과 다르면 임의 삭제/복원을 하지 않는다.

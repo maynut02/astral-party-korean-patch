@@ -193,7 +193,7 @@ mod tests {
 
     fn manifest(version: &str, hash: &str) -> PatchManifest {
         PatchManifest {
-            schema_version: 1,
+            schema_version: 2,
             patch: PatchMetadata {
                 version: version.into(),
                 channel: "preview".into(),
@@ -210,7 +210,10 @@ mod tests {
                 target: InstallTarget::GameData,
                 path: "data.unity3d".into(),
                 operation: "replace".into(),
-                download_url: "https://example.test/data".into(),
+                download_url: "https://example.test/data.gz".into(),
+                download_sha256: "d".repeat(64),
+                download_size: 5,
+                compression: "gzip".into(),
                 sha256: hash.into(),
                 size: 7,
             }],

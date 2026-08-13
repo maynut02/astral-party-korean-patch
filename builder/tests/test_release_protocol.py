@@ -6,6 +6,7 @@ import pytest
 
 from astral_builder.release.index import ReleaseIndex, ReleaseIndexEntry, manifest_digest
 from astral_builder.release.manifest import ManifestFile, PatchManifest, PatchMetadata, TargetGame
+from astral_builder.release.transport import gzip_payload
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def _manifest(tmp_path: Path) -> PatchManifest:
     patch_file = tmp_path / "__data"
     patch_file.write_bytes(b"patch-data")
+    transport = gzip_payload(patch_file, tmp_path / "addressables.bin.gz")
     return PatchManifest(
         patch=PatchMetadata(
             version="3.2.0-r1042.1",
@@ -27,11 +29,12 @@ def _manifest(tmp_path: Path) -> PatchManifest:
             catalog_hash="b" * 32,
         ),
         files=(
-            ManifestFile.from_path(
+            ManifestFile.from_paths(
                 patch_file,
+                transport.path,
                 target="addressables",
                 path="root/hash/__data",
-                download_url="https://example.test/files/addressables.bin",
+                download_url="https://example.test/files/addressables.bin.gz",
             ),
         ),
     )
@@ -48,12 +51,15 @@ def test_manifest_rejects_path_traversal(tmp_path: Path) -> None:
     item = manifest.files[0]
     with pytest.raises(ValueError, match="safe"):
         ManifestFile(
-            item.target,
-            "../escape",
-            item.operation,
-            item.download_url,
-            item.sha256,
-            item.size,
+            target=item.target,
+            path="../escape",
+            operation=item.operation,
+            download_url=item.download_url,
+            download_sha256=item.download_sha256,
+            download_size=item.download_size,
+            compression=item.compression,
+            sha256=item.sha256,
+            size=item.size,
         ).validate()
 
 

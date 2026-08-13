@@ -15,8 +15,12 @@ pub enum ProtocolError {
     InvalidUrl(&'static str, String),
     #[error("unsafe relative path: {0}")]
     UnsafePath(String),
+    #[error("unsupported transport compression: {0}")]
+    UnsupportedCompression(String),
     #[error("manifest contains no files")]
     EmptyManifest,
+    #[error("manifest file has invalid size in {0}")]
+    InvalidSize(&'static str),
     #[error("duplicate manifest file: {0:?}/{1}")]
     DuplicateFile(InstallTarget, String),
 }
@@ -62,6 +66,9 @@ pub struct ManifestFile {
     pub path: String,
     pub operation: String,
     pub download_url: String,
+    pub download_sha256: String,
+    pub download_size: u64,
+    pub compression: String,
     pub sha256: String,
     pub size: u64,
 }
@@ -126,7 +133,7 @@ pub fn validate_relative_path(value: &str) -> Result<(), ProtocolError> {
 
 impl PatchManifest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err(ProtocolError::SchemaVersion(self.schema_version));
         }
         if self.files.is_empty() {
@@ -149,8 +156,22 @@ impl PatchManifest {
                     file.download_url.clone(),
                 ));
             }
+            if !valid_sha256(&file.download_sha256) {
+                return Err(ProtocolError::InvalidSha256("file.downloadSha256"));
+            }
             if !valid_sha256(&file.sha256) {
                 return Err(ProtocolError::InvalidSha256("file.sha256"));
+            }
+            if file.download_size == 0 {
+                return Err(ProtocolError::InvalidSize("file.downloadSize"));
+            }
+            if file.size == 0 {
+                return Err(ProtocolError::InvalidSize("file.size"));
+            }
+            if file.compression != "gzip" {
+                return Err(ProtocolError::UnsupportedCompression(
+                    file.compression.clone(),
+                ));
             }
             if !matches!(file.operation.as_str(), "create" | "replace") {
                 return Err(ProtocolError::UnsafePath(file.operation.clone()));
@@ -220,7 +241,7 @@ mod tests {
 
     fn manifest() -> PatchManifest {
         PatchManifest {
-            schema_version: 1,
+            schema_version: 2,
             patch: PatchMetadata {
                 version: "v1".into(),
                 channel: "preview".into(),
@@ -237,7 +258,10 @@ mod tests {
                 target: InstallTarget::Addressables,
                 path: "root/hash/__data".into(),
                 operation: "replace".into(),
-                download_url: "https://example.test/files/data".into(),
+                download_url: "https://example.test/files/data.gz".into(),
+                download_sha256: "d".repeat(64),
+                download_size: 8,
+                compression: "gzip".into(),
                 sha256: "c".repeat(64),
                 size: 10,
             }],
@@ -250,6 +274,16 @@ mod tests {
         let mut bad = manifest();
         bad.files[0].path = "../escape".into();
         assert!(matches!(bad.validate(), Err(ProtocolError::UnsafePath(_))));
+    }
+
+    #[test]
+    fn rejects_old_manifest_schema() {
+        let mut bad = manifest();
+        bad.schema_version = 1;
+        assert!(matches!(
+            bad.validate(),
+            Err(ProtocolError::SchemaVersion(1))
+        ));
     }
 
     #[test]

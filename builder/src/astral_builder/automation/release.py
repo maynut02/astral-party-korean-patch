@@ -20,7 +20,7 @@ class ReleaseMetadata:
 
 def read_release_metadata(manifest_path: str | Path) -> ReleaseMetadata:
     data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    if data.get("schemaVersion") != 1:
+    if data.get("schemaVersion") != 2:
         raise ValueError("unsupported patch manifest schema")
     patch = data.get("patch")
     game = data.get("game")

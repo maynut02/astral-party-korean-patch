@@ -96,6 +96,8 @@ Stable workflow는 내부적으로 Steam `data.unity3d` 취득, build, 독립 �
 
 Patch Release는 draft 상태에서 생성합니다. 모든 patch asset과 `manifest.json` 업로드가 성공해야 공개 상태로 전환됩니다.
 
+Patch manifest schema v2부터 각 Unity payload는 원본 형식을 바꾸지 않고 개별 `.gz` transport asset으로 배포합니다. manifest에는 압축본의 `downloadSize`/`downloadSha256`과 압축 해제 후 실제 설치 파일의 `size`/`sha256`을 모두 기록합니다. Patcher는 다운로드 검증 후 staging에서 gzip을 해제하면서 최종 payload를 다시 검증한 뒤 설치합니다.
+
 업로드 중 오류가 발생하면 draft Release와 tag를 정리합니다. 이미 공개된 동일 tag Release는 덮어쓰지 않습니다.
 
 `patch-index` Release의 `release-index.json`만 의도적으로 mutable하며, Patcher가 compatible patch를 찾는 작은 index 역할을 합니다.

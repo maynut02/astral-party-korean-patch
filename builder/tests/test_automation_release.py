@@ -7,7 +7,7 @@ from astral_builder.release.index import ReleaseIndex
 
 def _manifest(path: Path) -> Path:
     data = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "patch": {
             "version": "v1",
             "channel": "preview",

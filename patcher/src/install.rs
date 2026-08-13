@@ -350,7 +350,7 @@ mod tests {
 
     fn manifest(file: ManifestFile) -> PatchManifest {
         PatchManifest {
-            schema_version: 1,
+            schema_version: 2,
             patch: PatchMetadata {
                 version: "v1".into(),
                 channel: "preview".into(),
@@ -390,7 +390,10 @@ mod tests {
             target: InstallTarget::Addressables,
             path: "root/hash/__data".into(),
             operation: "create".into(),
-            download_url: "https://example.test/created".into(),
+            download_url: "https://example.test/created.gz".into(),
+            download_sha256: "d".repeat(64),
+            download_size: 5,
+            compression: "gzip".into(),
             sha256: hash,
             size: payload.len() as u64,
         });
@@ -426,7 +429,10 @@ mod tests {
             target: InstallTarget::GameData,
             path: "data.unity3d".into(),
             operation: "replace".into(),
-            download_url: "https://example.test/replaced".into(),
+            download_url: "https://example.test/replaced.gz".into(),
+            download_sha256: "d".repeat(64),
+            download_size: 5,
+            compression: "gzip".into(),
             sha256: hash,
             size: payload.len() as u64,
         });

@@ -114,11 +114,49 @@ jobs:
         id: meta
         shell: bash
         run: echo "artifact_name=patch-${{ inputs.patch_version }}-${{ inputs.channel }}" >> "$GITHUB_OUTPUT"
+      - name: Write patch size summary
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path("output/patch/manifest.json").read_text(encoding="utf-8"))
+          rows = []
+          total_download = 0
+          total_payload = 0
+          for item in manifest["files"]:
+              download_size = int(item["downloadSize"])
+              payload_size = int(item["size"])
+              total_download += download_size
+              total_payload += payload_size
+              ratio = (download_size / payload_size * 100) if payload_size else 0
+              rows.append((item["target"], item["path"], download_size, payload_size, ratio))
+
+          def mib(value: int) -> str:
+              return f"{value / 1024 / 1024:.2f} MiB"
+
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write("## Patch transfer sizes\n\n")
+              handle.write("| Target | Path | Download | Installed | Ratio |\n")
+              handle.write("| --- | --- | ---: | ---: | ---: |\n")
+              for target, path, download_size, payload_size, ratio in rows:
+                  handle.write(
+                      f"| {target} | `{path}` | {mib(download_size)} | "
+                      f"{mib(payload_size)} | {ratio:.1f}% |\n"
+                  )
+              total_ratio = (total_download / total_payload * 100) if total_payload else 0
+              handle.write(
+                  f"| **Total** | | **{mib(total_download)}** | **{mib(total_payload)}** | "
+                  f"**{total_ratio:.1f}%** |\n"
+              )
+          PY
       - name: Upload validated patch artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: output/patch/
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 6
           retention-days: 14

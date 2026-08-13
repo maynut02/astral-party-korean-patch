@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -39,6 +40,18 @@ pub enum NetworkError {
     },
     #[error("download SHA-256 mismatch for {path}: expected {expected}, actual {actual}")]
     DownloadHashMismatch {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+    #[error("payload size mismatch for {path}: expected {expected}, actual {actual}")]
+    PayloadSizeMismatch {
+        path: PathBuf,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("payload SHA-256 mismatch for {path}: expected {expected}, actual {actual}")]
+    PayloadHashMismatch {
         path: PathBuf,
         expected: String,
         actual: String,
@@ -128,16 +141,27 @@ impl ReleaseClient {
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let temp = destination.with_extension("astral-download-tmp");
-            let result = self.download_verified(&file.download_url, &temp, file.size, &file.sha256);
+            let download_temp = destination.with_extension("astral-download-gz");
+            let payload_temp = destination.with_extension("astral-payload-tmp");
+            let result = (|| {
+                self.download_verified(
+                    &file.download_url,
+                    &download_temp,
+                    file.download_size,
+                    &file.download_sha256,
+                )?;
+                decompress_gzip_verified(&download_temp, &payload_temp, file.size, &file.sha256)?;
+                if destination.exists() {
+                    fs::remove_file(&destination)?;
+                }
+                fs::rename(&payload_temp, &destination)?;
+                Ok::<(), NetworkError>(())
+            })();
+            let _ = fs::remove_file(&download_temp);
             if let Err(error) = result {
-                let _ = fs::remove_file(&temp);
+                let _ = fs::remove_file(&payload_temp);
                 return Err(error);
             }
-            if destination.exists() {
-                fs::remove_file(&destination)?;
-            }
-            fs::rename(&temp, &destination)?;
             staged.push(destination);
         }
         Ok(staged)
@@ -191,6 +215,53 @@ impl ReleaseClient {
     }
 }
 
+fn decompress_gzip_verified(
+    source: &Path,
+    destination: &Path,
+    expected_size: u64,
+    expected_hash: &str,
+) -> Result<(), NetworkError> {
+    let input = fs::File::open(source)?;
+    let mut decoder = GzDecoder::new(input);
+    let mut output = fs::File::create(destination)?;
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; 128 * 1024];
+    loop {
+        let read = decoder.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        output.write_all(&buffer[..read])?;
+        hasher.update(&buffer[..read]);
+        total += read as u64;
+        if total > expected_size {
+            return Err(NetworkError::PayloadSizeMismatch {
+                path: destination.to_owned(),
+                expected: expected_size,
+                actual: total,
+            });
+        }
+    }
+    output.sync_all()?;
+    if total != expected_size {
+        return Err(NetworkError::PayloadSizeMismatch {
+            path: destination.to_owned(),
+            expected: expected_size,
+            actual: total,
+        });
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected_hash {
+        return Err(NetworkError::PayloadHashMismatch {
+            path: destination.to_owned(),
+            expected: expected_hash.to_owned(),
+            actual,
+        });
+    }
+    Ok(())
+}
+
 fn target_dir(target: InstallTarget) -> &'static str {
     match target {
         InstallTarget::Addressables => "addressables",
@@ -200,6 +271,12 @@ fn target_dir(target: InstallTarget) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use tempfile::tempdir;
+
     use super::*;
     use crate::protocol::{PatchMetadata, TargetGame};
 
@@ -228,7 +305,7 @@ mod tests {
     #[test]
     fn manifest_compatibility_fields_are_explicit() {
         let manifest = PatchManifest {
-            schema_version: 1,
+            schema_version: 2,
             patch: PatchMetadata {
                 version: "v1".into(),
                 channel: "preview".into(),
@@ -244,5 +321,20 @@ mod tests {
             files: vec![],
         };
         assert_eq!(manifest.game.catalog_hash.len(), 32);
+    }
+
+    #[test]
+    fn gzip_payload_is_verified_after_decompression() {
+        let temp = tempdir().unwrap();
+        let source = temp.path().join("payload.gz");
+        let destination = temp.path().join("payload.bin");
+        let payload = b"patched-unity-payload";
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(payload).unwrap();
+        fs::write(&source, encoder.finish().unwrap()).unwrap();
+        let hash = format!("{:x}", Sha256::digest(payload));
+
+        decompress_gzip_verified(&source, &destination, payload.len() as u64, &hash).unwrap();
+        assert_eq!(fs::read(destination).unwrap(), payload);
     }
 }
