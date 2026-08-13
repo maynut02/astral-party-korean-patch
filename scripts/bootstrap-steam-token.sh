@@ -56,7 +56,8 @@ dotnet run --project "$SOURCE/DepotDownloader/DepotDownloader.csproj" -c Release
   -qr \
   -remember-password \
   -manifest-only \
-  -os windows
+  -os windows \
+  -dir "$WORK/steam-download"
 status=$?
 set -e
 
