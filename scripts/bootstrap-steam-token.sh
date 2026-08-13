@@ -18,16 +18,24 @@ fi
 export DOTNET_ROOT
 export PATH="$DOTNET_ROOT:$PATH"
 
-if ! find /usr/lib /lib -name 'libicuuc.so*' -print -quit 2>/dev/null | grep -q .; then
-  printf '%s\n' 'WSL에 .NET 실행에 필요한 ICU 라이브러리가 없습니다.' >&2
-  if command -v apt-get >/dev/null 2>&1; then
-    printf '%s\n' '다음 명령으로 설치한 뒤 이 스크립트를 다시 실행하세요:' >&2
-    printf '%s\n' '  sudo apt-get update && sudo apt-get install -y libicu-dev' >&2
+DOTNET_PROBE="$WORK/dotnet-probe.log"
+if ! dotnet --info >"$DOTNET_PROBE" 2>&1; then
+  cat "$DOTNET_PROBE" >&2
+  if grep -qi 'ICU' "$DOTNET_PROBE"; then
+    printf '%s\n' 'WSL의 .NET 실행에 필요한 ICU 런타임을 사용할 수 없습니다.' >&2
+    if command -v apt-get >/dev/null 2>&1; then
+      printf '%s\n' '다음 명령으로 ICU를 설치/갱신한 뒤 다시 실행하세요:' >&2
+      printf '%s\n' '  sudo apt-get update && sudo apt-get install -y libicu-dev' >&2
+      printf '%s\n' '설치 후에도 실패하면 다음 진단 결과를 확인하세요:' >&2
+      printf '%s\n' "  dpkg -l | grep -E 'libicu|icu-dev'" >&2
+      printf '%s\n' '  ldconfig -p | grep -i libicu' >&2
+    fi
   else
-    printf '%s\n' '사용 중인 Linux 배포판의 패키지 관리자로 ICU(libicu)를 설치한 뒤 다시 실행하세요.' >&2
+    printf '%s\n' '.NET 런타임 사전 검사가 실패했습니다. 위 오류를 확인하세요.' >&2
   fi
   exit 1
 fi
+rm -f "$DOTNET_PROBE"
 
 rm -rf "$SOURCE"
 git clone --filter=blob:none https://github.com/SteamRE/DepotDownloader.git "$SOURCE"
