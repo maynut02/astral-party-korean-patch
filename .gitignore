@@ -7,11 +7,8 @@ dist/
 build/
 *.egg-info/
 
-# Rust / Tauri
-patcher/src-tauri/target/
-patcher/src-tauri/gen/
-patcher/node_modules/
-patcher/dist/
+# Rust
+patcher/target/
 
 # Environment / secrets
 .env

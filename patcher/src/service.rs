@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::game::{GameInstallation, discover_windows_installation};
+use crate::game::GameInstallation;
 use crate::install::{
     InstallError, InstallRoots, InstallSummary, OwnershipManifest, RemoveReport, install_patch,
     remove_patch,
@@ -38,6 +38,7 @@ pub struct PatcherPaths {
     pub staging_root: PathBuf,
     pub backup_root: PathBuf,
     pub ownership_path: PathBuf,
+    pub settings_path: PathBuf,
 }
 
 impl PatcherPaths {
@@ -46,6 +47,7 @@ impl PatcherPaths {
             staging_root: state_root.join("staging"),
             backup_root: state_root.join("backup"),
             ownership_path: state_root.join("installed.json"),
+            settings_path: state_root.join("settings.json"),
             state_root,
         }
     }
@@ -57,7 +59,7 @@ impl PatcherPaths {
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::NotFound, "LOCALAPPDATA is not set")
             })?;
-        Ok(Self::below(local_app_data.join("AstralPartyKoreanPatcher")))
+        Ok(Self::below(local_app_data.join("AstralAutoPatcher")))
     }
 
     pub fn reset_staging(&self) -> Result<(), std::io::Error> {
@@ -137,15 +139,15 @@ fn ensure_manifest_compatible(
     Ok(())
 }
 
-#[cfg(windows)]
 pub fn install_latest_compatible(
     release_index_url: &str,
     channel: &str,
     paths: &PatcherPaths,
+    game: &GameInstallation,
 ) -> Result<InstallOutcome, ServiceError> {
-    let game = discover_windows_installation()?;
-    let roots = install_roots(&game);
-    let client = ReleaseClient::new("AstralPartyKoreanPatcher/0.1")?;
+    let roots = install_roots(game);
+    let user_agent = format!("AstralAutoPatcher/{}", env!("CARGO_PKG_VERSION"));
+    let client = ReleaseClient::new(&user_agent)?;
     let index = client.fetch_release_index(release_index_url)?;
     let (_, manifest) = client.fetch_compatible_manifest(
         &index,
@@ -154,7 +156,7 @@ pub fn install_latest_compatible(
         &game.catalog.hash,
         channel,
     )?;
-    ensure_manifest_compatible(&manifest, &game, DEFAULT_ROUTE)?;
+    ensure_manifest_compatible(&manifest, game, DEFAULT_ROUTE)?;
 
     if let Some(existing) = load_ownership(&paths.ownership_path)? {
         if existing.patch_version == manifest.patch.version

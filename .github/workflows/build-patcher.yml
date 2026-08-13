@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the installer as an immutable GitHub Release
+        description: Publish the portable EXE as an immutable GitHub Release
         required: true
         default: false
         type: boolean
@@ -23,22 +23,15 @@ jobs:
       ASTRAL_PATCH_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patch-index/release-index.json
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: patcher/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Verify source versions
+      - name: Read patcher version
         id: version
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $tauri = Get-Content 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json
-          $package = Get-Content 'package.json' -Raw | ConvertFrom-Json
-          $cargo = Get-Content 'src-tauri/Cargo.toml' -Raw
+          $cargo = Get-Content 'Cargo.toml' -Raw
           $cargoMatch = [regex]::Match(
             $cargo,
             '(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'
@@ -46,58 +39,41 @@ jobs:
           if (-not $cargoMatch.Success) {
             throw 'Could not read the Cargo package version.'
           }
-          $version = [string]$tauri.version
-          if ($package.version -ne $version -or $cargoMatch.Groups[1].Value -ne $version) {
-            throw "Patcher versions differ: tauri=$version package=$($package.version) cargo=$($cargoMatch.Groups[1].Value)"
-          }
+          $version = $cargoMatch.Groups[1].Value
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=patcher-v$version" >> $env:GITHUB_OUTPUT
-      - name: Install frontend dependencies
-        run: npm ci
-      - name: Build frontend
-        run: npm run build
       - name: Rust format
-        working-directory: patcher/src-tauri
         run: cargo fmt --all -- --check
       - name: Rust tests
-        working-directory: patcher/src-tauri
         run: cargo test --all-targets --all-features
       - name: Rust clippy
-        working-directory: patcher/src-tauri
         run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Build NSIS installer
-        run: npm run tauri -- build --bundles nsis
-      - name: Verify installer and write checksum
-        id: installer
+      - name: Build portable EXE
+        run: cargo build --release --bin AstralAutoPatcher
+      - name: Verify EXE and write checksum
+        id: executable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installers = @(
-            Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe' -File
-          )
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one NSIS installer, found $($installers.Count)."
+          $exe = Get-Item 'target/release/AstralAutoPatcher.exe'
+          if ($exe.Length -le 0) {
+            throw 'AstralAutoPatcher.exe is empty.'
           }
-          $installer = $installers[0]
-          if ($installer.Length -le 0) {
-            throw 'NSIS installer is empty.'
-          }
-          $sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          $checksum = "$($installer.FullName).sha256"
-          "$sha256  $($installer.Name)" | Set-Content -Path $checksum -Encoding ascii
-          "path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          $sha256 = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = "$($exe.FullName).sha256"
+          "$sha256  $($exe.Name)" | Set-Content -Path $checksum -Encoding ascii
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
           "checksum=$checksum" >> $env:GITHUB_OUTPUT
-          "name=$($installer.Name)" >> $env:GITHUB_OUTPUT
           "sha256=$sha256" >> $env:GITHUB_OUTPUT
-          Write-Host "Installer: $($installer.Name)"
+          Write-Host "Executable: $($exe.Name)"
           Write-Host "SHA-256: $sha256"
-      - name: Upload installer artifact
+      - name: Upload portable patcher artifact
         uses: actions/upload-artifact@v7
         with:
-          name: patcher-${{ steps.version.outputs.version }}-windows-x64
+          name: AstralAutoPatcher-${{ steps.version.outputs.version }}-windows-x64
           path: |
-            ${{ steps.installer.outputs.path }}
-            ${{ steps.installer.outputs.checksum }}
+            ${{ steps.executable.outputs.path }}
+            ${{ steps.executable.outputs.checksum }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -106,8 +82,8 @@ jobs:
         shell: pwsh
         env:
           TAG: ${{ steps.version.outputs.tag }}
-          INSTALLER: ${{ steps.installer.outputs.path }}
-          CHECKSUM: ${{ steps.installer.outputs.checksum }}
+          EXE: ${{ steps.executable.outputs.path }}
+          CHECKSUM: ${{ steps.executable.outputs.checksum }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -116,8 +92,8 @@ jobs:
             throw "Release $env:TAG already exists; patcher releases are immutable."
           }
           gh release create $env:TAG `
-            $env:INSTALLER `
+            $env:EXE `
             $env:CHECKSUM `
             --target $env:GITHUB_SHA `
-            --title "Astral Party Korean Patcher $env:VERSION" `
-            --notes "Windows x64 NSIS installer for Astral Party Korean Patcher $env:VERSION."
+            --title "AstralAutoPatcher $env:VERSION" `
+            --notes "Portable Windows x64 AstralAutoPatcher $env:VERSION. First launch self-registers under LocalAppData and registers the astral:// protocol."

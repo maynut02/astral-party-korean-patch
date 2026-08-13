@@ -106,25 +106,42 @@ Patcher에서 사용할 index URL은 저장소가 확정되면 다음 형식입�
 https://github.com/<owner>/<repo>/releases/download/patch-index/release-index.json
 ```
 
-`Build Patcher` workflow는 이 URL을 `ASTRAL_PATCH_INDEX_URL` compile-time 값으로 installer에 자동 내장합니다. 사용자가 Patcher에서 별도 URL을 저장한 경우에는 그 사용자 설정이 우선합니다.
+`Build Patcher` workflow는 이 URL을 `ASTRAL_PATCH_INDEX_URL` compile-time 값으로 `AstralAutoPatcher.exe`에 자동 내장합니다. URI에서는 외부 download URL을 받지 않으며 Patcher가 이 고정 release index만 조회합니다.
 
-## 6. Patcher Windows installer
+## 6. AstralAutoPatcher portable EXE
 
-`Build Patcher` workflow는 소스의 다음 세 version이 모두 같은지 먼저 검증합니다.
+`Build Patcher` workflow는 Node, Vite, Tauri, NSIS 없이 `patcher/Cargo.toml`의 version을 읽고 Windows runner에서 다음 검증을 수행합니다.
 
-- `patcher/package.json`
-- `patcher/src-tauri/Cargo.toml`
-- `patcher/src-tauri/tauri.conf.json`
+```text
+cargo fmt --all -- --check
+cargo test --all-targets --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+cargo build --release --bin AstralAutoPatcher
+```
 
-그 다음 Windows runner에서 frontend build, Rust format/test/clippy, Tauri NSIS build를 실행합니다.
+산출물은 단일 `AstralAutoPatcher.exe`와 `.sha256` 파일입니다. 최초 실행 위치는 자유롭습니다. 프로그램은 자신을 다음 위치에 복사하고 사용자별 `astral://` protocol handler를 등록합니다. 관리자 권한은 요구하지 않습니다.
+
+```text
+%LOCALAPPDATA%\AstralAutoPatcher\AstralAutoPatcher.exe
+```
+
+같은 폴더에 `settings.json`, `installed.json`, staging/backup 상태를 관리합니다. 최초 실행 시 Steam과 LocalLow 경로를 자동 감지하고, 프로그램 설정 메뉴에서 두 경로를 각각 수정할 수 있습니다. 패치가 설치된 동안에는 ownership 안전성을 위해 경로 변경을 차단합니다.
+
+지원 URI는 고정 allowlist입니다.
+
+```text
+astral://install
+astral://remove
+astral://settings
+```
+
+`astral://install`은 저장된 patch channel과 내장 release index를 사용해 호환 패치를 설치/업데이트하고, `astral://settings`는 경로 및 채널 설정 메뉴를 엽니다.
 
 기본 실행은 Actions artifact만 생성합니다. `publish=true`로 수동 실행하면 다음 tag로 immutable GitHub Release를 생성합니다.
 
 ```text
 patcher-v<version>
 ```
-
-installer와 `.sha256` 파일을 함께 배포합니다.
 
 ## 7. 게임 버전 상승
 
@@ -163,7 +180,7 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 6. `CI` workflow 통과 확인.
 7. `Check Game` workflow 수동 실행.
 8. Preview Release와 `patch-index` 생성 확인.
-9. `Build Patcher`로 생성한 installer를 실행해 자동 주입된 `patch-index` URL로 install/remove 실게임 검증.
+9. `Build Patcher`로 생성한 `AstralAutoPatcher.exe`를 실행해 self-registration, `astral://` URI, Steam/LocalLow 경로 탐지, install/remove를 실게임 검증.
 10. 검수 완료 후 `Release Stable Patch`를 수동 실행.
 
 실제 credential과 GitHub repository가 연결되기 전까지 로컬 구현만으로는 6~10번의 hosted integration 검증을 수행할 수 없습니다.

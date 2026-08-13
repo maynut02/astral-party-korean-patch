@@ -148,10 +148,12 @@ Patcher는 Neon DB에 직접 접근하지 않는다.
 
 ### Phase 7 - Patcher V3
 
-처음부터 새 Rust/Tauri 구현:
+단일 실행 파일 Rust CLI `AstralAutoPatcher` 구현:
 
-- Steam app `2622000` 탐지
-- LocalLow Addressables 경로 탐지
+- Steam app `2622000` 탐지 및 Steam 게임 경로 수동 설정
+- LocalLow Addressables 경로 탐지 및 LocalLow 경로 수동 설정
+- `%LOCALAPPDATA%\AstralAutoPatcher` self-registration
+- `astral://install`, `astral://remove`, `astral://settings` URI protocol 처리
 - installed game revision/catalog hash 탐지
 - compatible release resolution
 - staged download

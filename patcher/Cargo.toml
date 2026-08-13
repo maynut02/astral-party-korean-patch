@@ -1,20 +1,21 @@
 [package]
-name = "astral-patcher-core"
-version = "0.1.0"
+name = "astral-auto-patcher"
+version = "0.2.0"
 edition = "2024"
-build = "build.rs"
 
 [lib]
-name = "astral_patcher_core"
+name = "astral_auto_patcher"
 path = "src/lib.rs"
-crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "AstralAutoPatcher"
+path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
-tauri = { version = "2.11.5" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [dev-dependencies]
@@ -22,6 +23,3 @@ tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-
-[build-dependencies]
-tauri-build = { version = "2.6.3" }

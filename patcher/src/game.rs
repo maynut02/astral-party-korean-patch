@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const STEAM_APP_ID: &str = "2622000";
-pub const DEFAULT_INSTALL_DIR: &str = "Astral Party";
-pub const LOCALLOW_RELATIVE: &str = "AppData/LocalLow/feimo/AstralParty_INT/com.unity.addressables";
+pub const LOCALLOW_GAME_RELATIVE: &str = "AppData/LocalLow/feimo/AstralParty_INT";
+pub const ADDRESSABLES_DIR: &str = "com.unity.addressables";
 
 #[derive(Debug, Error)]
 pub enum GameDetectError {
@@ -16,8 +16,10 @@ pub enum GameDetectError {
     Manifest(String),
     #[error("Astral Party Steam manifest was not found")]
     ManifestNotFound,
-    #[error("Astral Party installation directory was not found")]
+    #[error("Astral Party Steam installation directory was not found or is invalid")]
     InstallNotFound,
+    #[error("Astral Party LocalLow directory was not found or is invalid")]
+    LocalLowNotFound,
     #[error("Addressables catalog hash was not found")]
     CatalogNotFound,
 }
@@ -32,8 +34,11 @@ pub struct CatalogIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameInstallation {
+    /// Steam's `.../steamapps/common/Astral Party` directory.
     pub game_root: PathBuf,
     pub game_data_root: PathBuf,
+    /// `%USERPROFILE%/AppData/LocalLow/feimo/AstralParty_INT`.
+    pub locallow_root: PathBuf,
     pub addressables_root: PathBuf,
     pub catalog: CatalogIdentity,
 }
@@ -84,7 +89,7 @@ pub fn find_install_from_libraries(libraries: &[PathBuf]) -> Result<PathBuf, Gam
         let manifest_text = fs::read_to_string(&manifest)?;
         let install_dir = parse_install_dir_from_acf(&manifest_text)?;
         let game_root = library.join("steamapps").join("common").join(install_dir);
-        if game_root.is_dir() {
+        if normalize_steam_root(&game_root).is_ok() {
             return Ok(game_root);
         }
     }
@@ -135,30 +140,62 @@ pub fn discover_latest_catalog(
         .ok_or(GameDetectError::CatalogNotFound)
 }
 
+pub fn normalize_steam_root(path: &Path) -> Result<PathBuf, GameDetectError> {
+    if path.join("8vJXnINT").join("AstralParty_INT_Data").is_dir() {
+        return Ok(path.to_owned());
+    }
+    if path.join("AstralParty_INT_Data").is_dir()
+        && path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("8vJXnINT"))
+    {
+        return path
+            .parent()
+            .map(Path::to_owned)
+            .ok_or(GameDetectError::InstallNotFound);
+    }
+    Err(GameDetectError::InstallNotFound)
+}
+
+pub fn normalize_locallow_root(path: &Path) -> Result<PathBuf, GameDetectError> {
+    if path.join(ADDRESSABLES_DIR).is_dir() {
+        return Ok(path.to_owned());
+    }
+    if path.is_dir()
+        && path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case(ADDRESSABLES_DIR))
+    {
+        return path
+            .parent()
+            .map(Path::to_owned)
+            .ok_or(GameDetectError::LocalLowNotFound);
+    }
+    Err(GameDetectError::LocalLowNotFound)
+}
+
 pub fn build_installation(
-    game_root: PathBuf,
-    user_profile: &Path,
+    steam_root: PathBuf,
+    locallow_root: PathBuf,
 ) -> Result<GameInstallation, GameDetectError> {
-    let executable_root = game_root.join("8vJXnINT");
-    let game_data_root = executable_root.join("AstralParty_INT_Data");
-    if !game_data_root.is_dir() {
-        return Err(GameDetectError::InstallNotFound);
-    }
-    let addressables_root = user_profile.join(LOCALLOW_RELATIVE);
-    if !addressables_root.is_dir() {
-        return Err(GameDetectError::CatalogNotFound);
-    }
+    let game_root = normalize_steam_root(&steam_root)?;
+    let locallow_root = normalize_locallow_root(&locallow_root)?;
+    let game_data_root = game_root.join("8vJXnINT").join("AstralParty_INT_Data");
+    let addressables_root = locallow_root.join(ADDRESSABLES_DIR);
     let catalog = discover_latest_catalog(&addressables_root)?;
     Ok(GameInstallation {
-        game_root: executable_root,
+        game_root,
         game_data_root,
+        locallow_root,
         addressables_root,
         catalog,
     })
 }
 
 #[cfg(windows)]
-pub fn discover_windows_installation() -> Result<GameInstallation, GameDetectError> {
+pub fn discover_windows_steam_root() -> Result<PathBuf, GameDetectError> {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
@@ -181,12 +218,23 @@ pub fn discover_windows_installation() -> Result<GameInstallation, GameDetectErr
             }
         }
     }
+    find_install_from_libraries(&libraries).and_then(|path| normalize_steam_root(&path))
+}
 
-    let game_root = find_install_from_libraries(&libraries)?;
+#[cfg(windows)]
+pub fn discover_windows_locallow_root() -> Result<PathBuf, GameDetectError> {
     let user_profile = std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
-        .ok_or(GameDetectError::CatalogNotFound)?;
-    build_installation(game_root, &user_profile)
+        .ok_or(GameDetectError::LocalLowNotFound)?;
+    normalize_locallow_root(&user_profile.join(LOCALLOW_GAME_RELATIVE))
+}
+
+#[cfg(windows)]
+pub fn discover_windows_installation() -> Result<GameInstallation, GameDetectError> {
+    build_installation(
+        discover_windows_steam_root()?,
+        discover_windows_locallow_root()?,
+    )
 }
 
 #[cfg(test)]
@@ -230,17 +278,32 @@ mod tests {
     }
 
     #[test]
-    fn builds_installation_from_fixture_layout() {
+    fn builds_installation_from_separate_roots() {
         let temp = tempdir().unwrap();
         let game_root = temp.path().join("Astral Party");
         fs::create_dir_all(game_root.join("8vJXnINT/AstralParty_INT_Data")).unwrap();
-        let user = temp.path().join("user");
-        let addressables = user.join(LOCALLOW_RELATIVE);
+        let locallow = temp.path().join("AstralParty_INT");
+        let addressables = locallow.join(ADDRESSABLES_DIR);
         fs::create_dir_all(&addressables).unwrap();
         fs::write(addressables.join("catalog_3.2.0.hash"), "fd58").unwrap();
 
-        let install = build_installation(game_root, &user).unwrap();
-        assert!(install.game_root.ends_with("8vJXnINT"));
+        let install = build_installation(game_root.clone(), locallow.clone()).unwrap();
+        assert_eq!(install.game_root, game_root);
+        assert_eq!(install.locallow_root, locallow);
         assert_eq!(install.catalog.version, "3.2.0");
+    }
+
+    #[test]
+    fn accepts_inner_manual_paths_and_normalizes_them() {
+        let temp = tempdir().unwrap();
+        let game_root = temp.path().join("Astral Party");
+        let executable_root = game_root.join("8vJXnINT");
+        fs::create_dir_all(executable_root.join("AstralParty_INT_Data")).unwrap();
+        let locallow = temp.path().join("AstralParty_INT");
+        let addressables = locallow.join(ADDRESSABLES_DIR);
+        fs::create_dir_all(&addressables).unwrap();
+
+        assert_eq!(normalize_steam_root(&executable_root).unwrap(), game_root);
+        assert_eq!(normalize_locallow_root(&addressables).unwrap(), locallow);
     }
 }
