@@ -129,6 +129,8 @@ cargo build --release --bin AstralAutoPatcher
 
 같은 폴더에 `settings.json`, `installed.json`, staging/backup 상태를 관리합니다. 최초 실행 시 Steam과 LocalLow 경로를 자동 감지하고, 프로그램 설정 메뉴에서 두 경로를 각각 수정할 수 있습니다. 패치가 설치된 동안에는 ownership 안전성을 위해 경로 변경을 차단합니다.
 
+Patcher 0.4.0부터 콘솔 UI는 Ratatui/Crossterm 기반 고정 화면 TUI를 사용합니다. 방향키/Enter/Esc와 마우스 클릭·스크롤을 지원하며, 경로 입력은 TUI 내부에서 키보드 입력과 붙여넣기를 처리합니다. 메인 상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 패치 채널, 게임 버전, Catalog hash, 설치된 패치 버전을 항상 표시합니다.
+
 지원 URI는 고정 allowlist입니다.
 
 ```text
@@ -137,7 +139,7 @@ astral://remove
 astral://settings
 ```
 
-`astral://install`은 저장된 patch channel과 내장 release index를 사용해 호환 패치를 설치/업데이트하고, `astral://settings`는 경로 및 채널 설정 메뉴를 엽니다.
+`astral://install`과 `astral://remove`로 실행해도 즉시 작업 로그만 출력하지 않고 먼저 동일한 TUI 상태 화면을 렌더링합니다. 따라서 오류가 발생해도 Patcher 버전, 설치 경로, 게임 버전, Catalog hash, 채널, 설치 상태를 한 화면에서 확인할 수 있습니다. `astral://settings`는 같은 상태 영역을 유지한 채 설정 메뉴를 엽니다.
 
 기본 실행은 Actions artifact만 생성합니다. `publish=true`로 수동 실행하면 다음 tag로 immutable GitHub Release를 생성합니다.
 

@@ -6,6 +6,7 @@ pub mod protocol;
 pub mod registration;
 pub mod service;
 pub mod settings;
+pub mod tui;
 pub mod uri;
 
 pub use game::{
