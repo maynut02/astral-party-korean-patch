@@ -35,7 +35,7 @@ def read_release_metadata(manifest_path: str | Path) -> ReleaseMetadata:
         revision=str(game["revision"]),
         catalog_hash=str(game["catalogHash"]),
     )
-    if metadata.channel not in {"preview", "stable"}:
+    if metadata.channel not in {"release", "develop"}:
         raise ValueError(f"unsupported release channel: {metadata.channel}")
     return metadata
 

@@ -456,7 +456,7 @@ mod tests {
             schema_version: 2,
             patch: PatchMetadata {
                 version: "v1".into(),
-                channel: "preview".into(),
+                channel: "release".into(),
                 route: "INT_STEAM".into(),
                 build_id: "build-1".into(),
                 translation_fingerprint: "a".repeat(64),

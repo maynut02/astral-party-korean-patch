@@ -6,7 +6,7 @@ from astral_builder.patch.fonts import (
     patch_tmp_font_bundle,
 )
 from astral_builder.patch.translations import (
-    BuildChannel,
+    DistributionChannel,
     PatchStats,
     patch_lang_payload,
     patch_str_payload,
@@ -14,7 +14,7 @@ from astral_builder.patch.translations import (
 )
 
 __all__ = [
-    "BuildChannel",
+    "DistributionChannel",
     "FontPatchError",
     "FontPatchResult",
     "BundlePatchResult",

@@ -1,7 +1,11 @@
-name: Release Preview Patch
+name: Release Patch
 
 on:
   workflow_dispatch:
+
+concurrency:
+  group: release-int-steam
+  cancel-in-progress: false
 
 permissions:
   actions: read
@@ -14,7 +18,7 @@ jobs:
       revision_id: ${{ steps.revision.outputs.revision_id }}
       game_version: ${{ steps.revision.outputs.game_version }}
       revision: ${{ steps.revision.outputs.revision }}
-      patch_version: ${{ steps.revision.outputs.patch_version }}
+      patch_version: ${{ steps.tag.outputs.patch_version }}
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
@@ -36,8 +40,12 @@ jobs:
           python - <<'PY'
           import os
           from pathlib import Path
+          from uuid import UUID
 
           import psycopg
+
+          from astral_builder.database.repository import load_translation_snapshot
+          from astral_builder.database.snapshot import TranslationState
 
           route = "INT_STEAM"
           with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
@@ -57,47 +65,80 @@ jobs:
               raise SystemExit(f"No processed game revision found for route {route}")
 
           revision_id, game_version, revision = map(str, row)
-          patch_version = (
-              f"v{game_version}-r{revision}-preview.manual."
-              f"{os.environ['GITHUB_RUN_NUMBER']}"
+          with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+              snapshot = load_translation_snapshot(conn, UUID(revision_id))
+
+          total_units = len(snapshot.units)
+          incomplete_units = sum(
+              unit.state != TranslationState.APPROVED for unit in snapshot.units
           )
+          if total_units == 0:
+              raise SystemExit(f"Revision {revision_id} has no translation units")
+          if incomplete_units:
+              raise SystemExit(
+                  f"Release blocked: {incomplete_units}/{total_units} translation units are not approved "
+                  "for the current source fingerprint"
+              )
 
           output = Path(os.environ["GITHUB_OUTPUT"])
           with output.open("a", encoding="utf-8") as handle:
               handle.write(f"revision_id={revision_id}\n")
               handle.write(f"game_version={game_version}\n")
               handle.write(f"revision={revision}\n")
-              handle.write(f"patch_version={patch_version}\n")
-
-          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
-          with summary.open("a", encoding="utf-8") as handle:
-              handle.write("## Preview release target\n\n")
-              handle.write(f"- Revision ID: `{revision_id}`\n")
-              handle.write(f"- Game version: `{game_version}`\n")
-              handle.write(f"- Revision: `{revision}`\n")
-              handle.write(f"- Patch version: `{patch_version}`\n")
+              handle.write(f"unit_count={total_units}\n")
           PY
+      - name: Choose immutable release tag
+        id: tag
+        shell: bash
+        env:
+          GAME_VERSION: ${{ steps.revision.outputs.game_version }}
+          REVISION: ${{ steps.revision.outputs.revision }}
+        run: |
+          set -euo pipefail
+          remote_tags="$(git ls-remote --tags --refs origin)"
+          tag_exists() {
+            printf '%s\n' "$remote_tags" | awk '{print $2}' | grep -Fxq "refs/tags/$1"
+          }
+          base="v${GAME_VERSION}-r${REVISION}-release"
+          candidate="$base"
+          if tag_exists "$candidate"; then
+            number=2
+            while tag_exists "${base}.${number}"; do
+              number=$((number + 1))
+            done
+            candidate="${base}.${number}"
+          fi
+          echo "patch_version=$candidate" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release target"
+            echo
+            echo "- Revision ID: \`${{ steps.revision.outputs.revision_id }}\`"
+            echo "- Game version: \`${GAME_VERSION}\`"
+            echo "- Revision: \`${REVISION}\`"
+            echo "- Approved units: \`${{ steps.revision.outputs.unit_count }} / ${{ steps.revision.outputs.unit_count }}\`"
+            echo "- Patch version: \`${candidate}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   legacy:
     needs: resolve
     uses: ./.github/workflows/fetch-legacy-data.yml
     secrets: inherit
 
-  build-preview:
+  build-release:
     needs: [resolve, legacy]
     uses: ./.github/workflows/build-patch.yml
     with:
       revision_id: ${{ needs.resolve.outputs.revision_id }}
       patch_version: ${{ needs.resolve.outputs.patch_version }}
-      channel: preview
+      channel: release
       legacy_run_id: ${{ needs.legacy.outputs.run_id }}
       legacy_artifact_name: ${{ needs.legacy.outputs.artifact_name }}
     secrets: inherit
 
-  release-preview:
-    needs: build-preview
+  publish-release:
+    needs: build-release
     uses: ./.github/workflows/release-patch.yml
     with:
       build_run_id: ${{ github.run_id }}
-      artifact_name: ${{ needs.build-preview.outputs.artifact_name }}
+      artifact_name: ${{ needs.build-release.outputs.artifact_name }}
     secrets: inherit

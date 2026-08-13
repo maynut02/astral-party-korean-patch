@@ -31,9 +31,18 @@ def check_revision(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT catalog_build_hash, processed_at
-            FROM game_revisions
-            WHERE route = %s AND game_version = %s AND revision = %s
+            SELECT
+                gr.catalog_build_hash,
+                gr.processed_at,
+                EXISTS (
+                    SELECT 1
+                    FROM builds AS b
+                    WHERE b.revision_id = gr.id
+                      AND b.channel = 'release'
+                      AND b.status = 'released'
+                ) AS has_release
+            FROM game_revisions AS gr
+            WHERE gr.route = %s AND gr.game_version = %s AND gr.revision = %s
             """,
             (source.route, source.version, source.revision),
         )
@@ -42,14 +51,18 @@ def check_revision(
     if row is None:
         return RevisionCheck(source=source, catalog_hash=catalog_hash, changed=True)
 
-    persisted_hash, processed_at = row
+    persisted_hash, processed_at, has_release = row
     if persisted_hash != catalog_hash:
         raise RevisionConflictError(
             "remote catalog hash changed for an existing immutable revision: "
             f"{source.route}/{source.version}/{source.revision} "
             f"db={persisted_hash!r} remote={catalog_hash!r}"
         )
-    return RevisionCheck(source=source, catalog_hash=catalog_hash, changed=processed_at is None)
+    return RevisionCheck(
+        source=source,
+        catalog_hash=catalog_hash,
+        changed=processed_at is None or not has_release,
+    )
 
 
 def write_github_output(check: RevisionCheck, destination: str | Path | TextIO) -> None:

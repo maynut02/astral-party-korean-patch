@@ -6,7 +6,7 @@ from pathlib import Path
 from astral_builder.database.snapshot import TranslationSnapshot
 from astral_builder.extract.unity import extract_text_assets
 from astral_builder.patch.translations import (
-    BuildChannel,
+    DistributionChannel,
     PatchStats,
     patch_lang_payload,
     patch_str_payload,
@@ -28,7 +28,7 @@ def patch_lang_bundle(
     *,
     asset_name: str = "English",
     namespace: str = "lang",
-    channel: BuildChannel = BuildChannel.PREVIEW,
+    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> BundlePatchResult:
     source = extract_text_assets(input_path, names={asset_name})[asset_name]
     payload, stats = patch_lang_payload(
@@ -48,7 +48,7 @@ def patch_str_bundle(
     *,
     asset_prefix: str = "STR",
     target_field: str = "en",
-    channel: BuildChannel = BuildChannel.PREVIEW,
+    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> BundlePatchResult:
     source_assets = extract_text_assets(input_path, name_prefix=asset_prefix)
     replacements: dict[str, bytes] = {}

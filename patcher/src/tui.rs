@@ -26,7 +26,7 @@ use crate::settings::AppSettings;
 use crate::uri::UriAction;
 
 const MIN_WIDTH: u16 = 72;
-const MIN_HEIGHT: u16 = 28;
+const MIN_HEIGHT: u16 = 26;
 const MAIN_ITEMS: [&str; 4] = ["패치 설치 / 업데이트", "패치 제거", "프로그램 설정", "종료"];
 const RESULT_ITEMS: [&str; 2] = ["메인 메뉴", "종료"];
 
@@ -331,28 +331,6 @@ impl App {
         self.input.clear();
     }
 
-    fn toggle_channel(&mut self) {
-        let old = self.settings.clone();
-        let next = if self.settings.channel == "stable" {
-            "preview"
-        } else {
-            "stable"
-        };
-        if let Err(error) = self.settings.set_channel(next) {
-            self.notice = Some(format!("패치 채널을 변경하지 못했습니다: {error}"));
-            return;
-        }
-        if let Err(error) = self.settings.save(&self.paths.settings_path) {
-            self.settings = old;
-            self.notice = Some(format!("설정을 저장하지 못했습니다: {error}"));
-            return;
-        }
-        self.notice = Some(format!(
-            "패치 채널을 {}로 변경했습니다.",
-            self.settings.channel
-        ));
-    }
-
     fn redetect_paths(&mut self) {
         if !self.path_changes_allowed() {
             return;
@@ -387,9 +365,8 @@ impl App {
         match self.settings_selected {
             0 => self.begin_path_input(PathKind::Steam),
             1 => self.begin_path_input(PathKind::LocalLow),
-            2 => self.toggle_channel(),
-            3 => self.redetect_paths(),
-            4 => {
+            2 => self.redetect_paths(),
+            3 => {
                 self.screen = Screen::Main;
                 self.notice = None;
             }
@@ -437,8 +414,8 @@ impl App {
 
     fn handle_settings_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Up => self.settings_selected = previous(self.settings_selected, 5),
-            KeyCode::Down => self.settings_selected = next(self.settings_selected, 5),
+            KeyCode::Up => self.settings_selected = previous(self.settings_selected, 4),
+            KeyCode::Down => self.settings_selected = next(self.settings_selected, 4),
             KeyCode::Enter => self.activate_settings(),
             KeyCode::Esc => {
                 self.screen = Screen::Main;
@@ -513,7 +490,7 @@ impl App {
             }
             MouseEventKind::ScrollUp => match self.screen {
                 Screen::Main => self.main_selected = previous(self.main_selected, MAIN_ITEMS.len()),
-                Screen::Settings => self.settings_selected = previous(self.settings_selected, 5),
+                Screen::Settings => self.settings_selected = previous(self.settings_selected, 4),
                 Screen::Operation => {
                     self.result_selected = previous(self.result_selected, RESULT_ITEMS.len());
                 }
@@ -521,7 +498,7 @@ impl App {
             },
             MouseEventKind::ScrollDown => match self.screen {
                 Screen::Main => self.main_selected = next(self.main_selected, MAIN_ITEMS.len()),
-                Screen::Settings => self.settings_selected = next(self.settings_selected, 5),
+                Screen::Settings => self.settings_selected = next(self.settings_selected, 4),
                 Screen::Operation => {
                     self.result_selected = next(self.result_selected, RESULT_ITEMS.len());
                 }
@@ -625,21 +602,16 @@ fn perform_install(terminal: &mut DefaultTerminal, app: &mut App) -> Result<Stri
     let release_index_url = app.release_index_url;
     let game = settings.installation().map_err(|error| error.to_string())?;
     let mut last_draw = Instant::now();
-    let outcome = install_latest_compatible_with_progress(
-        release_index_url,
-        &settings.channel,
-        &paths,
-        &game,
-        |event| {
+    let outcome =
+        install_latest_compatible_with_progress(release_index_url, &paths, &game, |event| {
             let force_redraw = progress_requires_immediate_redraw(&event);
             app.update_install_progress(event);
             if force_redraw || last_draw.elapsed() >= Duration::from_millis(50) {
                 let _ = terminal.draw(|frame| render(frame, app));
                 last_draw = Instant::now();
             }
-        },
-    )
-    .map_err(|error| error.to_string())?;
+        })
+        .map_err(|error| error.to_string())?;
     match outcome {
         InstallOutcome::AlreadyInstalled(info) => Ok(format!(
             "{} 패치가 이미 설치되어 있습니다.",
@@ -699,7 +671,7 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(10),
+            Constraint::Length(8),
             Constraint::Min(9),
             Constraint::Length(3),
         ])
@@ -734,7 +706,6 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
             "LocalLow 경로",
             display_path(app.settings.locallow_root.as_deref()),
         ),
-        status_row("패치 채널", app.settings.channel.clone()),
         status_row("게임 버전", game_version),
         status_row("Catalog", catalog),
         status_row("설치된 패치", installed),
@@ -788,10 +759,6 @@ fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 display_path(app.settings.locallow_root.as_deref())
             )),
         ]),
-        Row::new(vec![
-            Cell::from("패치 채널"),
-            Cell::from(format!("[{}]", app.settings.channel)),
-        ]),
         Row::new(vec![Cell::from("게임 경로 자동 감지"), Cell::from("")]),
         Row::new(vec![Cell::from("돌아가기"), Cell::from("")]),
     ];
@@ -807,7 +774,7 @@ fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let mut state = TableState::default();
     state.select(Some(app.settings_selected));
     frame.render_stateful_widget(table, area, &mut state);
-    add_list_hits(&mut app.hit_regions, inner, 5, HitTarget::Settings);
+    add_list_hits(&mut app.hit_regions, inner, 4, HitTarget::Settings);
 }
 
 fn render_path_input(frame: &mut Frame<'_>, app: &App, area: Rect, kind: PathKind) {
@@ -1215,7 +1182,7 @@ mod tests {
     fn install_progress_updates_version_and_bars() {
         let mut app = app(UriAction::Menu);
         app.update_install_progress(InstallProgress::Selected {
-            patch_version: "v3.2.0-r116-preview.test".into(),
+            patch_version: "v3.2.0-r116-pre".into(),
             files: vec![PatchFileInfo {
                 download_name: "data.unity3d.gz".into(),
                 install_path: "data.unity3d".into(),
@@ -1243,7 +1210,7 @@ mod tests {
 
         assert_eq!(
             app.install_progress.patch_version.as_deref(),
-            Some("v3.2.0-r116-preview.test")
+            Some("v3.2.0-r116-pre")
         );
         assert_eq!(app.install_progress.download_current, 5);
         assert_eq!(app.install_progress.download_total, 10);

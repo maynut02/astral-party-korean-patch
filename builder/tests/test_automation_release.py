@@ -10,7 +10,7 @@ def _manifest(path: Path) -> Path:
         "schemaVersion": 2,
         "patch": {
             "version": "v1",
-            "channel": "preview",
+            "channel": "release",
             "route": "INT_STEAM",
             "buildId": "00000000-0000-0000-0000-000000000001",
             "translationFingerprint": "a" * 64,

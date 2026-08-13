@@ -9,7 +9,7 @@ use crate::game::{
     normalize_steam_root,
 };
 
-pub const DEFAULT_CHANNEL: &str = "stable";
+pub const SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Error)]
 pub enum SettingsError {
@@ -25,8 +25,6 @@ pub enum SettingsError {
     LocalLowPathMissing,
     #[error("unsupported settings schema version: {0}")]
     UnsupportedSchema(u32),
-    #[error("unsupported patch channel: {0}")]
-    InvalidChannel(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,16 +33,23 @@ pub struct AppSettings {
     pub schema_version: u32,
     pub steam_game_root: Option<PathBuf>,
     pub locallow_root: Option<PathBuf>,
-    pub channel: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacySettingsV1 {
+    steam_game_root: Option<PathBuf>,
+    locallow_root: Option<PathBuf>,
+    #[serde(default, rename = "channel")]
+    _channel: Option<String>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: SETTINGS_SCHEMA_VERSION,
             steam_game_root: None,
             locallow_root: None,
-            channel: DEFAULT_CHANNEL.into(),
         }
     }
 }
@@ -54,7 +59,24 @@ impl AppSettings {
         if !path.is_file() {
             return Ok(Self::default());
         }
-        let settings: Self = serde_json::from_slice(&fs::read(path)?)?;
+        let raw = fs::read(path)?;
+        let value: serde_json::Value = serde_json::from_slice(&raw)?;
+        let schema_version = value
+            .get("schemaVersion")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32;
+        let settings = match schema_version {
+            1 => {
+                let legacy: LegacySettingsV1 = serde_json::from_slice(&raw)?;
+                Self {
+                    schema_version: SETTINGS_SCHEMA_VERSION,
+                    steam_game_root: legacy.steam_game_root,
+                    locallow_root: legacy.locallow_root,
+                }
+            }
+            SETTINGS_SCHEMA_VERSION => serde_json::from_slice(&raw)?,
+            other => return Err(SettingsError::UnsupportedSchema(other)),
+        };
         settings.validate()?;
         Ok(settings)
     }
@@ -74,11 +96,8 @@ impl AppSettings {
     }
 
     pub fn validate(&self) -> Result<(), SettingsError> {
-        if self.schema_version != 1 {
+        if self.schema_version != SETTINGS_SCHEMA_VERSION {
             return Err(SettingsError::UnsupportedSchema(self.schema_version));
-        }
-        if !matches!(self.channel.as_str(), "stable" | "preview") {
-            return Err(SettingsError::InvalidChannel(self.channel.clone()));
         }
         Ok(())
     }
@@ -90,14 +109,6 @@ impl AppSettings {
 
     pub fn set_locallow_root(&mut self, path: &Path) -> Result<(), SettingsError> {
         self.locallow_root = Some(normalize_locallow_root(path)?);
-        Ok(())
-    }
-
-    pub fn set_channel(&mut self, channel: &str) -> Result<(), SettingsError> {
-        if !matches!(channel, "stable" | "preview") {
-            return Err(SettingsError::InvalidChannel(channel.into()));
-        }
-        self.channel = channel.into();
         Ok(())
     }
 
@@ -165,7 +176,6 @@ mod tests {
             locallow_root: Some(PathBuf::from(
                 "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_INT",
             )),
-            channel: "preview".into(),
             ..AppSettings::default()
         };
         settings.save(&path).unwrap();
@@ -173,8 +183,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_channel() {
-        let mut settings = AppSettings::default();
-        assert!(settings.set_channel("nightly").is_err());
+    fn migrates_v1_settings_and_drops_channel() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            br#"{
+  "schemaVersion": 1,
+  "steamGameRoot": "C:/Games/Astral Party",
+  "locallowRoot": "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_INT",
+  "channel": "preview"
+}"#,
+        )
+        .unwrap();
+
+        let settings = AppSettings::load(&path).unwrap();
+        assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert_eq!(
+            settings.steam_game_root,
+            Some(PathBuf::from("C:/Games/Astral Party"))
+        );
+        assert_eq!(
+            settings.locallow_root,
+            Some(PathBuf::from(
+                "C:/Users/Test/AppData/LocalLow/feimo/AstralParty_INT"
+            ))
+        );
+
+        settings.save(&path).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("channel"));
     }
 }

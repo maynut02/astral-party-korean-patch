@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-Channel = Literal["preview", "stable"]
+Channel = Literal["release", "develop"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +24,7 @@ class ReleaseIndexEntry:
         return (self.route, self.game_version, self.revision, self.channel)
 
     def validate(self) -> None:
-        if self.channel not in {"preview", "stable"}:
+        if self.channel not in {"release", "develop"}:
             raise ValueError(f"unsupported release channel: {self.channel}")
         if len(self.catalog_hash) != 32 or any(
             char not in "0123456789abcdef" for char in self.catalog_hash
@@ -99,6 +99,7 @@ class ReleaseIndex:
                 manifest_sha256=item["manifestSha256"],
             )
             for item in data.get("releases", [])
+            if item.get("channel") not in {"preview", "stable"}
         )
         index = cls(releases, int(data.get("schemaVersion", 0)))
         index.as_dict()

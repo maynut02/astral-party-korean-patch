@@ -35,12 +35,10 @@ fn release_index_url() -> &'static str {
 }
 
 fn load_initial_settings(paths: &PatcherPaths) -> Result<AppSettings, CliError> {
-    let existed = paths.settings_path.is_file();
     let mut settings = AppSettings::load(&paths.settings_path)?;
-    let changed = settings.auto_detect_missing();
-    if changed || !existed {
-        settings.save(&paths.settings_path)?;
-    }
+    settings.auto_detect_missing();
+    // Save on startup so legacy schema v1 settings are transparently rewritten as v2.
+    settings.save(&paths.settings_path)?;
     Ok(settings)
 }
 

@@ -18,7 +18,7 @@ def _manifest(tmp_path: Path) -> PatchManifest:
     return PatchManifest(
         patch=PatchMetadata(
             version="3.2.0-r1042.1",
-            channel="preview",
+            channel="release",
             route="INT_STEAM",
             build_id="build-1",
             translation_fingerprint="a" * 64,
@@ -69,9 +69,9 @@ def test_release_index_upserts_exact_route_revision_channel() -> None:
         game_version="3.2.0",
         revision="1042",
         catalog_hash="b" * 32,
-        channel="preview",
-        patch_version="v1",
-        manifest_url="https://example.test/v1/manifest.json",
+        channel="release",
+        patch_version="v3.2.0-r1042-pre",
+        manifest_url="https://example.test/pre/manifest.json",
         manifest_sha256="c" * 64,
     )
     second = ReleaseIndexEntry(
@@ -79,18 +79,50 @@ def test_release_index_upserts_exact_route_revision_channel() -> None:
         game_version="3.2.0",
         revision="1042",
         catalog_hash="b" * 32,
-        channel="preview",
-        patch_version="v2",
-        manifest_url="https://example.test/v2/manifest.json",
+        channel="release",
+        patch_version="v3.2.0-r1042-release",
+        manifest_url="https://example.test/release/manifest.json",
         manifest_sha256="d" * 64,
     )
     index = ReleaseIndex(()).upsert(first).upsert(second)
     assert len(index.releases) == 1
-    assert index.releases[0].patch_version == "v2"
+    assert index.releases[0].patch_version == "v3.2.0-r1042-release"
     assert ReleaseIndex.from_json(index.to_json()) == index
 
     schema = json.loads((ROOT / "schemas/release-index.schema.json").read_text())
     jsonschema.Draft202012Validator(schema).validate(index.as_dict())
+
+
+def test_release_index_drops_legacy_channels_on_read() -> None:
+    raw = json.dumps(
+        {
+            "schemaVersion": 1,
+            "releases": [
+                {
+                    "route": "INT_STEAM",
+                    "gameVersion": "3.2.0",
+                    "revision": "1042",
+                    "catalogHash": "b" * 32,
+                    "channel": "stable",
+                    "patchVersion": "legacy-stable",
+                    "manifestUrl": "https://example.test/stable/manifest.json",
+                    "manifestSha256": "c" * 64,
+                },
+                {
+                    "route": "INT_STEAM",
+                    "gameVersion": "3.2.0",
+                    "revision": "1043",
+                    "catalogHash": "d" * 32,
+                    "channel": "preview",
+                    "patchVersion": "legacy-preview",
+                    "manifestUrl": "https://example.test/preview/manifest.json",
+                    "manifestSha256": "e" * 64,
+                },
+            ],
+        }
+    )
+    index = ReleaseIndex.from_json(raw)
+    assert index.releases == ()
 
 
 def test_manifest_digest_hashes_exact_bytes() -> None:

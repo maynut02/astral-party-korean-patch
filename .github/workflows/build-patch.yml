@@ -35,11 +35,11 @@ on:
         required: true
         type: string
       channel:
-        description: Translation channel
+        description: Distribution channel
         required: true
-        default: preview
+        default: develop
         type: choice
-        options: [preview, stable]
+        options: [release, develop]
       legacy_run_id:
         description: Workflow run ID containing the legacy data.unity3d artifact
         required: true

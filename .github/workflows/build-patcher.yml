@@ -96,4 +96,4 @@ jobs:
             $env:CHECKSUM `
             --target $env:GITHUB_SHA `
             --title "AstralAutoPatcher $env:VERSION" `
-            --notes "Portable Windows x64 AstralAutoPatcher $env:VERSION. Provides a Ratatui/Crossterm TUI with keyboard and mouse controls, supports manifest v2 gzip transport with download and extracted-payload verification, self-registers under LocalAppData, and registers the astral:// protocol."
+            --notes "Portable Windows x64 AstralAutoPatcher $env:VERSION. Provides a Ratatui/Crossterm TUI with keyboard and mouse controls, installs the latest compatible release-channel patch with download/apply progress, supports manifest v2 gzip verification, self-registers under LocalAppData, and registers the astral:// protocol."

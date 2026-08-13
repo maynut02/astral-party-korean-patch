@@ -56,7 +56,7 @@ def test_new_revision_is_reported_as_changed() -> None:
 
 def test_processed_revision_is_unchanged() -> None:
     result = check_revision(
-        _Connection(("fd58ba01bbca5e5e389b5b73240df134", object())),  # type: ignore[arg-type]
+        _Connection(("fd58ba01bbca5e5e389b5b73240df134", object(), True)),  # type: ignore[arg-type]
         route="INT_STEAM",
         game_version="3.2.0",
         client=_client(),
@@ -64,10 +64,20 @@ def test_processed_revision_is_unchanged() -> None:
     assert result.changed is False
 
 
+def test_processed_revision_without_release_is_retried() -> None:
+    result = check_revision(
+        _Connection(("fd58ba01bbca5e5e389b5b73240df134", object(), False)),  # type: ignore[arg-type]
+        route="INT_STEAM",
+        game_version="3.2.0",
+        client=_client(),
+    )
+    assert result.changed is True
+
+
 def test_existing_revision_rejects_catalog_hash_change() -> None:
     with pytest.raises(RevisionConflictError, match="catalog hash changed"):
         check_revision(
-            _Connection(("0" * 32, object())),  # type: ignore[arg-type]
+            _Connection(("0" * 32, object(), True)),  # type: ignore[arg-type]
             route="INT_STEAM",
             game_version="3.2.0",
             client=_client(),

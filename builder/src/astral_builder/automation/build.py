@@ -20,7 +20,7 @@ from astral_builder.extract.unity import extract_text_assets
 from astral_builder.game.source import GameSource, GameSourceClient
 from astral_builder.patch.builder import patch_lang_bundle, patch_str_bundle
 from astral_builder.patch.fonts import patch_legacy_font, patch_tmp_font_bundle
-from astral_builder.patch.translations import BuildChannel
+from astral_builder.patch.translations import DistributionChannel
 from astral_builder.release.manifest import (
     ManifestFile,
     PatchManifest,
@@ -169,7 +169,7 @@ def build_patch(
     output_dir: str | Path,
     asset_base_url: str,
     patch_version: str,
-    channel: BuildChannel,
+    channel: DistributionChannel,
     git_commit: str | None = None,
     github_run_id: str | None = None,
     legacy_data_path: str | Path | None,

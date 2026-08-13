@@ -1,10 +1,8 @@
 # 운영 설정 및 배포 절차
 
-이 문서는 새 GitHub 저장소를 연결한 뒤 Astral Party 한국어 패치 자동화 파이프라인을 실제 운영하는 절차를 정리합니다.
+이 문서는 Astral Party 한국어 패치의 INT_STEAM 자동화와 AstralAutoPatcher 운영 절차를 정리합니다.
 
 ## 1. GitHub 저장소 설정
-
-로컬 `main` 브랜치를 새 GitHub 저장소에 연결하고 push합니다.
 
 필수 Repository Variable:
 
@@ -27,111 +25,131 @@ Steam 비밀번호를 GitHub Actions에 저장하지 않습니다. 최초 1회 W
 ./scripts/bootstrap-steam-token.sh
 ```
 
-Steam 모바일 앱에서 QR 로그인을 승인하면 다음 파일이 생성됩니다.
-
-```text
-.secrets/steam-refresh-token.txt
-```
-
-`.secrets/`는 Git에서 제외되어 있습니다. GitHub CLI가 연결된 환경에서는 다음처럼 등록할 수 있습니다.
+Steam 모바일 앱에서 QR 로그인을 승인하면 `.secrets/steam-refresh-token.txt`가 생성됩니다. `.secrets/`는 Git에서 제외되어 있습니다.
 
 ```bash
 gh secret set STEAM_REFRESH_TOKEN < .secrets/steam-refresh-token.txt
 gh secret set STEAM_USERNAME
 ```
 
-Steam에서 token을 폐기하거나 만료된 경우 같은 절차로 새 token을 생성해 Secret만 교체합니다.
+## 3. Release / Develop 정책
 
-## 3. Preview 자동 파이프라인
+패치의 distribution channel은 다음 두 개입니다.
 
-`.github/workflows/check-game.yml`은 6시간마다 실행되며 수동 실행도 가능합니다.
+- `release`: 일반 사용자가 AstralAutoPatcher로 받는 배포 채널.
+- `develop`: 내부 개발/검증용 채널. 일반 AutoPatcher는 조회하지 않음.
 
-새 revision이 없으면 check에서 종료합니다. 새 revision이 확인되면 다음 순서가 자동으로 이어집니다.
+**어느 채널에서도 승인되지 않은 번역은 패치에 포함하지 않습니다.** 현재 source fingerprint와 일치하고 상태가 `approved`인 번역만 적용하며, 신규/미번역/draft/reviewed/needs_review 항목은 게임 원문을 유지합니다.
 
-```text
-check-game
-  -> sync-game
-  -> fetch-legacy-data
-  -> build-patch (preview)
-  -> independent validation
-  -> transactional GitHub Release
-  -> patch-index/release-index.json update
-  -> Neon build status = released
-```
+`release` 채널에는 생성 목적에 따라 두 종류의 tag가 있습니다.
 
-자동 preview tag 형식:
+자동 호환판:
 
 ```text
-v<game-version>-r<revision>-preview.<github-run-number>
+v<game-version>-r<revision>-pre
 ```
 
 예:
 
 ```text
-v3.2.0-r116-preview.42
+v3.2.0-r117-pre
 ```
 
-Preview build는 기존 한국어 번역이 있으면 적용하며 source가 변경돼 review가 필요한 번역도 preview에서는 확인 목적으로 사용할 수 있습니다.
+새 게임 revision 감지 직후 현재까지 승인된 번역만 사용해 즉시 생성합니다. 번역 완료 여부와 관계없이 새 게임과 호환되는 패치를 제공하는 것이 목적입니다.
 
-## 4. Stable 수동 승격
-
-Stable은 자동으로 배포하지 않습니다. 번역 검수 후 `Release Stable Patch` workflow를 수동 실행합니다.
-
-입력:
-
-- `revision_id`: Neon에 저장된 processed game revision UUID.
-- `patch_version`: 한 번 사용하면 바꾸지 않는 GitHub Release tag.
-
-권장 예:
+수동 정식판:
 
 ```text
-v3.2.0-r116-stable.1
+v<game-version>-r<revision>-release
 ```
 
-Stable build는 현재 source fingerprint와 일치하는 `approved` 번역만 적용합니다.
+같은 revision에 정식 수정판이 추가로 필요하면 자동으로 다음 이름을 사용합니다.
 
-Stable workflow는 내부적으로 Steam `data.unity3d` 취득, build, 독립 검증, Release, release index 갱신을 한 번에 수행합니다.
+```text
+v3.2.0-r117-release.2
+v3.2.0-r117-release.3
+```
 
-## 5. Patch Release의 불변성
+같은 revision/channel의 release index entry는 새 배포가 이전 entry를 교체합니다. 따라서 `-release`가 생성되면 일반 AutoPatcher는 더 이상 같은 revision의 `-pre`를 선택하지 않습니다.
 
-Patch Release는 draft 상태에서 생성합니다. 모든 patch asset과 `manifest.json` 업로드가 성공해야 공개 상태로 전환됩니다.
+## 4. Check Game 자동 파이프라인
 
-Patch manifest schema v2부터 각 Unity payload는 원본 형식을 바꾸지 않고 개별 `.gz` transport asset으로 배포합니다. manifest에는 압축본의 `downloadSize`/`downloadSha256`과 압축 해제 후 실제 설치 파일의 `size`/`sha256`을 모두 기록합니다. Patcher는 다운로드 검증 후 staging에서 gzip을 해제하면서 최종 payload를 다시 검증한 뒤 설치합니다.
+`.github/workflows/check-game.yml`에는 GitHub 자체 `schedule`을 두지 않습니다. 외부 GCP Cloud Scheduler가 GitHub Actions `workflow_dispatch`를 호출하는 방식으로 운영합니다. GitHub Actions 화면에서 수동 실행하는 것도 가능합니다.
 
-업로드 중 오류가 발생하면 draft Release와 tag를 정리합니다. 이미 공개된 동일 tag Release는 덮어쓰지 않습니다.
+중복 실행은 `check-game-int-steam` concurrency group으로 직렬화합니다.
 
-`patch-index` Release의 `release-index.json`만 의도적으로 mutable하며, Patcher가 compatible patch를 찾는 작은 index 역할을 합니다.
+새 revision이 없고 해당 revision에 이미 released `release` build가 있으면 check에서 종료합니다. revision이 새로 발견됐거나 sync 이후 build/release가 완료되지 않은 상태라면 같은 revision도 다시 처리해 다음 Scheduler 주기에서 자동 재시도합니다.
 
-Patcher에서 사용할 index URL은 저장소가 확정되면 다음 형식입니다.
+```text
+GCP Cloud Scheduler
+  -> Check Game
+  -> sync-game
+  -> fetch-legacy-data
+  -> build-patch (channel=release)
+  -> approved 번역만 적용
+  -> independent validation
+  -> v<game>-r<revision>-pre Release
+  -> patch-index/release-index.json update
+  -> Neon build status = released
+```
+
+## 5. 번역 완료 후 정식 Release
+
+번역 승인 자체는 Release를 만들지 않습니다. 번역 작업이 완료됐다고 판단한 시점에 GitHub Actions의 `Release Patch` workflow 버튼을 직접 누릅니다.
+
+이 workflow에는 입력값이 없습니다.
+
+1. Neon에서 최신 processed `INT_STEAM` revision을 찾음.
+2. 해당 revision의 모든 translation unit이 현재 source fingerprint 기준 `approved`인지 검사하며 하나라도 미완료면 중단.
+3. `v<game>-r<revision>-release` tag를 선택함.
+4. 동일 tag가 이미 있으면 `.2`, `.3` 순으로 사용 가능한 다음 tag를 선택함.
+5. Legacy data 취득.
+6. `approved` 번역만 사용해 빌드/검증.
+7. immutable GitHub Release 배포.
+8. `release-index.json`의 해당 release entry를 교체.
+
+즉 승인 버튼을 누를 때마다 빌드하지 않고, 운영자가 원하는 시점에만 정식 패치를 생성합니다.
+
+## 6. Patch Release와 release index
+
+Patch Release는 draft 상태에서 생성합니다. 모든 patch asset과 `manifest.json` 업로드가 성공해야 공개 상태로 전환됩니다. 업로드 중 오류가 발생하면 draft Release와 tag를 정리하며 이미 공개된 동일 tag는 덮어쓰지 않습니다.
+
+`-pre` tag 또는 `develop` channel Release는 GitHub prerelease로 표시합니다. 정식 `-release`, `-release.2` 등은 일반 Release입니다.
+
+Patch manifest schema v2의 각 Unity payload는 개별 `.gz` transport asset으로 배포합니다. manifest에는 압축본의 `downloadSize`/`downloadSha256`과 압축 해제 후 실제 설치 파일의 `size`/`sha256`을 모두 기록합니다.
+
+`patch-index` Release의 `release-index.json`만 의도적으로 mutable하며 Patcher가 compatible patch를 찾는 작은 index 역할을 합니다. 새 channel 체계로 처음 갱신할 때 과거 `preview/stable` index entry는 제거하고 새 `release/develop` entry만 기록합니다.
 
 ```text
 https://github.com/<owner>/<repo>/releases/download/patch-index/release-index.json
 ```
 
-`Build Patcher` workflow는 이 URL을 `ASTRAL_PATCH_INDEX_URL` compile-time 값으로 `AstralAutoPatcher.exe`에 자동 내장합니다. URI에서는 외부 download URL을 받지 않으며 Patcher가 이 고정 release index만 조회합니다.
+`Build Patcher` workflow는 이 URL을 `ASTRAL_PATCH_INDEX_URL` compile-time 값으로 `AstralAutoPatcher.exe`에 자동 내장합니다.
 
-## 6. AstralAutoPatcher portable EXE
+## 7. AstralAutoPatcher portable EXE
 
-`Build Patcher` workflow는 Node, Vite, Tauri, NSIS 없이 `patcher/Cargo.toml`의 version을 읽고 Windows runner에서 다음 검증을 수행합니다.
+`Build Patcher` workflow는 `patcher/Cargo.toml`의 version을 읽고 Windows runner에서 다음 검증을 수행합니다.
 
 ```text
 cargo fmt --all -- --check
-cargo test --all-targets --all-features
-cargo clippy --all-targets --all-features -- -D warnings
-cargo build --release --bin AstralAutoPatcher
+cargo test --locked --all-targets --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo build --locked --release --bin AstralAutoPatcher
 ```
 
-산출물은 단일 `AstralAutoPatcher.exe`와 `.sha256` 파일입니다. 최초 실행 위치는 자유롭습니다. 프로그램은 자신을 다음 위치에 복사하고 사용자별 `astral://` protocol handler를 등록합니다. 관리자 권한은 요구하지 않습니다.
+산출물은 단일 `AstralAutoPatcher.exe`와 `.sha256` 파일입니다. 프로그램은 자신을 다음 위치에 복사하고 사용자별 `astral://` protocol handler를 등록합니다.
 
 ```text
 %LOCALAPPDATA%\AstralAutoPatcher\AstralAutoPatcher.exe
 ```
 
-같은 폴더에 `settings.json`, `installed.json`, staging/backup 상태를 관리합니다. 최초 실행 시 Steam과 LocalLow 경로를 자동 감지하고, 프로그램 설정 메뉴에서 두 경로를 각각 수정할 수 있습니다. 패치가 설치된 동안에는 ownership 안전성을 위해 경로 변경을 차단합니다.
+같은 폴더에 `settings.json`, `installed.json`, staging/backup 상태를 관리합니다. 최초 실행 시 Steam과 LocalLow 경로를 자동 감지합니다.
 
-Patcher 0.4.0부터 콘솔 UI는 Ratatui/Crossterm 기반 고정 화면 TUI를 사용합니다. 방향키/Enter/Esc와 마우스 클릭·스크롤을 지원하며, 경로 입력은 TUI 내부에서 키보드 입력과 붙여넣기를 처리합니다. 메인 상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 패치 채널, 게임 버전, Catalog hash, 설치된 패치 버전을 항상 표시합니다. 0.4.1에서는 상태/설정 항목을 고정 컬럼으로 정렬하고 숫자키 메뉴 단축키를 제거했으며, 설치 시 선택된 patch version과 release asset/적용 파일을 표시하고 실제 전송 바이트 및 파일 적용 바이트를 기준으로 다운로드/적용 진행률을 각각 표시합니다.
+Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 0.4.1부터 설치 대상 patch version/asset 목록과 다운로드·적용 진행률을 표시합니다. 0.5.0부터 사용자 channel 선택을 제거하고 항상 `release` channel의 현재 게임 version/catalog에 맞는 최신 entry만 설치합니다. 기존 settings schema v1의 `stable/preview` 값은 무시하고 경로 설정만 보존해 schema v2로 마이그레이션합니다.
 
-지원 URI는 고정 allowlist입니다.
+상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 게임 버전, Catalog hash, 설치된 패치 버전을 표시합니다.
+
+지원 URI:
 
 ```text
 astral://install
@@ -139,53 +157,45 @@ astral://remove
 astral://settings
 ```
 
-`astral://install`과 `astral://remove`로 실행해도 즉시 작업 로그만 출력하지 않고 먼저 동일한 TUI 상태 화면을 렌더링합니다. 따라서 오류가 발생해도 Patcher 버전, 설치 경로, 게임 버전, Catalog hash, 채널, 설치 상태를 한 화면에서 확인할 수 있습니다. `astral://settings`는 같은 상태 영역을 유지한 채 설정 메뉴를 엽니다.
+## 8. 게임 버전 상승
 
-기본 실행은 Actions artifact만 생성합니다. `publish=true`로 수동 실행하면 다음 tag로 immutable GitHub Release를 생성합니다.
+revision은 자동 감지하지만 게임 version 자체는 `GAME_VERSION` Repository Variable로 관리합니다.
 
-```text
-patcher-v<version>
-```
-
-## 7. 게임 버전 상승
-
-현재 revision은 자동 감지하지만 게임 version 자체는 `GAME_VERSION` Repository Variable로 관리합니다.
-
-예를 들어 게임이 `3.2.0`에서 `3.3.0`으로 올라가면:
+게임이 `3.2.0`에서 `3.3.0`으로 올라가면 다음 값만 변경합니다.
 
 ```text
 GAME_VERSION=3.3.0
 ```
 
-으로 변경합니다. 이후 revision/catalog/bundle 탐색은 다시 자동으로 진행됩니다.
+이후 revision/catalog/bundle 탐색은 다시 자동으로 진행됩니다.
 
-## 8. Neon migration
+## 9. Neon migration
 
-`check-game.yml`과 `sync-game.yml`은 DB 작업 전에 migration runner를 실행합니다.
-
-Migration 파일은 적용 후 내용을 수정하지 않고 새 번호 파일을 추가합니다.
+`check-game.yml`, `sync-game.yml`, `release.yml`은 필요한 DB 작업 전에 migration runner를 실행합니다.
 
 현재 migration:
 
 ```text
 0001_initial.sql
 0002_rebuildable_builds.sql
+0003_release_channels.sql
+0004_approve_legacy_imports.sql
 ```
+
+`0003_release_channels.sql`은 기존 `preview/stable` build 기록을 모두 `develop` 이력으로 이동합니다. 기존 manifest의 channel 값은 새 protocol과 다르므로 과거 배포를 `release`로 가장하지 않고 현재 revision도 새 `-pre`를 다시 생성하게 합니다.
+
+`0004_approve_legacy_imports.sql`은 기존 정식 한글패치에서 `legacy-import` actor로 이관됐고 이후 다른 수정 이력이 없는 draft 번역만 일회성으로 `approved` 승격합니다. 일반 draft 번역은 건드리지 않습니다.
 
 Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 접속하지 않습니다.
 
-## 9. 최초 운영 체크리스트
+## 10. 운영 체크리스트
 
-1. 새 GitHub 저장소를 만들고 `main`을 push.
-2. Neon database를 만들고 `NEON_DATABASE_URL`, `NEON_DATABASE_URL_DIRECT` 등록.
-3. `GAME_VERSION` 등록.
-4. `bootstrap-steam-token.sh`로 refresh token 생성.
-5. `STEAM_USERNAME`, `STEAM_REFRESH_TOKEN` 등록.
-6. `CI` workflow 통과 확인.
-7. `Check Game` workflow 수동 실행.
-8. 이미 처리된 revision을 다시 Preview로 빌드/배포할 때는 입력값 없이 `Release Preview Patch`를 수동 실행. 이 workflow는 최신 processed `INT_STEAM` revision을 Neon에서 조회하고 `v<game-version>-r<revision>-preview.manual.<run-number>` tag를 자동 생성한 뒤 Legacy fetch → Build Patch → Release Patch를 수행합니다.
-9. Preview Release와 `patch-index` 생성 확인.
-10. `Build Patcher`로 생성한 `AstralAutoPatcher.exe`를 실행해 self-registration, `astral://` URI, Steam/LocalLow 경로 탐지, install/remove를 실게임 검증.
-11. 검수 완료 후 `Release Stable Patch`를 수동 실행.
-
-실제 credential과 GitHub repository가 연결되기 전까지 로컬 구현만으로는 6~10번의 hosted integration 검증을 수행할 수 없습니다.
+1. `main` push 및 CI 통과 확인.
+2. `GAME_VERSION`, Neon Secrets, Steam Secrets 확인.
+3. GCP Cloud Scheduler에서 `Check Game` workflow dispatch 호출 설정.
+4. `Check Game`을 한 번 수동 실행해 migration과 revision check 확인.
+5. 현재 revision에 새 `-pre`가 필요한데 이미 revision이 processed 상태라면 번역 상태를 확인한 뒤 `Release Patch` 버튼으로 현재 revision의 정식 release를 생성.
+6. `patch-index/release-index.json`에 `channel=release` entry가 생성됐는지 확인.
+7. `Build Patcher`로 `AstralAutoPatcher.exe`를 만들고 install/update/remove 및 `astral://` URI를 실게임에서 검증.
+8. 이후 게임 revision 변경은 GCP Scheduler -> `Check Game` -> `-pre` 자동 생성으로 운영.
+9. 번역 완료 시에만 `Release Patch` 버튼으로 정식 `-release`를 생성.

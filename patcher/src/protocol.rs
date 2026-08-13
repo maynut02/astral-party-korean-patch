@@ -15,6 +15,8 @@ pub enum ProtocolError {
     InvalidUrl(&'static str, String),
     #[error("unsafe relative path: {0}")]
     UnsafePath(String),
+    #[error("unsupported patch channel: {0}")]
+    UnsupportedChannel(String),
     #[error("unsupported transport compression: {0}")]
     UnsupportedCompression(String),
     #[error("manifest contains no files")]
@@ -139,6 +141,11 @@ impl PatchManifest {
         if self.files.is_empty() {
             return Err(ProtocolError::EmptyManifest);
         }
+        if !matches!(self.patch.channel.as_str(), "release" | "develop") {
+            return Err(ProtocolError::UnsupportedChannel(
+                self.patch.channel.clone(),
+            ));
+        }
         if !valid_sha256(&self.patch.translation_fingerprint) {
             return Err(ProtocolError::InvalidSha256("translationFingerprint"));
         }
@@ -198,6 +205,9 @@ impl ReleaseIndex {
             {
                 return Err(ProtocolError::UnsafePath("empty release field".into()));
             }
+            if !matches!(entry.channel.as_str(), "release" | "develop") {
+                return Err(ProtocolError::UnsupportedChannel(entry.channel.clone()));
+            }
             if !valid_catalog_hash(&entry.catalog_hash) {
                 return Err(ProtocolError::InvalidCatalogHash("release.catalogHash"));
             }
@@ -244,7 +254,7 @@ mod tests {
             schema_version: 2,
             patch: PatchMetadata {
                 version: "v1".into(),
-                channel: "preview".into(),
+                channel: "release".into(),
                 route: "INT_STEAM".into(),
                 build_id: "build-1".into(),
                 translation_fingerprint: "a".repeat(64),
@@ -277,6 +287,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_distribution_channel() {
+        let mut bad = manifest();
+        bad.patch.channel = "preview".into();
+        assert!(matches!(
+            bad.validate(),
+            Err(ProtocolError::UnsupportedChannel(channel)) if channel == "preview"
+        ));
+    }
+
+    #[test]
     fn rejects_old_manifest_schema() {
         let mut bad = manifest();
         bad.schema_version = 1;
@@ -295,7 +315,7 @@ mod tests {
                 game_version: "3.2.0".into(),
                 revision: "1042".into(),
                 catalog_hash: "b".repeat(32),
-                channel: "stable".into(),
+                channel: "release".into(),
                 patch_version: "v1".into(),
                 manifest_url: "https://example.test/manifest.json".into(),
                 manifest_sha256: "d".repeat(64),
@@ -303,12 +323,12 @@ mod tests {
         };
         assert!(
             index
-                .resolve("INT_STEAM", "3.2.0", &"b".repeat(32), "stable")
+                .resolve("INT_STEAM", "3.2.0", &"b".repeat(32), "release")
                 .is_some()
         );
         assert!(
             index
-                .resolve("INT_STEAM", "3.2.0", &"e".repeat(32), "stable")
+                .resolve("INT_STEAM", "3.2.0", &"e".repeat(32), "release")
                 .is_none()
         );
     }

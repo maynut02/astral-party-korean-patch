@@ -45,8 +45,8 @@
           },
           "channel": {
             "enum": [
-              "preview",
-              "stable"
+              "release",
+              "develop"
             ]
           },
           "patchVersion": {

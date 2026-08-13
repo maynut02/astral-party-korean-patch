@@ -1,9 +1,11 @@
 name: Check Game
 
 on:
-  schedule:
-    - cron: "17 */6 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: check-game-int-steam
+  cancel-in-progress: false
 
 permissions:
   actions: read
@@ -53,21 +55,21 @@ jobs:
     uses: ./.github/workflows/fetch-legacy-data.yml
     secrets: inherit
 
-  build-preview:
+  build-pre:
     needs: [sync, legacy]
     uses: ./.github/workflows/build-patch.yml
     with:
       revision_id: ${{ needs.sync.outputs.revision_id }}
-      patch_version: ${{ format('v{0}-r{1}-preview.{2}', needs.sync.outputs.game_version, needs.sync.outputs.revision, github.run_number) }}
-      channel: preview
+      patch_version: ${{ format('v{0}-r{1}-pre', needs.sync.outputs.game_version, needs.sync.outputs.revision) }}
+      channel: release
       legacy_run_id: ${{ needs.legacy.outputs.run_id }}
       legacy_artifact_name: ${{ needs.legacy.outputs.artifact_name }}
     secrets: inherit
 
-  release-preview:
-    needs: build-preview
+  release-pre:
+    needs: build-pre
     uses: ./.github/workflows/release-patch.yml
     with:
       build_run_id: ${{ github.run_id }}
-      artifact_name: ${{ needs.build-preview.outputs.artifact_name }}
+      artifact_name: ${{ needs.build-pre.outputs.artifact_name }}
     secrets: inherit

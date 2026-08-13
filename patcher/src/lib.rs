@@ -29,8 +29,9 @@ pub use protocol::{
 };
 pub use service::{
     DEFAULT_ROUTE, InstallOutcome, InstallProgress, InstalledPatchInfo, PatchFileInfo,
-    PatcherPaths, ServiceError, install_latest_compatible, install_latest_compatible_with_progress,
-    install_roots, installed_patch_info, load_ownership, remove_installed_patch,
+    PatcherPaths, RELEASE_CHANNEL, ServiceError, install_latest_compatible,
+    install_latest_compatible_with_progress, install_roots, installed_patch_info, load_ownership,
+    remove_installed_patch,
 };
 pub use settings::{AppSettings, SettingsError};
 pub use uri::{URI_SCHEME, UriAction, UriError};

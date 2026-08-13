@@ -31,8 +31,8 @@
         },
         "channel": {
           "enum": [
-            "preview",
-            "stable"
+            "release",
+            "develop"
           ]
         },
         "route": {

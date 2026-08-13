@@ -368,7 +368,7 @@ mod tests {
                 game_version: "3.2.0".into(),
                 revision: "1042".into(),
                 catalog_hash: "b".repeat(32),
-                channel: "stable".into(),
+                channel: "release".into(),
                 patch_version: "v1".into(),
                 manifest_url: "https://example.test/manifest.json".into(),
                 manifest_sha256: "c".repeat(64),
@@ -376,7 +376,7 @@ mod tests {
         };
         assert!(
             index
-                .resolve("INT_STEAM", "3.2.0", &"b".repeat(32), "stable")
+                .resolve("INT_STEAM", "3.2.0", &"b".repeat(32), "release")
                 .is_some()
         );
     }
@@ -387,7 +387,7 @@ mod tests {
             schema_version: 2,
             patch: PatchMetadata {
                 version: "v1".into(),
-                channel: "preview".into(),
+                channel: "release".into(),
                 route: "INT_STEAM".into(),
                 build_id: "build".into(),
                 translation_fingerprint: "a".repeat(64),

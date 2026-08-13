@@ -50,7 +50,7 @@ def test_parser_exposes_build_command() -> None:
         ]
     )
     assert args.command == "build"
-    assert args.channel == "preview"
+    assert args.channel == "release"
 
 
 def test_parser_exposes_validate_build_command() -> None:

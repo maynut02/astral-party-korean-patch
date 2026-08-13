@@ -174,13 +174,12 @@ Patcher는 Neon DB에 직접 접근하지 않는다.
 
 Workflow 분리:
 
-1. `check-game.yml`: scheduled revision check + 새 revision Preview orchestration
+1. `check-game.yml`: 외부 scheduler가 dispatch하는 revision check + 새 revision `-pre` orchestration
 2. `sync-game.yml`: catalog resolve/download/extract/DB sync
-3. `build-patch.yml`: reusable snapshot/build/validate
+3. `build-patch.yml`: reusable snapshot/build/validate (`release`/`develop` distribution channel)
 4. `release-patch.yml`: reusable immutable Patch Release + release index 갱신
-5. `release-preview.yml`: 입력값 없이 최신 processed revision을 재빌드/Preview 배포
-6. `release-stable.yml`: 수동 Stable build/release orchestration
-7. `build-patcher.yml`: patcher build/release
+5. `release.yml`: 입력값 없이 최신 processed revision의 정식 `-release` 수동 build/release
+6. `build-patcher.yml`: patcher build/release
 
 운영 흐름:
 
@@ -191,13 +190,14 @@ revision changed
   -> extract sources
   -> Neon sync
   -> translation snapshot
-  -> preview patch
+  -> approved translations only
+  -> release-channel `-pre` patch
   -> validate
   -> manifest
   -> GitHub Release
 ```
 
-Stable 승격은 초기에 수동 승인으로 두고 충분히 안정화된 후 자동 조건으로 전환한다.
+번역 승인 자체는 release를 트리거하지 않는다. 번역 완료 시 운영자가 `Release Patch`를 수동 실행해 같은 revision의 `-release`를 만들고 release index의 `release` entry를 교체한다. 개발 검증용 `develop` channel도 승인된 번역만 사용한다.
 
 ## 5. DB 동기화 규칙
 

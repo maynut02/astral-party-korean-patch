@@ -47,7 +47,7 @@ def begin_build(
     git_commit: str | None = None,
     github_run_id: str | None = None,
 ) -> BuildRecord:
-    if channel not in {"preview", "stable"}:
+    if channel not in {"release", "develop"}:
         raise ValueError(f"unsupported build channel: {channel}")
     if len(translation_fingerprint) != 64:
         raise ValueError("translation_fingerprint must be SHA-256 hex")

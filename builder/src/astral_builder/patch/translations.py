@@ -9,9 +9,9 @@ from astral_builder.formats.lang_xml import decode_lang_xml, encode_lang_xml
 from astral_builder.formats.model import SourceStrings
 
 
-class BuildChannel(StrEnum):
-    PREVIEW = "preview"
-    STABLE = "stable"
+class DistributionChannel(StrEnum):
+    RELEASE = "release"
+    DEVELOP = "develop"
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,11 +21,10 @@ class PatchStats:
     skipped_units: int
 
 
-def select_translation(unit: SnapshotUnit, channel: BuildChannel) -> str | None:
-    if not unit.translation:
-        return None
-    if channel is BuildChannel.PREVIEW:
-        return unit.translation
+def select_translation(unit: SnapshotUnit, channel: DistributionChannel) -> str | None:
+    # Distribution channel never weakens the translation approval policy.
+    # Only translations approved for the current source fingerprint may enter a patch.
+    _ = channel
     if unit.state is TranslationState.APPROVED:
         return unit.translation
     return None
@@ -49,7 +48,7 @@ def patch_lang_payload(
     snapshot: TranslationSnapshot,
     *,
     namespace: str = "lang",
-    channel: BuildChannel = BuildChannel.PREVIEW,
+    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> tuple[bytes, PatchStats]:
     source = decode_lang_xml(source_payload)
     units = _snapshot_map(snapshot, kind="lang", namespace=namespace)
@@ -94,7 +93,7 @@ def patch_str_payload(
     *,
     namespace: str,
     target_field: str,
-    channel: BuildChannel = BuildChannel.PREVIEW,
+    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> tuple[bytes, PatchStats]:
     if not source_payload:
         return b"", PatchStats(total_units=0, translated_units=0, skipped_units=0)

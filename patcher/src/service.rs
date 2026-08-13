@@ -13,6 +13,7 @@ use crate::network::{NetworkError, ReleaseClient, StageProgress};
 use crate::protocol::PatchManifest;
 
 pub const DEFAULT_ROUTE: &str = "INT_STEAM";
+pub const RELEASE_CHANNEL: &str = "release";
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -185,16 +186,14 @@ fn ensure_manifest_compatible(
 
 pub fn install_latest_compatible(
     release_index_url: &str,
-    channel: &str,
     paths: &PatcherPaths,
     game: &GameInstallation,
 ) -> Result<InstallOutcome, ServiceError> {
-    install_latest_compatible_with_progress(release_index_url, channel, paths, game, |_| {})
+    install_latest_compatible_with_progress(release_index_url, paths, game, |_| {})
 }
 
 pub fn install_latest_compatible_with_progress<F>(
     release_index_url: &str,
-    channel: &str,
     paths: &PatcherPaths,
     game: &GameInstallation,
     mut progress: F,
@@ -212,7 +211,7 @@ where
         DEFAULT_ROUTE,
         &game.catalog.version,
         &game.catalog.hash,
-        channel,
+        RELEASE_CHANNEL,
     )?;
     ensure_manifest_compatible(&manifest, game, DEFAULT_ROUTE)?;
 
@@ -341,7 +340,7 @@ mod tests {
             schema_version: 2,
             patch: PatchMetadata {
                 version: version.into(),
-                channel: "preview".into(),
+                channel: "release".into(),
                 route: DEFAULT_ROUTE.into(),
                 build_id: "build".into(),
                 translation_fingerprint: "a".repeat(64),

@@ -1,4 +1,4 @@
-name: Release Patch
+name: Publish Patch
 
 on:
   workflow_call:
@@ -7,16 +7,6 @@ on:
         required: true
         type: string
       artifact_name:
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      build_run_id:
-        description: Workflow run ID that produced the validated patch artifact
-        required: true
-        type: string
-      artifact_name:
-        description: Validated patch artifact name
         required: true
         type: string
 
@@ -115,7 +105,7 @@ jobs:
             --title "$TAG"
             --notes "Astral Party ${GAME_VERSION} revision ${REVISION}"
           )
-          if [ "$CHANNEL" = "preview" ]; then
+          if [ "$CHANNEL" = "develop" ] || [[ "$TAG" == *-pre ]]; then
             args+=(--prerelease)
           fi
           cleanup() {

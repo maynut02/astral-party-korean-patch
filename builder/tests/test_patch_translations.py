@@ -2,7 +2,7 @@ from astral_builder.database.snapshot import SnapshotUnit, make_snapshot
 from astral_builder.formats.astral_str import StrDocument, StrEntry, decode_str, encode_str
 from astral_builder.formats.model import SourceStrings
 from astral_builder.patch.translations import (
-    BuildChannel,
+    DistributionChannel,
     patch_lang_payload,
     patch_str_payload,
 )
@@ -41,26 +41,7 @@ def _snapshot(*units: SnapshotUnit):
     )
 
 
-def test_preview_lang_uses_existing_translation_even_if_needs_review() -> None:
-    snapshot = _snapshot(
-        _snapshot_unit(
-            kind="lang",
-            namespace="lang",
-            key="A",
-            translation="번역",
-            fresh=False,
-        )
-    )
-    payload, stats = patch_lang_payload(
-        '<resources><string name="A">English</string></resources>',
-        snapshot,
-        channel=BuildChannel.PREVIEW,
-    )
-    assert "번역" in payload.decode()
-    assert stats.translated_units == 1
-
-
-def test_stable_lang_only_uses_fresh_approved_translation() -> None:
+def test_release_lang_only_uses_fresh_approved_translation() -> None:
     snapshot = _snapshot(
         _snapshot_unit(
             kind="lang",
@@ -75,16 +56,47 @@ def test_stable_lang_only_uses_fresh_approved_translation() -> None:
             translation="초안",
             approved=False,
         ),
+        _snapshot_unit(
+            kind="lang",
+            namespace="lang",
+            key="C",
+            translation="이전 소스 번역",
+            fresh=False,
+        ),
     )
     payload, stats = patch_lang_payload(
-        '<resources><string name="A">A</string><string name="B">B</string></resources>',
+        (
+            '<resources><string name="A">A</string><string name="B">B</string>'
+            '<string name="C">C</string></resources>'
+        ),
         snapshot,
-        channel=BuildChannel.STABLE,
+        channel=DistributionChannel.RELEASE,
     )
     text = payload.decode()
     assert "승인" in text
     assert "초안" not in text
+    assert "이전 소스 번역" not in text
     assert stats.translated_units == 1
+
+
+def test_develop_channel_keeps_same_approval_policy() -> None:
+    snapshot = _snapshot(
+        _snapshot_unit(
+            kind="lang",
+            namespace="lang",
+            key="A",
+            translation="초안",
+            approved=False,
+        )
+    )
+    payload, stats = patch_lang_payload(
+        '<resources><string name="A">English</string></resources>',
+        snapshot,
+        channel=DistributionChannel.DEVELOP,
+    )
+    assert "초안" not in payload.decode()
+    assert "English" in payload.decode()
+    assert stats.translated_units == 0
 
 
 def test_str_patch_replaces_only_configured_language_field() -> None:
