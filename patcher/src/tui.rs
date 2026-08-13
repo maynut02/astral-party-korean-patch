@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -9,18 +10,23 @@ use crossterm::execute;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Cell, Gauge, HighlightSpacing, List, ListItem, ListState, Paragraph, Row,
+    Table, TableState, Wrap,
+};
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::install::ApplyPhase;
 use crate::service::{
-    InstallOutcome, PatcherPaths, install_latest_compatible, install_roots, installed_patch_info,
+    InstallOutcome, InstallProgress, PatchFileInfo, PatcherPaths,
+    install_latest_compatible_with_progress, install_roots, installed_patch_info,
     remove_installed_patch,
 };
 use crate::settings::AppSettings;
 use crate::uri::UriAction;
 
 const MIN_WIDTH: u16 = 72;
-const MIN_HEIGHT: u16 = 24;
+const MIN_HEIGHT: u16 = 28;
 const MAIN_ITEMS: [&str; 4] = ["패치 설치 / 업데이트", "패치 제거", "프로그램 설정", "종료"];
 const RESULT_ITEMS: [&str; 2] = ["메인 메뉴", "종료"];
 
@@ -67,6 +73,31 @@ struct OperationState {
     phase: OperationPhase,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstallUiProgress {
+    patch_version: Option<String>,
+    files: Vec<PatchFileInfo>,
+    download_current: u64,
+    download_total: u64,
+    apply_current: u64,
+    apply_total: u64,
+    status: String,
+}
+
+impl Default for InstallUiProgress {
+    fn default() -> Self {
+        Self {
+            patch_version: None,
+            files: Vec::new(),
+            download_current: 0,
+            download_total: 0,
+            apply_current: 0,
+            apply_total: 0,
+            status: "호환 패치를 확인하는 중입니다...".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitTarget {
     Main(usize),
@@ -92,6 +123,7 @@ struct App {
     result_selected: usize,
     input: String,
     operation: Option<OperationState>,
+    install_progress: InstallUiProgress,
     notice: Option<String>,
     hit_regions: Vec<HitRegion>,
     should_quit: bool,
@@ -117,6 +149,7 @@ impl App {
             result_selected: 0,
             input: String::new(),
             operation: None,
+            install_progress: InstallUiProgress::default(),
             notice: startup_notice,
             hit_regions: Vec::new(),
             should_quit: false,
@@ -134,6 +167,9 @@ impl App {
     }
 
     fn start_operation(&mut self, kind: OperationKind, protocol_request: bool) {
+        if kind == OperationKind::Install {
+            self.install_progress = InstallUiProgress::default();
+        }
         self.operation = Some(OperationState {
             kind,
             protocol_request,
@@ -158,49 +194,73 @@ impl App {
         }
     }
 
-    fn execute_operation(&mut self) {
-        let Some(kind) = self.operation.as_ref().map(|state| state.kind) else {
-            return;
-        };
-        let result = match kind {
-            OperationKind::Install => self.perform_install(),
-            OperationKind::Remove => self.perform_remove(),
-        };
-        if let Some(operation) = &mut self.operation {
-            operation.phase = match result {
-                Ok(message) => OperationPhase::Finished {
-                    success: true,
-                    message,
-                },
-                Err(message) => OperationPhase::Finished {
-                    success: false,
-                    message,
-                },
-            };
-        }
-    }
-
-    fn perform_install(&self) -> Result<String, String> {
-        let game = self
-            .settings
-            .installation()
-            .map_err(|error| error.to_string())?;
-        match install_latest_compatible(
-            self.release_index_url,
-            &self.settings.channel,
-            &self.paths,
-            &game,
-        )
-        .map_err(|error| error.to_string())?
-        {
-            InstallOutcome::AlreadyInstalled(info) => Ok(format!(
-                "{} 패치가 이미 설치되어 있습니다.",
-                info.patch_version
-            )),
-            InstallOutcome::Installed(summary) => Ok(format!(
-                "패치 설치가 완료되었습니다. 새 파일 {}개, 교체 파일 {}개",
-                summary.created, summary.modified
-            )),
+    fn update_install_progress(&mut self, event: InstallProgress) {
+        match event {
+            InstallProgress::Resolving => {
+                self.install_progress.status = "호환 패치를 확인하는 중입니다...".into();
+            }
+            InstallProgress::Selected {
+                patch_version,
+                files,
+                download_total,
+                install_total,
+            } => {
+                self.install_progress.patch_version = Some(patch_version);
+                self.install_progress.files = files;
+                self.install_progress.download_current = 0;
+                self.install_progress.download_total = download_total;
+                self.install_progress.apply_current = 0;
+                self.install_progress.apply_total = install_total;
+                self.install_progress.status = "패치 정보를 확인했습니다.".into();
+            }
+            InstallProgress::Downloading {
+                file_index,
+                file_count,
+                file_name,
+                current,
+                total,
+            } => {
+                self.install_progress.download_current = current;
+                self.install_progress.download_total = total;
+                self.install_progress.status =
+                    format!("다운로드 중 ({file_index}/{file_count}): {file_name}");
+            }
+            InstallProgress::Extracting {
+                file_index,
+                file_count,
+                file_name,
+                current,
+                total,
+            } => {
+                self.install_progress.status = format!(
+                    "압축 해제/검증 중 ({file_index}/{file_count}): {file_name} [{} / {}]",
+                    format_bytes(current),
+                    format_bytes(total)
+                );
+            }
+            InstallProgress::RemovingExisting { patch_version } => {
+                self.install_progress.status =
+                    format!("기존 패치 {patch_version}을 안전하게 제거하는 중입니다...");
+            }
+            InstallProgress::Applying {
+                file_index,
+                file_count,
+                path,
+                phase,
+                current,
+                total,
+            } => {
+                self.install_progress.apply_current = current;
+                self.install_progress.apply_total = total;
+                let action = match phase {
+                    ApplyPhase::VerifyingStage => "적용 전 검증",
+                    ApplyPhase::BackingUp => "원본 백업",
+                    ApplyPhase::Copying => "패치 적용",
+                    ApplyPhase::VerifyingInstalled => "적용 후 검증",
+                };
+                self.install_progress.status =
+                    format!("{action} 중 ({file_index}/{file_count}): {path}");
+            }
         }
     }
 
@@ -371,19 +431,6 @@ impl App {
             KeyCode::Down => self.main_selected = next(self.main_selected, MAIN_ITEMS.len()),
             KeyCode::Enter => self.activate_main(),
             KeyCode::Esc | KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('1') => {
-                self.main_selected = 0;
-                self.activate_main();
-            }
-            KeyCode::Char('2') => {
-                self.main_selected = 1;
-                self.activate_main();
-            }
-            KeyCode::Char('3') => {
-                self.main_selected = 2;
-                self.activate_main();
-            }
-            KeyCode::Char('0') => self.should_quit = true,
             _ => {}
         }
     }
@@ -542,12 +589,90 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         if app.operation_pending() {
             app.mark_operation_running();
             terminal.draw(|frame| render(frame, app))?;
-            app.execute_operation();
+            execute_operation(terminal, app);
             continue;
         }
         app.handle_event(event::read()?);
     }
     Ok(())
+}
+
+fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
+    let Some(kind) = app.operation.as_ref().map(|state| state.kind) else {
+        return;
+    };
+    let result = match kind {
+        OperationKind::Install => perform_install(terminal, app),
+        OperationKind::Remove => app.perform_remove(),
+    };
+    if let Some(operation) = &mut app.operation {
+        operation.phase = match result {
+            Ok(message) => OperationPhase::Finished {
+                success: true,
+                message,
+            },
+            Err(message) => OperationPhase::Finished {
+                success: false,
+                message,
+            },
+        };
+    }
+}
+
+fn perform_install(terminal: &mut DefaultTerminal, app: &mut App) -> Result<String, String> {
+    let paths = app.paths.clone();
+    let settings = app.settings.clone();
+    let release_index_url = app.release_index_url;
+    let game = settings.installation().map_err(|error| error.to_string())?;
+    let mut last_draw = Instant::now();
+    let outcome = install_latest_compatible_with_progress(
+        release_index_url,
+        &settings.channel,
+        &paths,
+        &game,
+        |event| {
+            let force_redraw = progress_requires_immediate_redraw(&event);
+            app.update_install_progress(event);
+            if force_redraw || last_draw.elapsed() >= Duration::from_millis(50) {
+                let _ = terminal.draw(|frame| render(frame, app));
+                last_draw = Instant::now();
+            }
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    match outcome {
+        InstallOutcome::AlreadyInstalled(info) => Ok(format!(
+            "{} 패치가 이미 설치되어 있습니다.",
+            info.patch_version
+        )),
+        InstallOutcome::Installed(summary) => {
+            let patch_version = app
+                .install_progress
+                .patch_version
+                .as_deref()
+                .unwrap_or("선택된 패치");
+            Ok(format!(
+                "{patch_version} 설치가 완료되었습니다. 새 파일 {}개, 교체 파일 {}개",
+                summary.created, summary.modified
+            ))
+        }
+    }
+}
+
+fn progress_requires_immediate_redraw(event: &InstallProgress) -> bool {
+    match event {
+        InstallProgress::Resolving
+        | InstallProgress::Selected { .. }
+        | InstallProgress::RemovingExisting { .. } => true,
+        InstallProgress::Downloading { current, total, .. }
+        | InstallProgress::Extracting { current, total, .. } => *current == 0 || current >= total,
+        InstallProgress::Applying {
+            phase,
+            current,
+            total,
+            ..
+        } => !matches!(phase, ApplyPhase::Copying) || *current == 0 || current >= total,
+    }
 }
 
 fn render(frame: &mut Frame<'_>, app: &mut App) {
@@ -599,27 +724,33 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Ok(None) => "미설치".into(),
         Err(error) => format!("상태 확인 실패 ({error})"),
     };
-    let lines = vec![
-        status_line("Patcher 경로", &app.installed_exe.display().to_string()),
-        status_line(
+    let rows = [
+        status_row("Patcher 경로", app.installed_exe.display().to_string()),
+        status_row(
             "Steam 경로",
-            &display_path(app.settings.steam_game_root.as_deref()),
+            display_path(app.settings.steam_game_root.as_deref()),
         ),
-        status_line(
+        status_row(
             "LocalLow 경로",
-            &display_path(app.settings.locallow_root.as_deref()),
+            display_path(app.settings.locallow_root.as_deref()),
         ),
-        status_line("패치 채널", &app.settings.channel),
-        status_line("게임 버전", &game_version),
-        status_line("Catalog", &catalog),
-        status_line("설치 패치", &installed),
+        status_row("패치 채널", app.settings.channel.clone()),
+        status_row("게임 버전", game_version),
+        status_row("Catalog", catalog),
+        status_row("설치된 패치", installed),
     ];
     let title = format!(" AstralAutoPatcher v{} ", env!("CARGO_PKG_VERSION"));
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .block(Block::default().borders(Borders::ALL).title(title)),
-        area,
-    );
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(18),
+            Constraint::Length(2),
+            Constraint::Min(1),
+        ],
+    )
+    .column_spacing(0)
+    .block(Block::default().borders(Borders::ALL).title(title));
+    frame.render_widget(table, area);
 }
 
 fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
@@ -642,30 +773,40 @@ fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 }
 
 fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    let labels = [
-        format!(
-            "Steam 게임 경로   [{}]",
-            display_path(app.settings.steam_game_root.as_deref())
-        ),
-        format!(
-            "LocalLow 게임 경로 [{}]",
-            display_path(app.settings.locallow_root.as_deref())
-        ),
-        format!("패치 채널          [{}]", app.settings.channel),
-        "게임 경로 자동 감지".into(),
-        "돌아가기".into(),
+    let rows = [
+        Row::new(vec![
+            Cell::from("Steam 게임 경로"),
+            Cell::from(format!(
+                "[{}]",
+                display_path(app.settings.steam_game_root.as_deref())
+            )),
+        ]),
+        Row::new(vec![
+            Cell::from("LocalLow 게임 경로"),
+            Cell::from(format!(
+                "[{}]",
+                display_path(app.settings.locallow_root.as_deref())
+            )),
+        ]),
+        Row::new(vec![
+            Cell::from("패치 채널"),
+            Cell::from(format!("[{}]", app.settings.channel)),
+        ]),
+        Row::new(vec![Cell::from("게임 경로 자동 감지"), Cell::from("")]),
+        Row::new(vec![Cell::from("돌아가기"), Cell::from("")]),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" 프로그램 설정 ");
     let inner = block.inner(area);
-    let list = List::new(labels.into_iter().map(ListItem::new))
+    let table = Table::new(rows, [Constraint::Length(26), Constraint::Min(1)])
         .block(block)
         .highlight_symbol("▶ ")
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED));
-    let mut state = ListState::default();
+        .highlight_spacing(HighlightSpacing::Always)
+        .row_highlight_style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED));
+    let mut state = TableState::default();
     state.select(Some(app.settings_selected));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(table, area, &mut state);
     add_list_hits(&mut app.hit_regions, inner, 5, HitTarget::Settings);
 }
 
@@ -710,6 +851,10 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let pending = matches!(&operation.phase, OperationPhase::Pending);
     match operation.phase {
         OperationPhase::Pending | OperationPhase::Running => {
+            if operation.kind == OperationKind::Install {
+                render_install_running(frame, app, area, &operation, pending);
+                return;
+            }
             let request = if operation.protocol_request {
                 "웹사이트 프로토콜 요청"
             } else {
@@ -718,10 +863,7 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             let status = if pending {
                 "현재 상태 정보를 표시했습니다. 작업을 시작합니다..."
             } else {
-                match operation.kind {
-                    OperationKind::Install => "호환 패치를 확인하고 다운로드/검증하는 중입니다...",
-                    OperationKind::Remove => "설치 기록을 검증하고 패치를 제거하는 중입니다...",
-                }
+                "설치 기록을 검증하고 패치를 제거하는 중입니다..."
             };
             let text = Text::from(vec![
                 Line::from(vec![
@@ -783,10 +925,157 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
+fn render_install_running(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    operation: &OperationState,
+    pending: bool,
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(3),
+        ])
+        .split(area);
+
+    let patch_version = app
+        .install_progress
+        .patch_version
+        .as_deref()
+        .unwrap_or("확인 중...");
+    let mut detail_lines = vec![Line::from(vec![
+        Span::styled("대상 패치: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(patch_version),
+    ])];
+    if app.install_progress.files.is_empty() {
+        detail_lines.push(Line::from("패치 파일 정보를 확인하는 중입니다..."));
+    } else if area.width < 110 {
+        detail_lines.push(Line::from(format!(
+            "파일 {}개 · 다운로드 {} · 적용 {}",
+            app.install_progress.files.len(),
+            format_bytes(app.install_progress.download_total),
+            format_bytes(app.install_progress.apply_total)
+        )));
+        detail_lines.push(Line::from(
+            "현재 파일명은 아래 현재 작업 영역에 표시됩니다.",
+        ));
+    } else {
+        let download_files = app
+            .install_progress
+            .files
+            .iter()
+            .map(|file| {
+                format!(
+                    "{} ({})",
+                    file.download_name,
+                    format_bytes(file.download_size)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let install_files = app
+            .install_progress
+            .files
+            .iter()
+            .map(|file| {
+                format!(
+                    "{} ({})",
+                    file.install_path,
+                    format_bytes(file.install_size)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        detail_lines.push(Line::from(vec![
+            Span::styled("다운로드: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(download_files),
+        ]));
+        detail_lines.push(Line::from(vec![
+            Span::styled("적용 파일: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(install_files),
+        ]));
+    }
+    let details = Text::from(detail_lines);
+    frame.render_widget(
+        Paragraph::new(details)
+            .block(Block::default().borders(Borders::ALL).title(" 패치 정보 "))
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+
+    render_progress_gauge(
+        frame,
+        chunks[1],
+        " 다운로드 ",
+        app.install_progress.download_current,
+        app.install_progress.download_total,
+    );
+    render_progress_gauge(
+        frame,
+        chunks[2],
+        " 적용 ",
+        app.install_progress.apply_current,
+        app.install_progress.apply_total,
+    );
+
+    let request = if operation.protocol_request {
+        "웹사이트 프로토콜 요청"
+    } else {
+        "프로그램 메뉴 요청"
+    };
+    let status = if pending {
+        "현재 상태 정보를 표시했습니다. 작업을 시작합니다..."
+    } else {
+        &app.install_progress.status
+    };
+    frame.render_widget(
+        Paragraph::new(format!("{request} · {status}"))
+            .block(Block::default().borders(Borders::ALL).title(" 현재 작업 "))
+            .wrap(Wrap { trim: false }),
+        chunks[3],
+    );
+}
+
+fn render_progress_gauge(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &'static str,
+    current: u64,
+    total: u64,
+) {
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        (current.min(total) as f64 / total as f64).clamp(0.0, 1.0)
+    };
+    let label = if total == 0 {
+        "대기 중".to_owned()
+    } else {
+        format!(
+            "{:5.1}%  {} / {}",
+            ratio * 100.0,
+            format_bytes(current.min(total)),
+            format_bytes(total)
+        )
+    };
+    frame.render_widget(
+        Gauge::default()
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .gauge_style(Style::default().add_modifier(Modifier::BOLD))
+            .ratio(ratio)
+            .label(label),
+        area,
+    );
+}
+
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let notice = app.notice.as_deref().unwrap_or("");
     let help = match app.screen {
-        Screen::Main => "↑↓ 이동 · Enter 선택 · 마우스 클릭 · 1/2/3 단축키 · Esc/Q 종료",
+        Screen::Main => "↑↓ 이동 · Enter 선택 · 마우스 클릭 · Esc/Q 종료",
         Screen::Settings => "↑↓ 이동 · Enter 선택 · 마우스 클릭 · Esc 뒤로가기",
         Screen::PathInput(_) => "경로 입력 · Enter 저장 · Esc 취소",
         Screen::Operation => "작업 완료 후 ↑↓/Enter 또는 마우스로 선택 · Esc 메인 메뉴",
@@ -806,14 +1095,24 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-fn status_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("{label:<13}"),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(": {value}")),
+fn status_row(label: &'static str, value: String) -> Row<'static> {
+    Row::new(vec![
+        Cell::from(label).style(Style::default().add_modifier(Modifier::BOLD)),
+        Cell::from(":"),
+        Cell::from(value),
     ])
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    const KIB: f64 = 1024.0;
+    if bytes >= 1024 * 1024 {
+        format!("{:.2} MiB", bytes as f64 / MIB)
+    } else if bytes >= 1024 {
+        format!("{:.1} KiB", bytes as f64 / KIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn display_path(path: Option<&Path>) -> String {
@@ -899,6 +1198,58 @@ mod tests {
         assert_eq!(app.main_selected, MAIN_ITEMS.len() - 1);
         app.handle_main_key(KeyCode::Down);
         assert_eq!(app.main_selected, 0);
+    }
+
+    #[test]
+    fn numeric_keys_do_not_activate_main_menu_items() {
+        let mut app = app(UriAction::Menu);
+        app.main_selected = 2;
+        app.handle_main_key(KeyCode::Char('1'));
+        assert_eq!(app.screen, Screen::Main);
+        assert_eq!(app.main_selected, 2);
+        assert!(app.operation.is_none());
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn install_progress_updates_version_and_bars() {
+        let mut app = app(UriAction::Menu);
+        app.update_install_progress(InstallProgress::Selected {
+            patch_version: "v3.2.0-r116-preview.test".into(),
+            files: vec![PatchFileInfo {
+                download_name: "data.unity3d.gz".into(),
+                install_path: "data.unity3d".into(),
+                download_size: 10,
+                install_size: 20,
+            }],
+            download_total: 10,
+            install_total: 20,
+        });
+        app.update_install_progress(InstallProgress::Downloading {
+            file_index: 1,
+            file_count: 1,
+            file_name: "data.unity3d.gz".into(),
+            current: 5,
+            total: 10,
+        });
+        app.update_install_progress(InstallProgress::Applying {
+            file_index: 1,
+            file_count: 1,
+            path: "data.unity3d".into(),
+            phase: ApplyPhase::Copying,
+            current: 8,
+            total: 20,
+        });
+
+        assert_eq!(
+            app.install_progress.patch_version.as_deref(),
+            Some("v3.2.0-r116-preview.test")
+        );
+        assert_eq!(app.install_progress.download_current, 5);
+        assert_eq!(app.install_progress.download_total, 10);
+        assert_eq!(app.install_progress.apply_current, 8);
+        assert_eq!(app.install_progress.apply_total, 20);
+        assert!(app.install_progress.status.contains("data.unity3d"));
     }
 
     #[test]

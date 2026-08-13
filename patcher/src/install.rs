@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -76,6 +76,24 @@ pub struct InstallSummary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyPhase {
+    VerifyingStage,
+    BackingUp,
+    Copying,
+    VerifyingInstalled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyProgress {
+    pub file_index: usize,
+    pub file_count: usize,
+    pub path: String,
+    pub phase: ApplyPhase,
+    pub current: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RemoveReport {
     pub removed: usize,
     pub restored: usize,
@@ -147,11 +165,37 @@ fn backup_path(
 }
 
 fn copy_replace(source: &Path, destination: &Path) -> Result<(), io::Error> {
+    copy_replace_with_progress(source, destination, |_, _| {})
+}
+
+fn copy_replace_with_progress<F>(
+    source: &Path,
+    destination: &Path,
+    mut progress: F,
+) -> Result<(), io::Error>
+where
+    F: FnMut(u64, u64),
+{
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
+    let total = source.metadata()?.len();
     let temp = destination.with_extension("astral-install-tmp");
-    fs::copy(source, &temp)?;
+    let mut input = fs::File::open(source)?;
+    let mut output = fs::File::create(&temp)?;
+    let mut copied = 0_u64;
+    let mut buffer = [0_u8; 128 * 1024];
+    progress(0, total);
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        output.write_all(&buffer[..read])?;
+        copied += read as u64;
+        progress(copied.min(total), total);
+    }
+    output.sync_all()?;
     if destination.exists() {
         fs::remove_file(destination)?;
     }
@@ -182,7 +226,31 @@ pub fn install_patch(
     backup_root: &Path,
     ownership_path: &Path,
 ) -> Result<InstallSummary, InstallError> {
+    install_patch_with_progress(
+        manifest,
+        staging_root,
+        roots,
+        backup_root,
+        ownership_path,
+        |_| {},
+    )
+}
+
+pub fn install_patch_with_progress<F>(
+    manifest: &PatchManifest,
+    staging_root: &Path,
+    roots: &InstallRoots,
+    backup_root: &Path,
+    ownership_path: &Path,
+    mut progress: F,
+) -> Result<InstallSummary, InstallError>
+where
+    F: FnMut(ApplyProgress),
+{
     manifest.validate()?;
+    let file_count = manifest.files.len();
+    let total_size = manifest.files.iter().map(|file| file.size).sum();
+    let mut completed_size = 0_u64;
     let mut ownership = OwnershipManifest {
         schema_version: 1,
         patch_version: manifest.patch.version.clone(),
@@ -192,12 +260,29 @@ pub fn install_patch(
     };
 
     let result = (|| {
-        for file in &manifest.files {
+        for (index, file) in manifest.files.iter().enumerate() {
+            let file_index = index + 1;
             let stage = staged_path(staging_root, file.target, &file.path)?;
+            progress(ApplyProgress {
+                file_index,
+                file_count,
+                path: file.path.clone(),
+                phase: ApplyPhase::VerifyingStage,
+                current: completed_size,
+                total: total_size,
+            });
             verify_file(&stage, file.size, &file.sha256)?;
             let destination = target_path(roots, file.target, &file.path)?;
 
             if destination.exists() {
+                progress(ApplyProgress {
+                    file_index,
+                    file_count,
+                    path: file.path.clone(),
+                    phase: ApplyPhase::BackingUp,
+                    current: completed_size,
+                    total: total_size,
+                });
                 let original_hash = sha256_file(&destination)?;
                 let backup = backup_path(backup_root, file.target, &file.path)?;
                 if let Some(parent) = backup.parent() {
@@ -223,7 +308,25 @@ pub fn install_patch(
                 });
             }
 
-            copy_replace(&stage, &destination)?;
+            copy_replace_with_progress(&stage, &destination, |current, _| {
+                progress(ApplyProgress {
+                    file_index,
+                    file_count,
+                    path: file.path.clone(),
+                    phase: ApplyPhase::Copying,
+                    current: completed_size.saturating_add(current),
+                    total: total_size,
+                });
+            })?;
+            completed_size = completed_size.saturating_add(file.size);
+            progress(ApplyProgress {
+                file_index,
+                file_count,
+                path: file.path.clone(),
+                phase: ApplyPhase::VerifyingInstalled,
+                current: completed_size,
+                total: total_size,
+            });
             verify_file(&destination, file.size, &file.sha256)?;
         }
 
@@ -408,6 +511,51 @@ mod tests {
         let report = remove_patch(&ownership, &roots, &backup).unwrap();
         assert_eq!(report.removed, 1);
         assert!(!installed.exists());
+    }
+
+    #[test]
+    fn install_progress_reports_copy_bytes() {
+        let temp = tempdir().unwrap();
+        let staging = temp.path().join("staging");
+        let roots = roots(temp.path());
+        let backup = temp.path().join("backup");
+        let ownership_path = temp.path().join("installed.json");
+        let payload = vec![b'x'; 512 * 1024];
+        let hash = format!("{:x}", Sha256::digest(&payload));
+        let stage = staging.join("game-data/data.unity3d");
+        fs::create_dir_all(stage.parent().unwrap()).unwrap();
+        fs::write(&stage, &payload).unwrap();
+        let patch = manifest(ManifestFile {
+            target: InstallTarget::GameData,
+            path: "data.unity3d".into(),
+            operation: "replace".into(),
+            download_url: "https://example.test/data.gz".into(),
+            download_sha256: "d".repeat(64),
+            download_size: 5,
+            compression: "gzip".into(),
+            sha256: hash,
+            size: payload.len() as u64,
+        });
+        let mut events = Vec::new();
+
+        install_patch_with_progress(
+            &patch,
+            &staging,
+            &roots,
+            &backup,
+            &ownership_path,
+            |event| events.push(event),
+        )
+        .unwrap();
+
+        let copying = events
+            .iter()
+            .filter(|event| event.phase == ApplyPhase::Copying)
+            .collect::<Vec<_>>();
+        assert!(copying.len() > 2);
+        assert_eq!(copying.first().unwrap().current, 0);
+        assert_eq!(copying.last().unwrap().current, payload.len() as u64);
+        assert_eq!(copying.last().unwrap().total, payload.len() as u64);
     }
 
     #[test]

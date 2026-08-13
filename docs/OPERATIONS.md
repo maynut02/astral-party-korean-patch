@@ -129,7 +129,7 @@ cargo build --release --bin AstralAutoPatcher
 
 같은 폴더에 `settings.json`, `installed.json`, staging/backup 상태를 관리합니다. 최초 실행 시 Steam과 LocalLow 경로를 자동 감지하고, 프로그램 설정 메뉴에서 두 경로를 각각 수정할 수 있습니다. 패치가 설치된 동안에는 ownership 안전성을 위해 경로 변경을 차단합니다.
 
-Patcher 0.4.0부터 콘솔 UI는 Ratatui/Crossterm 기반 고정 화면 TUI를 사용합니다. 방향키/Enter/Esc와 마우스 클릭·스크롤을 지원하며, 경로 입력은 TUI 내부에서 키보드 입력과 붙여넣기를 처리합니다. 메인 상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 패치 채널, 게임 버전, Catalog hash, 설치된 패치 버전을 항상 표시합니다.
+Patcher 0.4.0부터 콘솔 UI는 Ratatui/Crossterm 기반 고정 화면 TUI를 사용합니다. 방향키/Enter/Esc와 마우스 클릭·스크롤을 지원하며, 경로 입력은 TUI 내부에서 키보드 입력과 붙여넣기를 처리합니다. 메인 상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 패치 채널, 게임 버전, Catalog hash, 설치된 패치 버전을 항상 표시합니다. 0.4.1에서는 상태/설정 항목을 고정 컬럼으로 정렬하고 숫자키 메뉴 단축키를 제거했으며, 설치 시 선택된 patch version과 release asset/적용 파일을 표시하고 실제 전송 바이트 및 파일 적용 바이트를 기준으로 다운로드/적용 진행률을 각각 표시합니다.
 
 지원 URI는 고정 allowlist입니다.
 

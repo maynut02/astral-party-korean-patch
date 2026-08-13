@@ -20,17 +20,17 @@ pub use game::{
     discover_windows_installation, discover_windows_locallow_root, discover_windows_steam_root,
 };
 pub use install::{
-    InstallError, InstallRoots, InstallSummary, OwnershipManifest, RemoveReport, install_patch,
-    remove_patch,
+    ApplyPhase, ApplyProgress, InstallError, InstallRoots, InstallSummary, OwnershipManifest,
+    RemoveReport, install_patch, install_patch_with_progress, remove_patch,
 };
-pub use network::{NetworkError, ReleaseClient};
+pub use network::{NetworkError, ReleaseClient, StageProgress};
 pub use protocol::{
     InstallTarget, ManifestFile, PatchManifest, ProtocolError, ReleaseIndex, ReleaseIndexEntry,
 };
 pub use service::{
-    DEFAULT_ROUTE, InstallOutcome, InstalledPatchInfo, PatcherPaths, ServiceError,
-    install_latest_compatible, install_roots, installed_patch_info, load_ownership,
-    remove_installed_patch,
+    DEFAULT_ROUTE, InstallOutcome, InstallProgress, InstalledPatchInfo, PatchFileInfo,
+    PatcherPaths, ServiceError, install_latest_compatible, install_latest_compatible_with_progress,
+    install_roots, installed_patch_info, load_ownership, remove_installed_patch,
 };
 pub use settings::{AppSettings, SettingsError};
 pub use uri::{URI_SCHEME, UriAction, UriError};

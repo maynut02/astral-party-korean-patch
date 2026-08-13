@@ -58,6 +58,24 @@ pub enum NetworkError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StageProgress {
+    Downloading {
+        file_index: usize,
+        file_count: usize,
+        file_name: String,
+        current: u64,
+        total: u64,
+    },
+    Extracting {
+        file_index: usize,
+        file_count: usize,
+        file_name: String,
+        current: u64,
+        total: u64,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct ReleaseClient {
     client: Client,
@@ -133,9 +151,24 @@ impl ReleaseClient {
         manifest: &PatchManifest,
         staging_root: &Path,
     ) -> Result<Vec<PathBuf>, NetworkError> {
+        self.stage_manifest_files_with_progress(manifest, staging_root, |_| {})
+    }
+
+    pub fn stage_manifest_files_with_progress<F>(
+        &self,
+        manifest: &PatchManifest,
+        staging_root: &Path,
+        mut progress: F,
+    ) -> Result<Vec<PathBuf>, NetworkError>
+    where
+        F: FnMut(StageProgress),
+    {
         manifest.validate()?;
-        let mut staged = Vec::with_capacity(manifest.files.len());
-        for file in &manifest.files {
+        let file_count = manifest.files.len();
+        let total_download = manifest.files.iter().map(|file| file.download_size).sum();
+        let mut completed_download = 0_u64;
+        let mut staged = Vec::with_capacity(file_count);
+        for (index, file) in manifest.files.iter().enumerate() {
             validate_relative_path(&file.path)?;
             let destination = staging_root.join(target_dir(file.target)).join(&file.path);
             if let Some(parent) = destination.parent() {
@@ -143,14 +176,40 @@ impl ReleaseClient {
             }
             let download_temp = destination.with_extension("astral-download-gz");
             let payload_temp = destination.with_extension("astral-payload-tmp");
+            let file_index = index + 1;
+            let file_name = download_file_name(&file.download_url);
             let result = (|| {
-                self.download_verified(
+                self.download_verified_with_progress(
                     &file.download_url,
                     &download_temp,
                     file.download_size,
                     &file.download_sha256,
+                    |current| {
+                        progress(StageProgress::Downloading {
+                            file_index,
+                            file_count,
+                            file_name: file_name.clone(),
+                            current: completed_download.saturating_add(current),
+                            total: total_download,
+                        });
+                    },
                 )?;
-                decompress_gzip_verified(&download_temp, &payload_temp, file.size, &file.sha256)?;
+                completed_download = completed_download.saturating_add(file.download_size);
+                decompress_gzip_verified_with_progress(
+                    &download_temp,
+                    &payload_temp,
+                    file.size,
+                    &file.sha256,
+                    |current| {
+                        progress(StageProgress::Extracting {
+                            file_index,
+                            file_count,
+                            file_name: file.path.clone(),
+                            current,
+                            total: file.size,
+                        });
+                    },
+                )?;
                 if destination.exists() {
                     fs::remove_file(&destination)?;
                 }
@@ -167,18 +226,23 @@ impl ReleaseClient {
         Ok(staged)
     }
 
-    fn download_verified(
+    fn download_verified_with_progress<F>(
         &self,
         url: &str,
         destination: &Path,
         expected_size: u64,
         expected_hash: &str,
-    ) -> Result<(), NetworkError> {
+        mut progress: F,
+    ) -> Result<(), NetworkError>
+    where
+        F: FnMut(u64),
+    {
         let mut response = self.client.get(url).send()?.error_for_status()?;
         let mut output = fs::File::create(destination)?;
         let mut hasher = Sha256::new();
         let mut total = 0_u64;
         let mut buffer = [0_u8; 128 * 1024];
+        progress(0);
         loop {
             let read = response.read(&mut buffer)?;
             if read == 0 {
@@ -187,6 +251,7 @@ impl ReleaseClient {
             output.write_all(&buffer[..read])?;
             hasher.update(&buffer[..read]);
             total += read as u64;
+            progress(total.min(expected_size));
             if total > expected_size {
                 return Err(NetworkError::DownloadSizeMismatch {
                     path: destination.to_owned(),
@@ -215,18 +280,23 @@ impl ReleaseClient {
     }
 }
 
-fn decompress_gzip_verified(
+fn decompress_gzip_verified_with_progress<F>(
     source: &Path,
     destination: &Path,
     expected_size: u64,
     expected_hash: &str,
-) -> Result<(), NetworkError> {
+    mut progress: F,
+) -> Result<(), NetworkError>
+where
+    F: FnMut(u64),
+{
     let input = fs::File::open(source)?;
     let mut decoder = GzDecoder::new(input);
     let mut output = fs::File::create(destination)?;
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
     let mut buffer = [0_u8; 128 * 1024];
+    progress(0);
     loop {
         let read = decoder.read(&mut buffer)?;
         if read == 0 {
@@ -235,6 +305,7 @@ fn decompress_gzip_verified(
         output.write_all(&buffer[..read])?;
         hasher.update(&buffer[..read]);
         total += read as u64;
+        progress(total.min(expected_size));
         if total > expected_size {
             return Err(NetworkError::PayloadSizeMismatch {
                 path: destination.to_owned(),
@@ -260,6 +331,14 @@ fn decompress_gzip_verified(
         });
     }
     Ok(())
+}
+
+fn download_file_name(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(url)
+        .to_owned()
 }
 
 fn target_dir(target: InstallTarget) -> &'static str {
@@ -334,7 +413,17 @@ mod tests {
         fs::write(&source, encoder.finish().unwrap()).unwrap();
         let hash = format!("{:x}", Sha256::digest(payload));
 
-        decompress_gzip_verified(&source, &destination, payload.len() as u64, &hash).unwrap();
+        let mut progress = Vec::new();
+        decompress_gzip_verified_with_progress(
+            &source,
+            &destination,
+            payload.len() as u64,
+            &hash,
+            |current| progress.push(current),
+        )
+        .unwrap();
+        assert_eq!(progress.first(), Some(&0));
+        assert_eq!(progress.last(), Some(&(payload.len() as u64)));
         assert_eq!(fs::read(destination).unwrap(), payload);
     }
 }

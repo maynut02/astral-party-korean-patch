@@ -6,10 +6,10 @@ use thiserror::Error;
 
 use crate::game::GameInstallation;
 use crate::install::{
-    InstallError, InstallRoots, InstallSummary, OwnershipManifest, RemoveReport, install_patch,
-    remove_patch,
+    ApplyPhase, ApplyProgress, InstallError, InstallRoots, InstallSummary, OwnershipManifest,
+    RemoveReport, install_patch_with_progress, remove_patch,
 };
-use crate::network::{NetworkError, ReleaseClient};
+use crate::network::{NetworkError, ReleaseClient, StageProgress};
 use crate::protocol::PatchManifest;
 
 pub const DEFAULT_ROUTE: &str = "INT_STEAM";
@@ -83,6 +83,50 @@ pub enum InstallOutcome {
     Installed(InstallSummary),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PatchFileInfo {
+    pub download_name: String,
+    pub install_path: String,
+    pub download_size: u64,
+    pub install_size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallProgress {
+    Resolving,
+    Selected {
+        patch_version: String,
+        files: Vec<PatchFileInfo>,
+        download_total: u64,
+        install_total: u64,
+    },
+    Downloading {
+        file_index: usize,
+        file_count: usize,
+        file_name: String,
+        current: u64,
+        total: u64,
+    },
+    Extracting {
+        file_index: usize,
+        file_count: usize,
+        file_name: String,
+        current: u64,
+        total: u64,
+    },
+    RemovingExisting {
+        patch_version: String,
+    },
+    Applying {
+        file_index: usize,
+        file_count: usize,
+        path: String,
+        phase: ApplyPhase,
+        current: u64,
+        total: u64,
+    },
+}
+
 pub fn install_roots(game: &GameInstallation) -> InstallRoots {
     InstallRoots {
         addressables: game.addressables_root.join("AssetBundles"),
@@ -145,9 +189,23 @@ pub fn install_latest_compatible(
     paths: &PatcherPaths,
     game: &GameInstallation,
 ) -> Result<InstallOutcome, ServiceError> {
+    install_latest_compatible_with_progress(release_index_url, channel, paths, game, |_| {})
+}
+
+pub fn install_latest_compatible_with_progress<F>(
+    release_index_url: &str,
+    channel: &str,
+    paths: &PatcherPaths,
+    game: &GameInstallation,
+    mut progress: F,
+) -> Result<InstallOutcome, ServiceError>
+where
+    F: FnMut(InstallProgress),
+{
     let roots = install_roots(game);
     let user_agent = format!("AstralAutoPatcher/{}", env!("CARGO_PKG_VERSION"));
     let client = ReleaseClient::new(&user_agent)?;
+    progress(InstallProgress::Resolving);
     let index = client.fetch_release_index(release_index_url)?;
     let (_, manifest) = client.fetch_compatible_manifest(
         &index,
@@ -158,6 +216,25 @@ pub fn install_latest_compatible(
     )?;
     ensure_manifest_compatible(&manifest, game, DEFAULT_ROUTE)?;
 
+    let files = manifest
+        .files
+        .iter()
+        .map(|file| PatchFileInfo {
+            download_name: download_name(&file.download_url),
+            install_path: file.path.clone(),
+            download_size: file.download_size,
+            install_size: file.size,
+        })
+        .collect::<Vec<_>>();
+    let download_total = manifest.files.iter().map(|file| file.download_size).sum();
+    let install_total = manifest.files.iter().map(|file| file.size).sum();
+    progress(InstallProgress::Selected {
+        patch_version: manifest.patch.version.clone(),
+        files,
+        download_total,
+        install_total,
+    });
+
     if let Some(existing) = load_ownership(&paths.ownership_path)? {
         if existing.patch_version == manifest.patch.version
             && existing.catalog_hash == manifest.game.catalog_hash
@@ -167,20 +244,79 @@ pub fn install_latest_compatible(
                 catalog_hash: existing.catalog_hash,
             }));
         }
+        progress(InstallProgress::RemovingExisting {
+            patch_version: existing.patch_version.clone(),
+        });
         remove_installed_patch(paths, &roots)?;
     }
 
     paths.reset_staging()?;
-    client.stage_manifest_files(&manifest, &paths.staging_root)?;
-    let summary = install_patch(
+    client.stage_manifest_files_with_progress(
+        &manifest,
+        &paths.staging_root,
+        |event| match event {
+            StageProgress::Downloading {
+                file_index,
+                file_count,
+                file_name,
+                current,
+                total,
+            } => progress(InstallProgress::Downloading {
+                file_index,
+                file_count,
+                file_name,
+                current,
+                total,
+            }),
+            StageProgress::Extracting {
+                file_index,
+                file_count,
+                file_name,
+                current,
+                total,
+            } => progress(InstallProgress::Extracting {
+                file_index,
+                file_count,
+                file_name,
+                current,
+                total,
+            }),
+        },
+    )?;
+    let summary = install_patch_with_progress(
         &manifest,
         &paths.staging_root,
         &roots,
         &paths.backup_root,
         &paths.ownership_path,
+        |ApplyProgress {
+             file_index,
+             file_count,
+             path,
+             phase,
+             current,
+             total,
+         }| {
+            progress(InstallProgress::Applying {
+                file_index,
+                file_count,
+                path,
+                phase,
+                current,
+                total,
+            });
+        },
     )?;
     let _ = fs::remove_dir_all(&paths.staging_root);
     Ok(InstallOutcome::Installed(summary))
+}
+
+fn download_name(url: &str) -> String {
+    url.rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(url)
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -189,7 +325,16 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::install::install_patch;
     use crate::protocol::{InstallTarget, ManifestFile, PatchManifest, PatchMetadata, TargetGame};
+
+    #[test]
+    fn download_name_extracts_release_asset_name() {
+        assert_eq!(
+            download_name("https://example.test/releases/v1/assets/game-data-data.unity3d.gz"),
+            "game-data-data.unity3d.gz"
+        );
+    }
 
     fn manifest(version: &str, hash: &str) -> PatchManifest {
         PatchManifest {
