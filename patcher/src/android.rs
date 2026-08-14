@@ -50,8 +50,6 @@ pub enum AndroidError {
         "Android 기기가 offline 상태입니다: {0}. USB를 다시 연결하거나 앱플레이어를 재시작하세요."
     )]
     OfflineDevice(String),
-    #[error("패치 가능한 기기가 여러 대 감지되었습니다: {0}")]
-    MultipleDevices(String),
     #[error("ADB 명령이 실패했습니다: {0}")]
     Adb(String),
     #[error("APK 다운로드 크기가 올바르지 않습니다: expected {expected}, actual {actual}")]
@@ -168,6 +166,10 @@ impl AndroidDevice {
         };
         format!("{model} · {}", self.provider)
     }
+
+    pub fn selection_name(&self) -> String {
+        format!("{} · {}", self.display_name(), self.serial)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +187,9 @@ pub enum AndroidInstallOutcome {
     NeedsReinstall {
         device: AndroidDevice,
         game_version: String,
+    },
+    NeedsDeviceSelection {
+        devices: Vec<AndroidDevice>,
     },
 }
 
@@ -223,6 +228,7 @@ impl AndroidService {
     pub fn install_latest_with_progress<F>(
         &self,
         force_reinstall: bool,
+        selected_serial: Option<&str>,
         mut progress: F,
     ) -> Result<AndroidInstallOutcome, AndroidError>
     where
@@ -234,13 +240,18 @@ impl AndroidService {
             Err(error) => (None, Some(error)),
         };
         progress(AndroidProgress::DiscoveringDevices);
-        let devices = discover_devices(primary_adb.as_deref())?;
+        let devices = dedupe_same_devices(discover_devices(primary_adb.as_deref())?);
         if devices.is_empty()
             && let Some(error) = platform_tools_error
         {
             return Err(error);
         }
-        let device = select_target_device(&devices)?;
+        let device = match select_target_device(&devices, selected_serial)? {
+            DeviceSelection::Selected(device) => device,
+            DeviceSelection::Choose(devices) => {
+                return Ok(AndroidInstallOutcome::NeedsDeviceSelection { devices });
+            }
+        };
         progress(AndroidProgress::DeviceSelected {
             name: device.display_name(),
         });
@@ -717,14 +728,86 @@ fn parse_adb_devices(
     devices
 }
 
-fn select_target_device(devices: &[AndroidDevice]) -> Result<AndroidDevice, AndroidError> {
+enum DeviceSelection {
+    Selected(AndroidDevice),
+    Choose(Vec<AndroidDevice>),
+}
+
+fn dedupe_same_devices(devices: Vec<AndroidDevice>) -> Vec<AndroidDevice> {
+    let mut unique = BTreeMap::<String, AndroidDevice>::new();
+    for device in devices {
+        let key = if device.state == AndroidDeviceState::Device
+            && device.kind == AndroidDeviceKind::Physical
+        {
+            physical_device_id(&device)
+                .map(|value| format!("physical:{value}"))
+                .unwrap_or_else(|| format!("serial:{}", device.serial))
+        } else {
+            format!("serial:{}", device.serial)
+        };
+        match unique.get(&key) {
+            Some(existing) if prefer_existing_connection(existing, &device) => {}
+            _ => {
+                unique.insert(key, device);
+            }
+        }
+    }
+    unique.into_values().collect()
+}
+
+fn physical_device_id(device: &AndroidDevice) -> Option<String> {
+    let output = run_adb(
+        &device.adb_path,
+        &["-s", &device.serial, "shell", "getprop", "ro.serialno"],
+        Duration::from_secs(5),
+    )
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() || value.eq_ignore_ascii_case("unknown") {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn prefer_existing_connection(existing: &AndroidDevice, candidate: &AndroidDevice) -> bool {
+    !is_network_serial(&existing.serial) || is_network_serial(&candidate.serial)
+}
+
+fn is_network_serial(serial: &str) -> bool {
+    serial.contains(':')
+        || serial.contains("_adb-tls-connect")
+        || serial.ends_with("._tcp")
+        || serial.ends_with(".local")
+}
+
+fn select_target_device(
+    devices: &[AndroidDevice],
+    selected_serial: Option<&str>,
+) -> Result<DeviceSelection, AndroidError> {
     let ready = devices
         .iter()
         .filter(|device| device.state == AndroidDeviceState::Device)
         .cloned()
         .collect::<Vec<_>>();
+
+    if let Some(selected_serial) = selected_serial {
+        return ready
+            .into_iter()
+            .find(|device| device.serial == selected_serial)
+            .map(DeviceSelection::Selected)
+            .ok_or_else(|| {
+                AndroidError::Adb(format!(
+                    "선택한 Android 기기 {selected_serial}가 더 이상 연결되어 있지 않습니다"
+                ))
+            });
+    }
+
     match ready.as_slice() {
-        [device] => return Ok(device.clone()),
+        [device] => return Ok(DeviceSelection::Selected(device.clone())),
         [] => {
             if let Some(device) = devices
                 .iter()
@@ -753,17 +836,11 @@ fn select_target_device(devices: &[AndroidDevice]) -> Result<AndroidDevice, Andr
         })
         .cloned()
         .collect::<Vec<_>>();
-    if let [device] = with_game.as_slice() {
-        return Ok(device.clone());
+    match with_game.as_slice() {
+        [device] => Ok(DeviceSelection::Selected(device.clone())),
+        [] => Ok(DeviceSelection::Choose(ready)),
+        _ => Ok(DeviceSelection::Choose(with_game)),
     }
-
-    Err(AndroidError::MultipleDevices(
-        ready
-            .iter()
-            .map(AndroidDevice::display_name)
-            .collect::<Vec<_>>()
-            .join(", "),
-    ))
 }
 
 fn package_info(
@@ -959,6 +1036,26 @@ mod tests {
 
         let matches = find_named_files(temp.path(), "adb.exe", 4).expect("search");
         assert_eq!(matches, vec![nested.join("adb.exe")]);
+    }
+
+    #[test]
+    fn prefers_direct_usb_over_network_serial_for_same_device() {
+        let direct = AndroidDevice {
+            serial: "R3CT10".into(),
+            state: AndroidDeviceState::Device,
+            model: "SM F741N".into(),
+            provider: "Android USB/ADB".into(),
+            kind: AndroidDeviceKind::Physical,
+            adb_path: PathBuf::from("adb.exe"),
+        };
+        let wireless = AndroidDevice {
+            serial: "192.168.0.10:37123".into(),
+            ..direct.clone()
+        };
+        assert!(prefer_existing_connection(&direct, &wireless));
+        assert!(!prefer_existing_connection(&wireless, &direct));
+        assert!(is_network_serial(&wireless.serial));
+        assert!(!is_network_serial(&direct.serial));
     }
 
     #[test]

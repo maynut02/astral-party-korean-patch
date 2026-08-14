@@ -17,7 +17,7 @@ use ratatui::widgets::{
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::android::{
-    AndroidInstallOutcome, AndroidProgress, AndroidService, PLAY_INSTALLER_PACKAGE,
+    AndroidDevice, AndroidInstallOutcome, AndroidProgress, AndroidService, PLAY_INSTALLER_PACKAGE,
 };
 use crate::game::GameRoute;
 use crate::install::ApplyPhase;
@@ -33,9 +33,9 @@ const MIN_WIDTH: u16 = 72;
 const MIN_HEIGHT: u16 = 27;
 const MAIN_ITEMS: [&str; 5] = [
     "Android 패치 / 업데이트",
-    "PC(Steam) 패치 설치 / 업데이트",
-    "PC(Steam) 패치 제거",
-    "PC(Steam) 설정",
+    "Steam 패치 설치 / 업데이트",
+    "Steam 패치 제거",
+    "Steam 설정",
     "종료",
 ];
 const RESULT_ITEMS: [&str; 2] = ["메인 메뉴", "종료"];
@@ -73,8 +73,8 @@ impl OperationKind {
     fn title(self) -> &'static str {
         match self {
             Self::AndroidInstall => "Android 패치 / 업데이트",
-            Self::SteamInstall => "PC(Steam) 패치 설치 / 업데이트",
-            Self::SteamRemove => "PC(Steam) 패치 제거",
+            Self::SteamInstall => "Steam 패치 설치 / 업데이트",
+            Self::SteamRemove => "Steam 패치 제거",
         }
     }
 }
@@ -83,6 +83,7 @@ impl OperationKind {
 enum OperationPhase {
     Pending,
     Running,
+    NeedsDeviceSelection { devices: Vec<AndroidDevice> },
     NeedsReinstall { message: String },
     Finished { success: bool, message: String },
 }
@@ -93,6 +94,7 @@ struct OperationState {
     route: GameRoute,
     protocol_request: bool,
     force_reinstall: bool,
+    android_serial: Option<String>,
     phase: OperationPhase,
 }
 
@@ -146,6 +148,7 @@ enum HitTarget {
     Settings(usize),
     Result(usize),
     Reinstall(usize),
+    Device(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +240,7 @@ impl App {
             route: route_override.unwrap_or_else(|| self.settings.selected_route()),
             protocol_request,
             force_reinstall: false,
+            android_serial: None,
             phase: OperationPhase::Pending,
         });
         self.result_selected = 0;
@@ -524,6 +528,25 @@ impl App {
         }
     }
 
+    fn activate_device_selection(&mut self) {
+        let selected = self.operation.as_ref().and_then(|operation| {
+            if let OperationPhase::NeedsDeviceSelection { devices } = &operation.phase {
+                devices.get(self.result_selected).cloned()
+            } else {
+                None
+            }
+        });
+        let Some(device) = selected else {
+            return;
+        };
+        self.android_progress.device = Some(device.display_name());
+        self.android_progress.status = "선택한 기기로 패치를 계속합니다...".into();
+        if let Some(operation) = &mut self.operation {
+            operation.android_serial = Some(device.serial);
+            operation.phase = OperationPhase::Pending;
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
             return;
@@ -579,12 +602,31 @@ impl App {
         }
     }
 
+    fn operation_selection_len(&self) -> usize {
+        match self.operation.as_ref().map(|operation| &operation.phase) {
+            Some(OperationPhase::NeedsDeviceSelection { devices }) => devices.len(),
+            Some(OperationPhase::NeedsReinstall { .. }) => REINSTALL_ITEMS.len(),
+            Some(OperationPhase::Finished { .. }) => RESULT_ITEMS.len(),
+            _ => 0,
+        }
+    }
+
     fn handle_operation_key(&mut self, code: KeyCode) {
         let phase = self
             .operation
             .as_ref()
             .map(|operation| operation.phase.clone());
         match phase {
+            Some(OperationPhase::NeedsDeviceSelection { devices }) => match code {
+                KeyCode::Up => self.result_selected = previous(self.result_selected, devices.len()),
+                KeyCode::Down => self.result_selected = next(self.result_selected, devices.len()),
+                KeyCode::Enter => self.activate_device_selection(),
+                KeyCode::Esc => {
+                    self.operation = None;
+                    self.screen = Screen::Main;
+                }
+                _ => {}
+            },
             Some(OperationPhase::NeedsReinstall { .. }) => match code {
                 KeyCode::Up => {
                     self.result_selected = previous(self.result_selected, REINSTALL_ITEMS.len())
@@ -643,6 +685,10 @@ impl App {
                         self.result_selected = index;
                         self.activate_reinstall_result();
                     }
+                    Some(HitTarget::Device(index)) => {
+                        self.result_selected = index;
+                        self.activate_device_selection();
+                    }
                     None => {}
                 }
             }
@@ -650,7 +696,8 @@ impl App {
                 Screen::Main => self.main_selected = previous(self.main_selected, MAIN_ITEMS.len()),
                 Screen::Settings => self.settings_selected = previous(self.settings_selected, 5),
                 Screen::Operation => {
-                    self.result_selected = previous(self.result_selected, RESULT_ITEMS.len());
+                    let length = self.operation_selection_len();
+                    self.result_selected = previous(self.result_selected, length);
                 }
                 Screen::PathInput(_) => {}
             },
@@ -658,7 +705,8 @@ impl App {
                 Screen::Main => self.main_selected = next(self.main_selected, MAIN_ITEMS.len()),
                 Screen::Settings => self.settings_selected = next(self.settings_selected, 5),
                 Screen::Operation => {
-                    self.result_selected = next(self.result_selected, RESULT_ITEMS.len());
+                    let length = self.operation_selection_len();
+                    self.result_selected = next(self.result_selected, length);
                 }
                 Screen::PathInput(_) => {}
             },
@@ -733,16 +781,22 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
 }
 
 fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
-    let Some((kind, route, force_reinstall)) = app
-        .operation
-        .as_ref()
-        .map(|state| (state.kind, state.route, state.force_reinstall))
+    let Some((kind, route, force_reinstall, android_serial)) =
+        app.operation.as_ref().map(|state| {
+            (
+                state.kind,
+                state.route,
+                state.force_reinstall,
+                state.android_serial.clone(),
+            )
+        })
     else {
         return;
     };
 
     if kind == OperationKind::AndroidInstall {
-        let result = perform_android_install(terminal, app, force_reinstall);
+        let result =
+            perform_android_install(terminal, app, force_reinstall, android_serial.as_deref());
         let phase = match result {
             Ok(AndroidInstallOutcome::Installed {
                 device,
@@ -756,6 +810,10 @@ fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
                     PLAY_INSTALLER_PACKAGE
                 ),
             },
+            Ok(AndroidInstallOutcome::NeedsDeviceSelection { devices }) => {
+                app.result_selected = 0;
+                OperationPhase::NeedsDeviceSelection { devices }
+            }
             Ok(AndroidInstallOutcome::NeedsReinstall {
                 device,
                 game_version,
@@ -803,6 +861,7 @@ fn perform_android_install(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     force_reinstall: bool,
+    selected_serial: Option<&str>,
 ) -> Result<AndroidInstallOutcome, String> {
     let service = AndroidService::new(
         app.paths.state_root.clone(),
@@ -811,7 +870,7 @@ fn perform_android_install(
     );
     let mut last_draw = Instant::now();
     service
-        .install_latest_with_progress(force_reinstall, |event| {
+        .install_latest_with_progress(force_reinstall, selected_serial, |event| {
             let immediate = !matches!(event, AndroidProgress::DownloadingApk { .. });
             app.update_android_progress(event);
             if immediate || last_draw.elapsed() >= Duration::from_millis(50) {
@@ -907,8 +966,8 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(10),
-            Constraint::Min(10),
+            Constraint::Length(13),
+            Constraint::Min(8),
             Constraint::Length(3),
         ])
         .split(area);
@@ -949,10 +1008,11 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(6),
+            Constraint::Length(4),
+            Constraint::Length(6),
         ])
         .split(inner);
+
     frame.render_widget(
         Paragraph::new(status_text_line(
             "Patcher 경로",
@@ -960,15 +1020,6 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         )),
         rows[0],
     );
-
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(48),
-            Constraint::Length(2),
-            Constraint::Percentage(52),
-        ])
-        .split(rows[2]);
 
     let android = Text::from(vec![
         Line::from(Span::styled(
@@ -981,11 +1032,11 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         status_text_line("상태", app.android_progress.status.clone()),
         status_text_line("설치 소스", PLAY_INSTALLER_PACKAGE.into()),
     ]);
-    frame.render_widget(Paragraph::new(android), columns[0]);
+    frame.render_widget(Paragraph::new(android), rows[1]);
 
     let steam = Text::from(vec![
         Line::from(Span::styled(
-            "PC (Steam)",
+            "Steam",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -996,7 +1047,7 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         status_text_line("게임", format!("{game_version} · catalog {catalog}")),
         status_text_line("패치", installed),
     ]);
-    frame.render_widget(Paragraph::new(steam), columns[2]);
+    frame.render_widget(Paragraph::new(steam), rows[2]);
 }
 
 fn status_text_line(label: &'static str, value: String) -> Line<'static> {
@@ -1124,7 +1175,7 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             let status = if pending {
                 "현재 상태 정보를 표시했습니다. 작업을 시작합니다..."
             } else {
-                "설치 기록을 검증하고 PC 패치를 제거하는 중입니다..."
+                "설치 기록을 검증하고 Steam 패치를 제거하는 중입니다..."
             };
             let text = Text::from(vec![
                 Line::from(vec![
@@ -1144,6 +1195,48 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     .block(Block::default().borders(Borders::ALL).title(title))
                     .wrap(Wrap { trim: false }),
                 area,
+            );
+        }
+        OperationPhase::NeedsDeviceSelection { devices } => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(4), Constraint::Min(4)])
+                .split(area);
+            let text = Text::from(vec![
+                Line::from(Span::styled(
+                    "패치할 Android 기기를 선택하세요.",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from("같은 기기가 USB/무선 ADB로 중복 확인되면 자동으로 하나로 합칩니다."),
+            ]);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::default().borders(Borders::ALL).title(title.clone())),
+                chunks[0],
+            );
+
+            let items = devices
+                .iter()
+                .map(|device| ListItem::new(device.selection_name()))
+                .collect::<Vec<_>>();
+            let block = Block::default().borders(Borders::ALL).title(" 기기 선택 ");
+            let inner = block.inner(chunks[1]);
+            let list = List::new(items)
+                .block(block)
+                .highlight_symbol("▶ ")
+                .highlight_style(
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                );
+            let mut state = ListState::default();
+            state.select(Some(app.result_selected));
+            frame.render_stateful_widget(list, chunks[1], &mut state);
+            add_list_hits(
+                &mut app.hit_regions,
+                inner,
+                devices.len(),
+                HitTarget::Device,
             );
         }
         OperationPhase::NeedsReinstall { message } => {
@@ -1624,6 +1717,44 @@ mod tests {
         let operation = app.operation.as_ref().unwrap();
         assert!(operation.force_reinstall);
         assert!(matches!(operation.phase, OperationPhase::Pending));
+    }
+
+    #[test]
+    fn device_selection_requeues_android_operation_with_serial() {
+        let mut app = app(UriAction::Menu);
+        app.start_operation(OperationKind::AndroidInstall, false, None);
+        let devices = vec![
+            AndroidDevice {
+                serial: "USB123".into(),
+                state: crate::android::AndroidDeviceState::Device,
+                model: "SM F741N".into(),
+                provider: "Android USB/ADB".into(),
+                kind: crate::android::AndroidDeviceKind::Physical,
+                adb_path: PathBuf::from("adb.exe"),
+            },
+            AndroidDevice {
+                serial: "emulator-5554".into(),
+                state: crate::android::AndroidDeviceState::Device,
+                model: "MuMu".into(),
+                provider: "MuMu Player".into(),
+                kind: crate::android::AndroidDeviceKind::Emulator,
+                adb_path: PathBuf::from("adb.exe"),
+            },
+        ];
+        app.operation.as_mut().unwrap().phase = OperationPhase::NeedsDeviceSelection { devices };
+        app.result_selected = 1;
+        app.activate_device_selection();
+
+        let operation = app.operation.as_ref().unwrap();
+        assert_eq!(operation.android_serial.as_deref(), Some("emulator-5554"));
+        assert!(matches!(operation.phase, OperationPhase::Pending));
+        assert!(
+            app.android_progress
+                .device
+                .as_deref()
+                .unwrap()
+                .contains("MuMu")
+        );
     }
 
     #[test]
