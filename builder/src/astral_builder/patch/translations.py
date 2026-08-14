@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from astral_builder.database.snapshot import SnapshotUnit, TranslationSnapshot, TranslationState
+from astral_builder.database.snapshot import SnapshotUnit, TranslationSnapshot
 from astral_builder.formats.astral_str import StrDocument, StrEntry, decode_str, encode_str
 from astral_builder.formats.lang_xml import decode_lang_xml, encode_lang_xml
 from astral_builder.formats.model import SourceStrings
@@ -22,12 +22,10 @@ class PatchStats:
 
 
 def select_translation(unit: SnapshotUnit, channel: DistributionChannel) -> str | None:
-    # Distribution channel never weakens the translation approval policy.
-    # Only translations approved for the current source fingerprint may enter a patch.
+    # ``translations`` contains approved production values only. Pending/rejected proposals live
+    # in ``translation_changes`` and never reach the build snapshot.
     _ = channel
-    if unit.state is TranslationState.APPROVED:
-        return unit.translation
-    return None
+    return unit.translation or None
 
 
 def _snapshot_map(

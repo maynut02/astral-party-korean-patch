@@ -13,7 +13,7 @@ Identity = tuple[str, str, str]
 
 
 class RevisionConflictError(RuntimeError):
-    """Raised when an already persisted immutable revision has different content."""
+    """Raised when already persisted immutable revision metadata changes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,34 +33,6 @@ class SourceSyncResult:
     revision_id: UUID
     plan: SourceSyncPlan
     idempotent: bool = False
-
-
-def _source_map(units: tuple[TranslationUnit, ...]) -> dict[Identity, str]:
-    result: dict[Identity, str] = {}
-    for unit in units:
-        if unit.identity in result:
-            raise ValueError(f"duplicate translation unit identity: {unit.identity}")
-        result[unit.identity] = unit.source.fingerprint
-    return result
-
-
-def assert_idempotent_source_match(
-    units: tuple[TranslationUnit, ...],
-    persisted: dict[Identity, str],
-) -> None:
-    incoming = _source_map(units)
-    if incoming != persisted:
-        added = sorted(set(incoming) - set(persisted))
-        removed = sorted(set(persisted) - set(incoming))
-        changed = sorted(
-            identity
-            for identity in set(incoming) & set(persisted)
-            if incoming[identity] != persisted[identity]
-        )
-        raise RevisionConflictError(
-            "existing revision source set differs from incoming data: "
-            f"added={added[:10]} removed={removed[:10]} changed={changed[:10]}"
-        )
 
 
 def _ensure_revision(conn: psycopg.Connection, revision: RevisionInput) -> tuple[UUID, bool]:
@@ -85,7 +57,7 @@ def _ensure_revision(conn: psycopg.Connection, revision: RevisionInput) -> tuple
             )
             if existing != incoming:
                 raise RevisionConflictError(
-                    f"immutable revision metadata changed for "
+                    "immutable revision metadata changed for "
                     f"{revision.route}/{revision.game_version}/{revision.revision}"
                 )
             return revision_id, True
@@ -114,44 +86,23 @@ def _ensure_revision(conn: psycopg.Connection, revision: RevisionInput) -> tuple
         return revision_id, False
 
 
-def _current_revision_sources(
-    conn: psycopg.Connection,
-    revision_id: UUID,
-) -> dict[Identity, str]:
+def _active_source_states(conn: psycopg.Connection) -> dict[Identity, ExistingSourceState]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT tu.kind, tu.namespace, tu.unit_key, st.source_fingerprint
-            FROM source_texts st
-            JOIN translation_units tu ON tu.id = st.unit_id
-            WHERE st.revision_id = %s
-            """,
-            (revision_id,),
-        )
-        return {(row[0], row[1], row[2]): row[3] for row in cur.fetchall()}
-
-
-def _latest_source_states(
-    conn: psycopg.Connection,
-    *,
-    route: str,
-    exclude_revision_id: UUID,
-) -> dict[Identity, ExistingSourceState]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT DISTINCT ON (tu.id)
-                tu.kind, tu.namespace, tu.unit_key, tu.id, st.source_fingerprint
+            SELECT
+                tu.kind, tu.namespace, tu.unit_key,
+                tu.id, sv.id, sv.source_fingerprint
             FROM translation_units tu
-            JOIN source_texts st ON st.unit_id = tu.id
-            JOIN game_revisions gr ON gr.id = st.revision_id
-            WHERE gr.route = %s AND gr.id <> %s
-            ORDER BY tu.id, gr.detected_at DESC, gr.id DESC
-            """,
-            (route, exclude_revision_id),
+            JOIN source_versions sv ON sv.id = tu.current_source_version_id
+            """
         )
         return {
-            (row[0], row[1], row[2]): ExistingSourceState(str(row[3]), row[4])
+            (row[0], row[1], row[2]): ExistingSourceState(
+                unit_id=row[3],
+                source_version_id=row[4],
+                source_fingerprint=row[5],
+            )
             for row in cur.fetchall()
         }
 
@@ -162,11 +113,53 @@ def _all_unit_ids(conn: psycopg.Connection) -> dict[Identity, UUID]:
         return {(row[0], row[1], row[2]): row[3] for row in cur.fetchall()}
 
 
+def _ensure_source_version(
+    conn: psycopg.Connection,
+    *,
+    unit_id: UUID,
+    revision_id: UUID,
+    unit: TranslationUnit,
+) -> UUID:
+    source = unit.source.normalized()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM source_versions
+            WHERE unit_id = %s AND source_fingerprint = %s
+            """,
+            (unit_id, source.fingerprint),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            return row[0]
+        source_version_id = uuid4()
+        cur.execute(
+            """
+            INSERT INTO source_versions(
+                id, unit_id, cn_s, en, jp, cn_t, source_fingerprint, first_seen_revision_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_version_id,
+                unit_id,
+                source.cn_s,
+                source.en,
+                source.jp,
+                source.cn_t,
+                source.fingerprint,
+                revision_id,
+            ),
+        )
+    return source_version_id
+
+
 def sync_revision_metadata(
     conn: psycopg.Connection,
     revision: RevisionInput,
 ) -> tuple[UUID, bool]:
-    """Persist immutable route compatibility metadata without source translations."""
+    """Persist immutable route compatibility metadata without translation source data."""
     with conn.transaction():
         revision_id, existed = _ensure_revision(conn, revision)
     return revision_id, existed
@@ -177,47 +170,20 @@ def sync_revision_sources(
     revision: RevisionInput,
     units: tuple[TranslationUnit, ...],
 ) -> SourceSyncResult:
-    """Persist one complete source snapshot without modifying translations."""
+    """Apply an INT_STEAM source scan and persist only actual source changes.
+
+    The game revision is the change group. New source text versions are inserted only for
+    added/modified units; unchanged text is represented by the existing current pointer.
+    Removed units clear their current source pointer but keep all historical versions.
+    """
     with conn.transaction():
         revision_id, existed = _ensure_revision(conn, revision)
-        current = _current_revision_sources(conn, revision_id)
-        if current:
-            assert_idempotent_source_match(units, current)
-            existing = _latest_source_states(
-                conn,
-                route=revision.route,
-                exclude_revision_id=revision_id,
-            )
-            return SourceSyncResult(
-                revision_id=revision_id,
-                plan=plan_source_sync(units, existing),
-                idempotent=True,
-            )
-        if existed:
-            # A revision row with no source rows can only be a safely retryable pre-sync state.
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT processed_at FROM game_revisions WHERE id = %s",
-                    (revision_id,),
-                )
-                processed_at = cur.fetchone()[0]
-            if processed_at is not None:
-                raise RevisionConflictError("processed revision unexpectedly has no source rows")
-
-        existing = _latest_source_states(
-            conn,
-            route=revision.route,
-            exclude_revision_id=revision_id,
-        )
+        existing = _active_source_states(conn)
         plan = plan_source_sync(units, existing)
 
         unit_ids = _all_unit_ids(conn)
-        missing_units = [unit for unit in units if unit.identity not in unit_ids]
+        missing_units = [item.unit for item in plan.sources if item.unit.identity not in unit_ids]
         if missing_units:
-            rows = [
-                (uuid4(), unit.kind.value, unit.namespace, unit.key)
-                for unit in missing_units
-            ]
             with conn.cursor() as cur:
                 cur.executemany(
                     """
@@ -225,36 +191,73 @@ def sync_revision_sources(
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (kind, namespace, unit_key) DO NOTHING
                     """,
-                    rows,
+                    [
+                        (uuid4(), unit.kind.value, unit.namespace, unit.key)
+                        for unit in missing_units
+                    ],
                 )
             unit_ids = _all_unit_ids(conn)
 
-        source_rows = []
-        for unit in units:
-            source = unit.source.normalized()
-            source_rows.append(
-                (
-                    revision_id,
-                    unit_ids[unit.identity],
-                    source.cn_s,
-                    source.en,
-                    source.jp,
-                    source.cn_t,
-                    source.fingerprint,
+        with conn.cursor() as cur:
+            for item in plan.sources:
+                if item.disposition.value == "unchanged":
+                    continue
+                unit_id = unit_ids[item.unit.identity]
+                new_source_version_id = _ensure_source_version(
+                    conn,
+                    unit_id=unit_id,
+                    revision_id=revision_id,
+                    unit=item.unit,
                 )
-            )
-        if source_rows:
-            with conn.cursor() as cur:
-                cur.executemany(
+                old_source_version_id = (
+                    None if item.state is None else item.state.source_version_id
+                )
+                change_type = "added" if item.state is None else "modified"
+                cur.execute(
                     """
-                    INSERT INTO source_texts(
-                        revision_id, unit_id, cn_s, en, jp, cn_t, source_fingerprint
+                    INSERT INTO source_changes(
+                        revision_id, unit_id, change_type,
+                        old_source_version_id, new_source_version_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
-                    source_rows,
+                    (
+                        revision_id,
+                        unit_id,
+                        change_type,
+                        old_source_version_id,
+                        new_source_version_id,
+                    ),
                 )
-        return SourceSyncResult(revision_id=revision_id, plan=plan)
+                cur.execute(
+                    "UPDATE translation_units SET current_source_version_id = %s WHERE id = %s",
+                    (new_source_version_id, unit_id),
+                )
+
+            for state in plan.removed:
+                cur.execute(
+                    """
+                    INSERT INTO source_changes(
+                        revision_id, unit_id, change_type,
+                        old_source_version_id, new_source_version_id
+                    )
+                    VALUES (%s, %s, 'removed', %s, NULL)
+                    """,
+                    (revision_id, state.unit_id, state.source_version_id),
+                )
+                cur.execute(
+                    "UPDATE translation_units SET current_source_version_id = NULL WHERE id = %s",
+                    (state.unit_id,),
+                )
+
+        return SourceSyncResult(
+            revision_id=revision_id,
+            plan=plan,
+            idempotent=existed
+            and plan.new_count == 0
+            and plan.changed_count == 0
+            and plan.removed_count == 0,
+        )
 
 
 def mark_revision_processed(conn: psycopg.Connection, revision_id: UUID) -> None:
@@ -273,6 +276,7 @@ def load_translation_snapshot(
     *,
     locale: str = "ko",
 ):
+    """Load the current canonical source plus current approved production translations."""
     from astral_builder.database.snapshot import SnapshotUnit, make_snapshot
     from astral_builder.formats.model import SourceStrings
 
@@ -288,40 +292,44 @@ def load_translation_snapshot(
         revision_row = cur.fetchone()
         if revision_row is None:
             raise KeyError(f"processed game revision not found: {revision_id}")
+        cur.execute(
+            """
+            SELECT id
+            FROM game_revisions
+            WHERE route = %s AND processed_at IS NOT NULL
+            ORDER BY detected_at DESC, processed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (revision_row[0],),
+        )
+        latest_row = cur.fetchone()
+        if latest_row is None or latest_row[0] != revision_id:
+            raise RuntimeError(
+                "translation snapshots may only be built from the latest canonical revision"
+            )
 
         cur.execute(
             """
             SELECT
-                tu.kind, tu.namespace, tu.unit_key,
-                st.cn_s, st.en, st.jp, st.cn_t, st.source_fingerprint,
-                COALESCE(tr.text, ''), tr.status, tr.source_fingerprint
-            FROM source_texts st
-            JOIN translation_units tu ON tu.id = st.unit_id
-            LEFT JOIN LATERAL (
-                SELECT candidate.text, candidate.status, candidate.source_fingerprint
-                FROM translations candidate
-                WHERE candidate.unit_id = tu.id AND candidate.locale = %s
-                ORDER BY
-                    (candidate.source_fingerprint = st.source_fingerprint) DESC,
-                    candidate.updated_at DESC,
-                    candidate.id DESC
-                LIMIT 1
-            ) tr ON TRUE
-            WHERE st.revision_id = %s
-            ORDER BY tu.kind, tu.namespace, tu.unit_key
+                src.kind, src.namespace, src.unit_key,
+                src.source_version_id,
+                src.cn_s, src.en, src.jp, src.cn_t,
+                COALESCE(tr.text, '')
+            FROM current_source_texts src
+            LEFT JOIN translations tr
+                ON tr.unit_id = src.unit_id AND tr.locale = %s
+            ORDER BY src.kind, src.namespace, src.unit_key
             """,
-            (locale, revision_id),
+            (locale,),
         )
         units = tuple(
             SnapshotUnit(
                 kind=row[0],
                 namespace=row[1],
                 key=row[2],
-                source=SourceStrings(cn_s=row[3], en=row[4], jp=row[5], cn_t=row[6]),
-                source_fingerprint=row[7],
+                source_version_id=str(row[3]),
+                source=SourceStrings(cn_s=row[4], en=row[5], jp=row[6], cn_t=row[7]),
                 translation=row[8],
-                translation_status=row[9],
-                translation_source_fingerprint=row[10],
             )
             for row in cur.fetchall()
         )
@@ -343,7 +351,6 @@ def load_latest_translation_snapshot(
     game_version: str,
     locale: str = "ko",
 ):
-    """Load the latest processed canonical source snapshot for a game version."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -352,9 +359,6 @@ def load_latest_translation_snapshot(
             WHERE route = %s
               AND game_version = %s
               AND processed_at IS NOT NULL
-              AND EXISTS (
-                  SELECT 1 FROM source_texts st WHERE st.revision_id = game_revisions.id
-              )
             ORDER BY detected_at DESC, processed_at DESC, id DESC
             LIMIT 1
             """,

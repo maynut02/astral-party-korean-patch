@@ -94,7 +94,7 @@ jobs:
           }
 
           # INT_STEAM is the only canonical translation source. Other routes
-          # persist compatibility metadata/assets only and never duplicate source_texts.
+          # persist compatibility metadata/assets only and never create canonical source versions.
           sync_route int_steam routes/int_steam.yaml
           sync_route cn_steam routes/cn_steam.yaml
           sync_route int_android routes/int_android.yaml
@@ -119,8 +119,14 @@ jobs:
 
           canonical_game_version="$(read_output .work/sync-output/int_steam game_version)"
           canonical_revision="$(read_output .work/sync-output/int_steam revision)"
+          source_added="$(read_output .work/sync-output/int_steam source_added)"
+          source_modified="$(read_output .work/sync-output/int_steam source_modified)"
+          source_removed="$(read_output .work/sync-output/int_steam source_removed)"
           echo "game_version=$canonical_game_version" >> "$GITHUB_OUTPUT"
           echo "revision=$canonical_revision" >> "$GITHUB_OUTPUT"
+          echo "source_added=$source_added" >> "$GITHUB_OUTPUT"
+          echo "source_modified=$source_modified" >> "$GITHUB_OUTPUT"
+          echo "source_removed=$source_removed" >> "$GITHUB_OUTPUT"
 
       - name: Report canonical translation status
         if: steps.plan.outputs.changed == 'true'
@@ -163,9 +169,10 @@ jobs:
             echo "- Mode: \`$MODE\`"
             echo "- Release: \`$title\`"
             echo "- Canonical source: \`INT_STEAM ${VERSION} r${REVISION}\`"
-            echo "- Translation: \`${{ steps.translations.outputs.approved }} / ${{ steps.translations.outputs.total }} approved\`"
-            echo "- Untranslated: \`${{ steps.translations.outputs.untranslated }}\` (original text retained)"
-            echo "- Needs review: \`${{ steps.translations.outputs.needs_review }}\` (original text retained)"
+            echo "- Source changes: \`+${{ steps.sync.outputs.source_added }} / ~${{ steps.sync.outputs.source_modified }} / -${{ steps.sync.outputs.source_removed }}\`"
+            echo "- Production translations: \`${{ steps.translations.outputs.approved }} / ${{ steps.translations.outputs.total }}\`"
+            echo "- No approved translation: \`${{ steps.translations.outputs.untranslated }}\` (original text retained)"
+            echo "- Pending translation proposals: \`${{ steps.translations.outputs.pending }}\` (not used by builds)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-dotnet@v5

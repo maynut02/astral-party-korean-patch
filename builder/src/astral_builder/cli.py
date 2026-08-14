@@ -92,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     translation_status.add_argument(
         "--strict",
         action="store_true",
-        help="Fail when any unit is not approved for the current source fingerprint.",
+        help="Fail when any current unit has no approved production translation.",
     )
 
     mark_released = subparsers.add_parser("mark-released", help="Mark a Neon build as released.")
@@ -155,6 +155,9 @@ def _run_sync(args: argparse.Namespace) -> int:
                 "catalogHash": prepared.catalog_hash,
                 "idempotent": result.idempotent,
                 "unitCount": result.unit_count,
+                "sourceAddedCount": result.source_added_count,
+                "sourceModifiedCount": result.source_modified_count,
+                "sourceRemovedCount": result.source_removed_count,
                 "assetLocationCount": result.asset_location_count,
                 "downloadedBundleCount": result.downloaded_bundle_count,
                 "emptyStrAssets": list(result.empty_str_assets),
@@ -248,7 +251,19 @@ def _run_update_index(args: argparse.Namespace) -> int:
 def _run_translation_status(args: argparse.Namespace) -> int:
     with psycopg.connect(_database_url()) as conn:
         snapshot = load_translation_snapshot(conn, UUID(args.revision_id))
-    report = summarize_translation_snapshot(snapshot)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT count(*)
+                FROM translation_changes tc
+                JOIN translation_units tu ON tu.id = tc.unit_id
+                WHERE tc.locale = 'ko'
+                  AND tc.status = 'pending'
+                  AND tu.current_source_version_id IS NOT NULL
+                """
+            )
+            pending = int(cur.fetchone()[0])
+    report = summarize_translation_snapshot(snapshot, pending=pending)
     if not report.releasable:
         raise SystemExit(f"Revision {args.revision_id} has no translation units")
     if args.github_output:
@@ -257,9 +272,7 @@ def _run_translation_status(args: argparse.Namespace) -> int:
         "total": report.total,
         "approved": report.approved,
         "untranslated": report.untranslated,
-        "draft": report.draft,
-        "reviewed": report.reviewed,
-        "needsReview": report.needs_review,
+        "pending": report.pending,
         "incomplete": report.incomplete,
         "examples": list(report.examples),
     }
@@ -267,7 +280,7 @@ def _run_translation_status(args: argparse.Namespace) -> int:
     if report.incomplete:
         print(
             "Translation warning: "
-            f"{report.incomplete}/{report.total} units are not currently approved; "
+            f"{report.incomplete}/{report.total} units have no approved translation; "
             "they will keep the original game text."
         )
         for example in report.examples:

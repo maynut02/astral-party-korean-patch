@@ -3,23 +3,28 @@ from astral_builder.database.repository import (
     RevisionConflictError,
     RevisionInput,
     SourceSyncResult,
-    assert_idempotent_source_match,
+    load_latest_translation_snapshot,
     load_translation_snapshot,
+    mark_revision_processed,
     sync_asset_locations,
+    sync_revision_metadata,
     sync_revision_sources,
 )
-from astral_builder.database.snapshot import (
-    SnapshotUnit,
-    TranslationSnapshot,
-    TranslationState,
-    make_snapshot,
-)
+from astral_builder.database.snapshot import SnapshotUnit, TranslationSnapshot, make_snapshot
 from astral_builder.database.sync import (
     ExistingSourceState,
     PlannedSource,
     SourceDisposition,
     SourceSyncPlan,
     plan_source_sync,
+)
+from astral_builder.database.translations import (
+    TranslationChangeGroupWrite,
+    TranslationProposal,
+    approve_translation_change,
+    create_translation_change_group,
+    propose_translation,
+    reject_translation_change,
 )
 
 __all__ = [
@@ -28,21 +33,23 @@ __all__ = [
     "PlannedSource",
     "RevisionConflictError",
     "RevisionInput",
+    "SnapshotUnit",
     "SourceDisposition",
     "SourceSyncPlan",
     "SourceSyncResult",
-    "SnapshotUnit",
+    "TranslationChangeGroupWrite",
+    "TranslationProposal",
     "TranslationSnapshot",
-    "TranslationState",
-    "TranslationWrite",
-    "assert_idempotent_source_match",
+    "approve_translation_change",
+    "create_translation_change_group",
+    "load_latest_translation_snapshot",
     "load_translation_snapshot",
     "make_snapshot",
     "mark_revision_processed",
     "plan_source_sync",
+    "propose_translation",
+    "reject_translation_change",
     "sync_asset_locations",
+    "sync_revision_metadata",
     "sync_revision_sources",
-    "upsert_translation",
 ]
-
-from astral_builder.database.translations import TranslationWrite, upsert_translation

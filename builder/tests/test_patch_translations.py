@@ -8,25 +8,14 @@ from astral_builder.patch.translations import (
 )
 
 
-def _snapshot_unit(
-    *,
-    kind: str,
-    namespace: str,
-    key: str,
-    translation: str,
-    approved: bool = True,
-    fresh: bool = True,
-) -> SnapshotUnit:
-    source_fp = "a" * 64
+def _snapshot_unit(*, kind: str, namespace: str, key: str, translation: str) -> SnapshotUnit:
     return SnapshotUnit(
         kind=kind,
         namespace=namespace,
         key=key,
         source=SourceStrings(en="source"),
-        source_fingerprint=source_fp,
+        source_version_id=f"source-{kind}-{namespace}-{key}",
         translation=translation,
-        translation_status="approved" if approved else "draft",
-        translation_source_fingerprint=source_fp if fresh else "b" * 64,
     )
 
 
@@ -41,91 +30,46 @@ def _snapshot(*units: SnapshotUnit):
     )
 
 
-def test_release_lang_only_uses_fresh_approved_translation() -> None:
+def test_lang_uses_production_translation_and_falls_back_to_source() -> None:
     snapshot = _snapshot(
-        _snapshot_unit(
-            kind="lang",
-            namespace="lang",
-            key="A",
-            translation="승인",
-        ),
-        _snapshot_unit(
-            kind="lang",
-            namespace="lang",
-            key="B",
-            translation="초안",
-            approved=False,
-        ),
-        _snapshot_unit(
-            kind="lang",
-            namespace="lang",
-            key="C",
-            translation="이전 소스 번역",
-            fresh=False,
-        ),
+        _snapshot_unit(kind="lang", namespace="lang", key="A", translation="승인 번역"),
+        _snapshot_unit(kind="lang", namespace="lang", key="B", translation=""),
     )
     payload, stats = patch_lang_payload(
-        (
-            '<resources><string name="A">A</string><string name="B">B</string>'
-            '<string name="C">C</string></resources>'
-        ),
+        '<resources><string name="A">A</string><string name="B">B</string></resources>',
         snapshot,
         channel=DistributionChannel.RELEASE,
     )
     text = payload.decode()
-    assert "승인" in text
-    assert "초안" not in text
-    assert "이전 소스 번역" not in text
+    assert "승인 번역" in text
+    assert ">B<" in text
     assert stats.translated_units == 1
 
 
-def test_develop_channel_keeps_same_approval_policy() -> None:
+def test_develop_channel_uses_the_same_production_translation_table() -> None:
     snapshot = _snapshot(
-        _snapshot_unit(
-            kind="lang",
-            namespace="lang",
-            key="A",
-            translation="초안",
-            approved=False,
-        )
+        _snapshot_unit(kind="lang", namespace="lang", key="A", translation="승인 번역")
     )
     payload, stats = patch_lang_payload(
         '<resources><string name="A">English</string></resources>',
         snapshot,
         channel=DistributionChannel.DEVELOP,
     )
-    assert "초안" not in payload.decode()
-    assert "English" in payload.decode()
-    assert stats.translated_units == 0
+    assert "승인 번역" in payload.decode()
+    assert stats.translated_units == 1
 
 
 def test_str_patch_replaces_only_configured_language_field() -> None:
     source = encode_str(
         StrDocument(
-            entries=(
-                StrEntry(
-                    1001,
-                    SourceStrings(cn_s="중", en="English", jp="日", cn_t="繁"),
-                ),
-            )
+            entries=(StrEntry(1001, SourceStrings(cn_s="중", en="English", jp="日", cn_t="繁")),)
         )
     )
     snapshot = _snapshot(
-        _snapshot_unit(
-            kind="str",
-            namespace="STRCard",
-            key="1001",
-            translation="한국어",
-        )
+        _snapshot_unit(kind="str", namespace="STRCard", key="1001", translation="한국어")
     )
-    payload, stats = patch_str_payload(
-        source,
-        snapshot,
-        namespace="STRCard",
-        target_field="en",
-    )
-    decoded = decode_str(payload)
-    entry = decoded.entries[0]
+    payload, stats = patch_str_payload(source, snapshot, namespace="STRCard", target_field="en")
+    entry = decode_str(payload).entries[0]
     assert entry.source.en == "한국어"
     assert entry.source.cn_s == "중"
     assert entry.source.jp == "日"
@@ -133,12 +77,7 @@ def test_str_patch_replaces_only_configured_language_field() -> None:
 
 
 def test_empty_str_payload_stays_empty() -> None:
-    payload, stats = patch_str_payload(
-        b"",
-        _snapshot(),
-        namespace="STRDynamic",
-        target_field="en",
-    )
+    payload, stats = patch_str_payload(b"", _snapshot(), namespace="STRDynamic", target_field="en")
     assert payload == b""
     assert stats.total_units == 0
 
@@ -154,11 +93,7 @@ def test_str_patch_preserves_grouped_mirror_layout() -> None:
         )
     )
     payload, _stats = patch_str_payload(
-        source,
-        _snapshot(),
-        namespace="STRServer",
-        target_field="en",
+        source, _snapshot(), namespace="STRServer", target_field="en"
     )
-    decoded = decode_str(payload)
-    assert decoded.mirrors_grouped is True
+    assert decode_str(payload).mirrors_grouped is True
     assert payload == source

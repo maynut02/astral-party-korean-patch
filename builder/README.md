@@ -14,23 +14,31 @@ astral-builder update-index
 astral-builder mark-released
 ```
 
-## 번역 source 구조
+## 원문과 번역 모델
 
-번역 원문은 `INT_STEAM` 하나만 canonical source로 사용합니다.
+번역 원문은 `INT_STEAM`만 canonical source로 사용합니다.
 
-- `INT_STEAM`: LANG/STR 원문 추출 후 `source_texts` 동기화.
-- `CN_STEAM`: catalog/bundle target metadata만 동기화.
-- `INT_ANDROID`: catalog/bundle target metadata만 동기화.
-- 세 route build: 같은 game version의 최신 processed `INT_STEAM` translation snapshot 사용.
+- `INT_STEAM`: LANG/STR을 추출해 현재 원문과 비교하고 **추가/변경/삭제된 항목만** DB에 기록합니다.
+- 하나의 `INT_STEAM game_revisions` row가 해당 업데이트의 원문 변경 그룹입니다.
+- 변경되지 않은 원문은 revision마다 복제하지 않습니다.
+- `CN_STEAM` / `INT_ANDROID`: route별 catalog/bundle 호환 metadata만 동기화합니다.
+- 세 route build는 같은 현재 `INT_STEAM` 원문/승인 번역을 사용합니다.
 
-`approved`이면서 현재 source fingerprint와 일치하는 번역만 patch에 들어갑니다. 다른 상태는 원문을 유지하며 `translation-status`가 상세 상태를 보고합니다.
+`translations`에는 승인된 production 번역만 존재합니다. 수정 제안은 먼저 `translation_changes(status=pending)`에 기록되고 승인 transaction이 성공한 경우에만 `translations`에 반영됩니다. 따라서 patch builder는 별도 상태 판정 없이 다음 규칙만 사용합니다.
+
+```text
+승인 번역 있음 -> translations.text
+승인 번역 없음 -> 게임 원문
+```
+
+원문이 바뀌어 새 번역 제안이 대기 중이어도 기존 승인 번역은 계속 production 값으로 유지됩니다.
 
 ## 로컬 검증
 
 ```bash
 python -m pip install -e './builder[dev]'
-python -m ruff check builder tools
+python -m ruff check builder tools database
 python -m pytest builder/tests
 ```
 
-운영 workflow와 Release 정책은 [`../docs/OPERATIONS.md`](../docs/OPERATIONS.md)를 참조합니다.
+DB 구조는 [`../database/README.md`](../database/README.md), 운영 workflow는 [`../docs/OPERATIONS.md`](../docs/OPERATIONS.md), 전체 초기화 절차는 [`../docs/RESET.md`](../docs/RESET.md)를 참조합니다.

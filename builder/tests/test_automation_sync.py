@@ -177,7 +177,7 @@ def test_sync_output_contract(tmp_path: Path) -> None:
         downloaded_bundles=(),
         empty_str_assets=(),
     )
-    result = SyncRevisionResult("revision-uuid", False, 0, 0, 0, ())
+    result = SyncRevisionResult("revision-uuid", False, 0, 1, 2, 3, 0, 0, ())
     write_sync_github_output(result, prepared, output)
     text = output.read_text()
     assert "revision_id=revision-uuid" in text
@@ -196,7 +196,7 @@ def test_target_route_persists_metadata_without_source_snapshot(
         return revision_id, False
 
     def fail_sources(*_args, **_kwargs):
-        raise AssertionError("target route must not persist source_texts")
+        raise AssertionError("target route must not persist canonical source versions")
 
     monkeypatch.setattr("astral_builder.automation.sync.sync_revision_metadata", fake_metadata)
     monkeypatch.setattr("astral_builder.automation.sync.sync_revision_sources", fail_sources)

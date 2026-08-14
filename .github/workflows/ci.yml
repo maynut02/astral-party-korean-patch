@@ -21,7 +21,7 @@ jobs:
       - name: Install builder
         run: python -m pip install -e './builder[dev]'
       - name: Lint
-        run: python -m ruff check builder tools
+        run: python -m ruff check builder tools database
       - name: Test
         run: python -m pytest builder/tests
 

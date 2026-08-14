@@ -1,48 +1,25 @@
-from astral_builder.database.snapshot import (
-    SnapshotUnit,
-    TranslationState,
-    make_snapshot,
-)
+from astral_builder.database.snapshot import SnapshotUnit, make_snapshot
 from astral_builder.formats.model import SourceStrings
 
 
-def _unit(
-    key: str,
-    *,
-    translation: str = "",
-    source_fp: str = "a" * 64,
-    translation_fp: str | None = None,
-    status: str | None = None,
-) -> SnapshotUnit:
+def _unit(key: str, *, translation: str = "") -> SnapshotUnit:
     return SnapshotUnit(
         kind="lang",
         namespace="lang",
         key=key,
         source=SourceStrings(en=f"source-{key}"),
-        source_fingerprint=source_fp,
+        source_version_id=f"source-version-{key}",
         translation=translation,
-        translation_status=status,
-        translation_source_fingerprint=translation_fp,
     )
 
 
-def test_snapshot_computes_translation_state_without_storing_derived_status() -> None:
-    assert _unit("A").state is TranslationState.UNTRANSLATED
-    changed = _unit("A", translation="번역", translation_fp="b" * 64)
-    assert changed.state is TranslationState.NEEDS_REVIEW
-    assert (
-        _unit(
-            "A",
-            translation="번역",
-            translation_fp="a" * 64,
-            status="approved",
-        ).state
-        is TranslationState.APPROVED
-    )
+def test_snapshot_translation_presence_is_the_only_build_state() -> None:
+    assert _unit("A").translated is False
+    assert _unit("A", translation="번역").translated is True
 
 
 def test_snapshot_fingerprint_is_order_independent_and_content_sensitive() -> None:
-    a = _unit("A", translation="하나", translation_fp="a" * 64, status="reviewed")
+    a = _unit("A", translation="하나")
     b = _unit("B")
     first = make_snapshot(
         revision_id="rev-id",
@@ -69,6 +46,6 @@ def test_snapshot_fingerprint_is_order_independent_and_content_sensitive() -> No
         game_version="3.2.0",
         revision="1042",
         locale="ko",
-        units=[_unit("A", translation="둘", translation_fp="a" * 64), b],
+        units=[_unit("A", translation="둘"), b],
     )
     assert changed.fingerprint != first.fingerprint

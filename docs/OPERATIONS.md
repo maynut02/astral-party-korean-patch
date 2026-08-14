@@ -72,42 +72,97 @@ gh secret set STEAM_REFRESH_TOKEN < .secrets/steam-refresh-token.txt
 gh secret set STEAM_USERNAME
 ```
 
-## 4. 번역 데이터의 단일 원본
+## 4. INT_STEAM 원문과 revision 변경 기록
 
-번역 원문 DB의 canonical source는 **`INT_STEAM` 하나뿐**입니다.
-
-```text
-INT_STEAM
-  └─ source_texts + translation_units + translations
-
-CN_STEAM
-  └─ route revision/catalog/asset compatibility metadata only
-
-INT_ANDROID
-  └─ route revision/catalog/asset compatibility metadata only
-```
-
-각 route 설정의 `translation.sourceRoute`는 `INT_STEAM`을 가리킵니다. `CN_STEAM`과 `INT_ANDROID`를 sync할 때는 해당 route의 Catalog/Bundle 위치와 hash 같은 빌드 호환 정보만 저장하며 번역 원문을 다시 추출해 `source_texts`에 복제하지 않습니다.
-
-세 route를 빌드할 때 모두 같은 게임 버전의 최신 processed `INT_STEAM` translation snapshot을 사용합니다. route마다 별도의 번역 승인율이나 fallback snapshot을 만들지 않습니다.
-
-과거 DB에 이미 존재하는 CN/Android `source_texts`는 migration으로 강제 삭제하지 않습니다. 이력 보존을 위해 남겨 두되 새 빌드에서는 사용하지 않습니다.
-
-## 5. 번역 승인 정책
-
-패치에 실제로 들어가는 번역 조건은 계속 엄격합니다.
+번역 원문의 canonical source는 **`INT_STEAM` 하나뿐**입니다. `CN_STEAM`과 `INT_ANDROID`는 route별 catalog/bundle 호환 metadata만 저장합니다.
 
 ```text
-현재 source fingerprint와 일치 + status=approved
-  -> 한국어 적용
+INT_STEAM game_revisions r116        <- 원문 변경 그룹
+  └─ source_changes
+       ├─ added
+       ├─ modified
+       └─ removed
 
-untranslated / draft / reviewed / needs_review
-  -> 게임 원문 유지
+translation_units
+  └─ current_source_version_id -> source_versions
+
+CN_STEAM / INT_ANDROID
+  └─ game_revisions + asset_locations only
 ```
 
-따라서 `translations.status='approved'`여도 `text`가 비어 있으면 `untranslated`, source fingerprint가 현재 원문과 다르면 `needs_review`입니다. 이전의 `1/8542 translation units are not approved` 오류는 이 계산 결과를 Release 전체 차단 조건으로 사용해서 발생했습니다.
+새 INT_STEAM revision을 탐색할 때 전체 원문을 revision마다 복제하지 않습니다. 각 unit의 현재 `source_fingerprint`와 새 scan을 비교해서 실제 변경만 저장합니다.
 
-이제 `Patch` workflow는 `astral-builder translation-status`로 상태를 보고하지만 미완료 항목 때문에 배포를 막지 않습니다. 미완료 항목은 패치 엔진이 원문을 유지하므로 안전하게 빌드할 수 있습니다. 완전 승인 여부를 별도로 검사해야 할 때만 다음 strict 검사를 사용할 수 있습니다.
+```text
+동일 fingerprint
+  -> DB 원문 row 추가 없음
+
+신규/변경 fingerprint
+  -> source_versions에 새 버전 저장
+  -> source_changes에 현재 revision 소속 change 기록
+  -> current_source_version_id 즉시 교체
+
+삭제된 unit
+  -> source_changes(change_type=removed)
+  -> current_source_version_id=NULL
+  -> 과거 source_versions는 유지
+```
+
+`source_changes.status`는 `applied`만 허용합니다. 게임 원문은 외부 사실이므로 번역처럼 승인 대기하지 않고 탐지한 revision에서 즉시 현재 상태로 적용됩니다. 따라서 웹사이트에서 원문 변경 이력을 표시할 때 `game_revisions` 하나를 그대로 change group으로 사용하면 됩니다.
+
+세 route의 patch build는 현재 INT_STEAM 원문과 같은 `translations` production table을 사용합니다. route별 번역 snapshot/승인율은 존재하지 않습니다.
+
+## 5. 번역 제안/승인과 Patch 선택 규칙
+
+`translations`는 **승인된 현재 production 번역 전용 테이블**입니다. `status` 컬럼이 없으며 row가 존재한다는 것 자체가 승인되어 패치에 사용 가능한 값이라는 의미입니다.
+
+새 번역이나 기존 번역 수정은 먼저 `translation_changes`에 들어갑니다.
+
+```text
+사용자 수정
+  -> translation_change_groups
+  -> translation_changes(status=pending)
+  -> translations는 변경 없음
+```
+
+검토 결과에 따라:
+
+```text
+pending -> approved
+        -> rejected
+        -> superseded
+```
+
+승인 시 하나의 DB transaction 안에서 change를 `approved`로 바꾸고 `translations`를 INSERT/UPDATE합니다. DB trigger도 `translations.applied_change_id`가 같은 unit/locale/text/source를 가진 approved change인지 검증하므로 향후 웹사이트가 production table을 승인 절차 없이 직접 변경할 수 없습니다.
+
+원문이 바뀌어도 기존 승인 번역은 자동 폐기하지 않습니다. 제안 이후 원문이 다시 바뀐 경우 그 stale pending proposal은 승인할 수 없고 현재 source version 기준으로 새 제안을 만들어야 합니다.
+
+Patch Builder의 선택 규칙은 의도적으로 단순합니다.
+
+```text
+translations에 승인 번역 있음
+  -> 승인 번역 사용
+
+translations에 승인 번역 없음
+  -> 현재 게임 원문 사용
+```
+
+따라서 다음 경우도 자동으로 처리됩니다.
+
+```text
+현재 승인 번역 = "게임 시작"
+최신 수정 제안 = "시작하기" (pending)
+-> Patch는 "게임 시작" 사용
+
+승인 번역 없음
+최신 수정 제안 = "시작하기" (pending)
+-> Patch는 게임 원문 사용
+
+최신 수정 제안을 승인
+-> translations가 "시작하기"로 갱신
+-> 다음 Patch부터 "시작하기" 사용
+```
+
+`astral-builder translation-status`는 현재 unit 수, production 번역 수, 미번역 수, pending proposal 수를 보고합니다. 미번역 unit은 원문 fallback이 가능하므로 일반 Release를 막지 않습니다. 모든 current unit에 production 번역이 있어야 하는 별도 검증이 필요할 때만 `--strict`를 사용합니다.
 
 ```bash
 astral-builder translation-status \
@@ -300,24 +355,47 @@ GAME_VERSION=3.3.0
 
 이후 canonical source와 각 route target의 revision/catalog/bundle 탐색은 `Patch` workflow가 처리합니다.
 
-## 12. Neon migration
+## 12. Neon migration과 전체 초기화
 
-`Patch` workflow는 DB 작업 전에 migration runner를 실행합니다.
-
-현재 migration:
+현재 DB는 향후 웹 번역 편집기를 고려한 새 production/audit 구조로 재설계했고 migration history를 하나의 baseline으로 squash했습니다.
 
 ```text
 0001_initial.sql
-0002_rebuildable_builds.sql
-0003_release_channels.sql
-0004_approve_legacy_imports.sql
-0005_translation_variants.sql
-0006_revert_synthetic_approvals.sql
 ```
 
-`0005_translation_variants.sql`부터 translation은 `unit + locale + source_fingerprint`별 변형을 보존합니다. 현재 source와 정확히 일치하는 translation이 snapshot에서 우선 선택됩니다.
+주요 DB 객체:
 
-`0006_revert_synthetic_approvals.sql`은 이전 all-approved gate를 우회하기 위해 `one-shot-neon-approve` actor로 임시 승인했던 synthetic fallback 행만 `draft`로 되돌립니다. 실제 번역이나 다른 actor의 승인 상태는 변경하지 않습니다.
+```text
+game_revisions
+asset_locations
+translation_units
+source_versions
+source_changes
+translation_change_groups
+translation_changes
+translations
+builds
+build_files
+current_source_texts (view)
+translation_workbench (view)
+```
+
+기존 DB에는 과거 `0001_initial.sql` checksum이 기록되어 있기 때문에 새 코드를 기존 DB에 그대로 migration하는 것은 지원하지 않습니다. 승인 번역을 먼저 backup한 뒤 DB/Release/tag/index를 모두 초기화해서 새 baseline에서 다시 채웁니다.
+
+전체 명령과 복구 순서는 [`RESET.md`](RESET.md)를 따릅니다.
+
+```text
+승인 번역 export
+-> 새 코드 push
+-> database/reset.py
+-> database/migrate.py
+-> GitHub Release/tag/distribution 초기화
+-> Patch mode=pre로 원문 재수집
+-> 승인 번역 import
+-> Patch mode=release
+-> INT_ANDROID APK
+-> AutoPatcher
+```
 
 Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 접속하지 않습니다.
 

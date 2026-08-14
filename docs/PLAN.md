@@ -91,17 +91,21 @@ Patcher는 Neon DB에 직접 접근하지 않는다.
 - `game_revisions`
 - `asset_locations`
 - `translation_units`
-- `source_texts`
+- `source_versions`
+- `source_changes`
+- `translation_change_groups`
+- `translation_changes`
 - `translations`
-- `translation_history`
 - `builds`
 - `build_files`
 
 원칙:
 
-- 원문 revision history 보존
-- 번역은 원문 sync 시 삭제하지 않음
-- source fingerprint로 source change 계산
+- INT_STEAM revision을 원문 변경 그룹으로 사용
+- source fingerprint가 새로 생긴 경우에만 source version 저장
+- added/modified/removed 원문 변경을 `source_changes`로 기록하고 즉시 적용
+- `translations`에는 승인된 production 번역만 저장
+- pending/rejected/superseded 제안은 `translation_changes`에 보존
 - migration이 DB schema의 유일한 정의
 - migration/builder/editor 역할 분리 가능하도록 권한 경계 설계
 - Actions runtime에는 Neon pooled connection, migration에는 필요 시 direct connection 사용
@@ -186,7 +190,7 @@ scheduled pre
   -> INT_STEAM만 remote revision check
   -> INT_STEAM canonical source sync
   -> CN_STEAM / INT_ANDROID target compatibility sync
-  -> approved translation status report
+  -> production/pending translation status report
   -> Steam legacy inputs 한 번에 취득
   -> 세 route build + validation
   -> 하나의 v<game>_r<canonical-revision>-pre prerelease
@@ -198,7 +202,7 @@ manual release
   -> 하나의 v<game>_r<canonical-revision> release (같은 revision 재배포 시 검증 후 교체)
 ```
 
-번역 승인 자체는 release를 트리거하지 않습니다. `approved + current fingerprint` 번역만 payload에 들어가고 나머지는 원문을 유지합니다. 미번역 unit은 상태 보고에는 포함하지만 release 전체를 막지 않습니다.
+번역 승인 자체는 release를 트리거하지 않습니다. `translations` production row가 있으면 그 값을 사용하고 없으면 현재 원문을 유지합니다. pending/rejected/superseded proposal은 빌드 입력에 포함되지 않습니다.
 
 세 route별 manifest는 한 Release에 함께 배포합니다. payload filename에는 route prefix를 붙여 asset 충돌을 방지합니다.
 
@@ -217,17 +221,17 @@ v<game-version>_r<canonical-revision>
 
 번역 source와 route compatibility를 분리합니다.
 
-- `INT_STEAM`만 `source_texts`를 생성하는 canonical translation source다.
+- `INT_STEAM`만 canonical translation source다.
 - `CN_STEAM`/`INT_ANDROID`는 `game_revisions`와 `asset_locations`로 target catalog/bundle 호환 정보만 저장한다.
-- 세 route 빌드는 같은 game version의 최신 processed `INT_STEAM` translation snapshot을 사용한다.
-- 동일 key + 동일 source fingerprint: 기존 번역 그대로 사용.
-- 동일 key + 변경 fingerprint: 기존 번역 variant를 보존하고 현재 snapshot에서 `needs_review`로 계산.
-- 신규 key: `untranslated`.
-- 최신 canonical revision에 없는 key: historical data는 보존하되 현재 snapshot에서는 사용하지 않는다.
-- sync는 translation row를 삭제하지 않는다.
-- 과거 CN/Android source snapshot은 이력으로 남기지만 새 빌드에서는 canonical source로 사용하지 않는다.
+- 동일 key + 동일 source fingerprint: source row를 새로 만들지 않는다.
+- 신규/변경 key: `source_versions`를 생성 또는 재사용하고 현재 pointer를 교체한다.
+- 삭제 key: current source pointer를 비우고 revision의 `source_changes`에 removed를 기록한다.
+- `game_revisions`의 INT_STEAM revision 하나가 원문 change group이다.
+- `translations`는 승인된 production 값만 가진다. source change가 발생해도 기존 승인값은 유지한다.
+- 번역 수정은 `translation_changes=pending`에 먼저 들어가며 승인 transaction만 `translations`를 변경한다.
+- patch build는 production translation이 있으면 사용하고 없으면 현재 원문을 사용한다.
 
-빌드 중에는 선택된 canonical snapshot의 fingerprint를 build metadata에 기록해 어떤 번역 상태로 생성됐는지 추적합니다.
+빌드 중에는 현재 source + production translation snapshot fingerprint를 build metadata에 기록합니다.
 
 
 ## 6. Patch installation protocol

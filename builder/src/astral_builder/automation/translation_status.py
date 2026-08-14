@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from astral_builder.database.snapshot import TranslationSnapshot, TranslationState
+from astral_builder.database.snapshot import TranslationSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,14 +11,12 @@ class TranslationStatusReport:
     total: int
     approved: int
     untranslated: int
-    draft: int
-    reviewed: int
-    needs_review: int
+    pending: int
     examples: tuple[str, ...]
 
     @property
     def incomplete(self) -> int:
-        return self.total - self.approved
+        return self.untranslated
 
     @property
     def releasable(self) -> bool:
@@ -29,22 +26,19 @@ class TranslationStatusReport:
 def summarize_translation_snapshot(
     snapshot: TranslationSnapshot,
     *,
+    pending: int = 0,
     example_limit: int = 20,
 ) -> TranslationStatusReport:
-    counts = Counter(unit.state for unit in snapshot.units)
-    examples = tuple(
-        f"{unit.state.value}: {unit.kind}/{unit.namespace}/{unit.key}"
-        for unit in snapshot.units
-        if unit.state is not TranslationState.APPROVED
-    )[:example_limit]
+    untranslated_units = tuple(unit for unit in snapshot.units if not unit.translated)
     return TranslationStatusReport(
         total=len(snapshot.units),
-        approved=counts[TranslationState.APPROVED],
-        untranslated=counts[TranslationState.UNTRANSLATED],
-        draft=counts[TranslationState.DRAFT],
-        reviewed=counts[TranslationState.REVIEWED],
-        needs_review=counts[TranslationState.NEEDS_REVIEW],
-        examples=examples,
+        approved=len(snapshot.units) - len(untranslated_units),
+        untranslated=len(untranslated_units),
+        pending=pending,
+        examples=tuple(
+            f"untranslated: {unit.kind}/{unit.namespace}/{unit.key}"
+            for unit in untranslated_units[:example_limit]
+        ),
     )
 
 
@@ -58,7 +52,5 @@ def write_translation_status_github_output(
         file.write(f"total={report.total}\n")
         file.write(f"approved={report.approved}\n")
         file.write(f"untranslated={report.untranslated}\n")
-        file.write(f"draft={report.draft}\n")
-        file.write(f"reviewed={report.reviewed}\n")
-        file.write(f"needs_review={report.needs_review}\n")
+        file.write(f"pending={report.pending}\n")
         file.write(f"incomplete={report.incomplete}\n")

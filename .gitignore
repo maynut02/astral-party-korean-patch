@@ -29,3 +29,6 @@ Thumbs.db
 artifacts/
 output/
 depots/
+
+# Local database backups
+translations-backup*.json

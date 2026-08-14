@@ -57,6 +57,9 @@ class SyncRevisionResult:
     revision_id: str
     idempotent: bool
     unit_count: int
+    source_added_count: int
+    source_modified_count: int
+    source_removed_count: int
     asset_location_count: int
     downloaded_bundle_count: int
     empty_str_assets: tuple[str, ...]
@@ -294,8 +297,12 @@ def persist_prepared_revision(
         source_result: SourceSyncResult = sync_revision_sources(conn, revision, prepared.units)
         revision_id = source_result.revision_id
         source_idempotent = source_result.idempotent
+        source_added_count = source_result.plan.new_count
+        source_modified_count = source_result.plan.changed_count
+        source_removed_count = source_result.plan.removed_count
     else:
         revision_id, source_idempotent = sync_revision_metadata(conn, revision)
+        source_added_count = source_modified_count = source_removed_count = 0
 
     locations_idempotent = sync_asset_locations(
         conn,
@@ -307,6 +314,9 @@ def persist_prepared_revision(
         revision_id=str(revision_id),
         idempotent=source_idempotent and locations_idempotent,
         unit_count=len(prepared.units),
+        source_added_count=source_added_count,
+        source_modified_count=source_modified_count,
+        source_removed_count=source_removed_count,
         asset_location_count=len(prepared.asset_locations),
         downloaded_bundle_count=len(prepared.downloaded_bundles),
         empty_str_assets=prepared.empty_str_assets,
@@ -326,6 +336,9 @@ def write_sync_github_output(
         f"game_version={prepared.source.version}",
         f"revision={prepared.source.revision}",
         f"catalog_hash={prepared.catalog_hash}",
+        f"source_added={result.source_added_count}",
+        f"source_modified={result.source_modified_count}",
+        f"source_removed={result.source_removed_count}",
     )
     with path.open("a", encoding="utf-8", newline="\n") as file:
         file.write("\n".join(lines) + "\n")

@@ -4,17 +4,8 @@ import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import StrEnum
 
 from astral_builder.formats.model import SourceStrings
-
-
-class TranslationState(StrEnum):
-    UNTRANSLATED = "untranslated"
-    DRAFT = "draft"
-    REVIEWED = "reviewed"
-    APPROVED = "approved"
-    NEEDS_REVIEW = "needs_review"
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,26 +14,16 @@ class SnapshotUnit:
     namespace: str
     key: str
     source: SourceStrings
-    source_fingerprint: str
+    source_version_id: str
     translation: str
-    translation_status: str | None
-    translation_source_fingerprint: str | None
 
     @property
     def identity(self) -> tuple[str, str, str]:
         return (self.kind, self.namespace, self.key)
 
     @property
-    def state(self) -> TranslationState:
-        if not self.translation:
-            return TranslationState.UNTRANSLATED
-        if self.translation_source_fingerprint != self.source_fingerprint:
-            return TranslationState.NEEDS_REVIEW
-        if self.translation_status == "approved":
-            return TranslationState.APPROVED
-        if self.translation_status == "reviewed":
-            return TranslationState.REVIEWED
-        return TranslationState.DRAFT
+    def translated(self) -> bool:
+        return bool(self.translation)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -55,9 +36,9 @@ class SnapshotUnit:
                 "jp": self.source.jp,
                 "cn_t": self.source.cn_t,
             },
-            "sourceFingerprint": self.source_fingerprint,
+            "sourceVersionId": self.source_version_id,
+            "sourceFingerprint": self.source.fingerprint,
             "translation": self.translation,
-            "state": self.state.value,
         }
 
 
@@ -90,7 +71,7 @@ class TranslationSnapshot:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "revisionId": self.revision_id,
             "route": self.route,
             "gameVersion": self.game_version,

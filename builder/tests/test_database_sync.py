@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 
 from astral_builder.database.sync import (
@@ -17,18 +19,18 @@ def _unit(key: str, text: str) -> TranslationUnit:
     )
 
 
-def test_source_sync_classifies_new_unchanged_changed_and_missing() -> None:
+def _state(unit: TranslationUnit) -> ExistingSourceState:
+    return ExistingSourceState(uuid4(), uuid4(), unit.source.fingerprint)
+
+
+def test_source_sync_classifies_new_unchanged_changed_and_removed() -> None:
     old_a = _unit("A", "same")
     old_b = _unit("B", "old")
     old_c = _unit("C", "gone")
     incoming = [old_a, _unit("B", "new"), _unit("D", "added")]
-    existing = {
-        old_a.identity: ExistingSourceState("unit-a", old_a.source.fingerprint),
-        old_b.identity: ExistingSourceState("unit-b", old_b.source.fingerprint),
-        old_c.identity: ExistingSourceState("unit-c", old_c.source.fingerprint),
-    }
+    states = {unit.identity: _state(unit) for unit in (old_a, old_b, old_c)}
 
-    plan = plan_source_sync(incoming, existing)
+    plan = plan_source_sync(incoming, states)
 
     assert [item.disposition for item in plan.sources] == [
         SourceDisposition.UNCHANGED,
@@ -38,15 +40,16 @@ def test_source_sync_classifies_new_unchanged_changed_and_missing() -> None:
     assert plan.new_count == 1
     assert plan.changed_count == 1
     assert plan.unchanged_count == 1
-    assert plan.missing_identities == (("lang", "lang", "C"),)
+    assert plan.removed == (states[old_c.identity],)
+    assert plan.removed_count == 1
 
 
-def test_source_sync_does_not_model_translation_deletion() -> None:
+def test_removed_source_is_history_not_translation_deletion() -> None:
     old = _unit("A", "old")
-    existing = {old.identity: ExistingSourceState("unit-a", old.source.fingerprint)}
-    plan = plan_source_sync([], existing)
+    state = _state(old)
+    plan = plan_source_sync([], {old.identity: state})
     assert plan.sources == ()
-    assert plan.missing_identities == (old.identity,)
+    assert plan.removed == (state,)
 
 
 def test_source_sync_rejects_duplicate_incoming_identity() -> None:
