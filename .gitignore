@@ -25,6 +25,7 @@ Thumbs.db
 # Runtime caches / generated artifacts
 .cache/
 .work/
+.int_android/
 artifacts/
 output/
 depots/

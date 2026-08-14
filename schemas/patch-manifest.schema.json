@@ -139,8 +139,42 @@
         },
         "compression": {
           "const": "gzip"
+        },
+        "sourceSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "sourceSize": {
+          "type": "integer",
+          "minimum": 1
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "sourceSha256"
+            ]
+          },
+          "then": {
+            "required": [
+              "sourceSize"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "sourceSize"
+            ]
+          },
+          "then": {
+            "required": [
+              "sourceSha256"
+            ]
+          }
+        }
+      ]
     },
     "catalogHash": {
       "type": "string",

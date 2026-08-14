@@ -16,6 +16,10 @@ on:
         required: false
         default: ""
         type: string
+      needs_legacy_data:
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   actions: read
@@ -62,6 +66,7 @@ jobs:
 
   legacy:
     needs: sync
+    if: inputs.needs_legacy_data
     uses: ./.github/workflows/fetch-legacy-data.yml
     with:
       route: ${{ inputs.route }}
@@ -69,6 +74,10 @@ jobs:
 
   build-pre:
     needs: [sync, legacy]
+    if: >-
+      always() &&
+      needs.sync.result == 'success' &&
+      (!inputs.needs_legacy_data || needs.legacy.result == 'success')
     uses: ./.github/workflows/build-patch.yml
     with:
       revision_id: ${{ needs.sync.outputs.revision_id }}

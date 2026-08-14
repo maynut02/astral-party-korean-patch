@@ -1,0 +1,21 @@
+schemaVersion: 2
+route: INT_ANDROID
+platform: android
+translation:
+  canonicalFallbackRoute: INT_STEAM
+  lang:
+    assets:
+      jp: Japanese
+    target: jp
+  str:
+    catalogKey: GameData_INT
+    assetPrefix: STR
+    targetField: jp
+fonts:
+  tmp:
+    catalogKey: MochiyPopOne-Regular_TMP
+    asset: MochiyPopOne-Regular_TMP
+  legacy:
+    asset: MochiyPopOne-Regular
+resources:
+  root: resources/int_android

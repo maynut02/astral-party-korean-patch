@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: check-game-steam-routes
+  group: check-game-routes
   cancel-in-progress: false
 
 permissions:
@@ -29,4 +29,16 @@ jobs:
       route_config: routes/cn_steam.yaml
       game_version: ${{ vars.GAME_VERSION || '3.2.0' }}
       tag_suffix: -cn-steam
+    secrets: inherit
+
+  int-android:
+    needs: int-steam
+    if: needs.int-steam.result == 'success'
+    uses: ./.github/workflows/process-route.yml
+    with:
+      route: INT_ANDROID
+      route_config: routes/int_android.yaml
+      game_version: ${{ vars.GAME_VERSION || '3.2.0' }}
+      tag_suffix: -int-android
+      needs_legacy_data: false
     secrets: inherit

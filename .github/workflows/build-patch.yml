@@ -16,7 +16,8 @@ on:
         required: true
         type: string
       legacy_run_id:
-        required: true
+        required: false
+        default: ""
         type: string
       legacy_artifact_name:
         required: false
@@ -41,6 +42,7 @@ on:
         options:
           - routes/int_steam.yaml
           - routes/cn_steam.yaml
+          - routes/int_android.yaml
       patch_version:
         description: Patch version/tag to build
         required: true
@@ -52,12 +54,13 @@ on:
         type: choice
         options: [release, develop]
       legacy_run_id:
-        description: Workflow run ID containing the route data.unity3d artifact
-        required: true
+        description: Workflow run ID containing data.unity3d (Steam routes only)
+        required: false
+        default: ""
         type: string
       legacy_artifact_name:
-        description: Artifact containing data.unity3d
-        required: true
+        description: Artifact containing data.unity3d (Steam routes only)
+        required: false
         default: astral-party-legacy-data-int-steam
         type: string
 
@@ -83,6 +86,7 @@ jobs:
       - name: Install builder
         run: python -m pip install -e './builder[dev]'
       - name: Download legacy game data artifact
+        if: inputs.route_config != 'routes/int_android.yaml'
         uses: actions/download-artifact@v5
         with:
           name: ${{ inputs.legacy_artifact_name }}
@@ -90,6 +94,7 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.legacy_run_id }}
       - name: Locate legacy data.unity3d
+        if: inputs.route_config != 'routes/int_android.yaml'
         id: legacy
         shell: bash
         run: |
@@ -102,19 +107,25 @@ jobs:
         shell: bash
         env:
           ASSET_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.patch_version }}
-        run: >-
-          astral-builder build
-          --revision-id '${{ inputs.revision_id }}'
-          --route-config '${{ inputs.route_config }}'
-          --work-dir .work/build
-          --output-dir output/patch
-          --asset-base-url "$ASSET_BASE_URL"
-          --patch-version '${{ inputs.patch_version }}'
-          --github-run-id '${{ github.run_id }}'
-          --git-commit '${{ github.sha }}'
-          --channel '${{ inputs.channel }}'
-          --legacy-data '${{ steps.legacy.outputs.path }}'
-          --github-output "$GITHUB_OUTPUT"
+          LEGACY_DATA: ${{ steps.legacy.outputs.path }}
+        run: |
+          set -euo pipefail
+          args=(
+            --revision-id '${{ inputs.revision_id }}'
+            --route-config '${{ inputs.route_config }}'
+            --work-dir .work/build
+            --output-dir output/patch
+            --asset-base-url "$ASSET_BASE_URL"
+            --patch-version '${{ inputs.patch_version }}'
+            --github-run-id '${{ github.run_id }}'
+            --git-commit '${{ github.sha }}'
+            --channel '${{ inputs.channel }}'
+            --github-output "$GITHUB_OUTPUT"
+          )
+          if [ -n "$LEGACY_DATA" ]; then
+            args+=(--legacy-data "$LEGACY_DATA")
+          fi
+          astral-builder build "${args[@]}"
       - name: Validate built patch in fresh process
         run: >-
           astral-builder validate-build
