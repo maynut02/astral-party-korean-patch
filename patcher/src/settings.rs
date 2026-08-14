@@ -36,7 +36,7 @@ pub struct RouteSettings {
 }
 
 impl RouteSettings {
-    #[cfg(windows)]
+    #[cfg(any(windows, test))]
     fn is_empty(&self) -> bool {
         self.steam_game_root.is_none() && self.locallow_root.is_none()
     }
@@ -189,8 +189,7 @@ impl AppSettings {
         Ok(())
     }
 
-    pub fn installation(&self) -> Result<GameInstallation, SettingsError> {
-        let route = self.selected_route;
+    pub fn installation_for(&self, route: GameRoute) -> Result<GameInstallation, SettingsError> {
         let settings = self.route_settings(route);
         let steam = settings
             .and_then(|value| value.steam_game_root.clone())
@@ -201,15 +200,18 @@ impl AppSettings {
         Ok(build_installation(route, steam, locallow)?)
     }
 
-    #[cfg(windows)]
-    fn select_only_detected_route_if_unconfigured(&mut self) -> bool {
+    pub fn installation(&self) -> Result<GameInstallation, SettingsError> {
+        self.installation_for(self.selected_route)
+    }
+
+    #[cfg(any(windows, test))]
+    fn select_only_detected_route_if_unconfigured(&mut self, detected: &[GameRoute]) -> bool {
         let current_empty = self
             .route_settings(self.selected_route)
             .is_none_or(RouteSettings::is_empty);
         if !current_empty {
             return false;
         }
-        let detected = crate::game::detect_windows_routes();
         if detected.len() == 1 && detected[0] != self.selected_route {
             self.selected_route = detected[0];
             return true;
@@ -218,9 +220,8 @@ impl AppSettings {
     }
 
     #[cfg(windows)]
-    pub fn auto_detect_missing(&mut self) -> bool {
-        let mut changed = self.select_only_detected_route_if_unconfigured();
-        let route = self.selected_route;
+    pub fn auto_detect_route_missing(&mut self, route: GameRoute) -> bool {
+        let mut changed = false;
         let needs_steam = self
             .route_settings(route)
             .and_then(|settings| settings.steam_game_root.as_ref())
@@ -241,6 +242,19 @@ impl AppSettings {
     }
 
     #[cfg(windows)]
+    pub fn auto_detect_selected_missing(&mut self) -> bool {
+        self.auto_detect_route_missing(self.selected_route)
+    }
+
+    #[cfg(windows)]
+    pub fn auto_detect_missing(&mut self) -> bool {
+        let detected = crate::game::detect_windows_routes();
+        let mut changed = self.select_only_detected_route_if_unconfigured(&detected);
+        changed |= self.auto_detect_selected_missing();
+        changed
+    }
+
+    #[cfg(windows)]
     pub fn redetect_all(&mut self) -> Result<(), SettingsError> {
         let route = self.selected_route;
         let steam_game_root = crate::game::discover_windows_steam_root(route)?;
@@ -253,6 +267,16 @@ impl AppSettings {
             },
         );
         Ok(())
+    }
+
+    #[cfg(not(windows))]
+    pub fn auto_detect_route_missing(&mut self, _route: GameRoute) -> bool {
+        false
+    }
+
+    #[cfg(not(windows))]
+    pub fn auto_detect_selected_missing(&mut self) -> bool {
+        false
     }
 
     #[cfg(not(windows))]
@@ -358,6 +382,37 @@ mod tests {
         assert!(settings.route_settings(GameRoute::IntSteam).is_some());
     }
 
+    #[test]
+    fn startup_selects_cn_when_cn_is_the_only_detected_route() {
+        let mut settings = AppSettings::default();
+        assert!(settings.select_only_detected_route_if_unconfigured(&[GameRoute::CnSteam]));
+        assert_eq!(settings.selected_route(), GameRoute::CnSteam);
+    }
+
+    #[test]
+    fn startup_keeps_current_route_when_both_routes_are_detected() {
+        let mut settings = AppSettings::default();
+        assert!(!settings.select_only_detected_route_if_unconfigured(&GameRoute::ALL));
+        assert_eq!(settings.selected_route(), GameRoute::IntSteam);
+
+        settings.set_selected_route(GameRoute::CnSteam);
+        assert!(!settings.select_only_detected_route_if_unconfigured(&GameRoute::ALL));
+        assert_eq!(settings.selected_route(), GameRoute::CnSteam);
+    }
+
+    #[test]
+    fn configured_route_is_not_auto_switched() {
+        let mut settings = AppSettings::default();
+        settings.routes.insert(
+            GameRoute::IntSteam,
+            RouteSettings {
+                steam_game_root: Some(PathBuf::from("C:/INT")),
+                locallow_root: None,
+            },
+        );
+        assert!(!settings.select_only_detected_route_if_unconfigured(&[GameRoute::CnSteam]));
+        assert_eq!(settings.selected_route(), GameRoute::IntSteam);
+    }
     #[test]
     fn route_selection_keeps_each_routes_paths() {
         let mut settings = AppSettings::default();

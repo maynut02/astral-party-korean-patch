@@ -36,4 +36,4 @@ pub use service::{
     remove_installed_patch,
 };
 pub use settings::{AppSettings, SettingsError};
-pub use uri::{URI_SCHEME, UriAction, UriError};
+pub use uri::{URI_SCHEME, UriAction, UriError, UriRequest};

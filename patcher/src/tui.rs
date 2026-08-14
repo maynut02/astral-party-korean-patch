@@ -16,6 +16,7 @@ use ratatui::widgets::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::game::GameRoute;
 use crate::install::ApplyPhase;
 use crate::service::{
     InstallOutcome, InstallProgress, PatchFileInfo, PatcherPaths,
@@ -23,7 +24,7 @@ use crate::service::{
     remove_installed_patch,
 };
 use crate::settings::AppSettings;
-use crate::uri::UriAction;
+use crate::uri::{UriAction, UriRequest};
 
 const MIN_WIDTH: u16 = 72;
 const MIN_HEIGHT: u16 = 27;
@@ -69,6 +70,7 @@ enum OperationPhase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OperationState {
     kind: OperationKind,
+    route: GameRoute,
     protocol_request: bool,
     phase: OperationPhase,
 }
@@ -134,7 +136,7 @@ impl App {
         paths: PatcherPaths,
         settings: AppSettings,
         installed_exe: PathBuf,
-        initial_action: UriAction,
+        initial_request: UriRequest,
         startup_notice: Option<String>,
         release_index_url: &'static str,
     ) -> Self {
@@ -154,11 +156,21 @@ impl App {
             hit_regions: Vec::new(),
             should_quit: false,
         };
-        match initial_action {
+        if let Some(route) = initial_request.route {
+            app.settings.auto_detect_route_missing(route);
+        }
+        match initial_request.action {
             UriAction::Menu => {}
-            UriAction::Install => app.start_operation(OperationKind::Install, true),
-            UriAction::Remove => app.start_operation(OperationKind::Remove, true),
+            UriAction::Install => {
+                app.start_operation(OperationKind::Install, true, initial_request.route)
+            }
+            UriAction::Remove => {
+                app.start_operation(OperationKind::Remove, true, initial_request.route)
+            }
             UriAction::Settings => {
+                if let Some(route) = initial_request.route {
+                    app.settings.set_selected_route(route);
+                }
                 app.screen = Screen::Settings;
                 app.notice = Some("웹사이트에서 프로그램 설정을 요청했습니다.".into());
             }
@@ -166,12 +178,18 @@ impl App {
         app
     }
 
-    fn start_operation(&mut self, kind: OperationKind, protocol_request: bool) {
+    fn start_operation(
+        &mut self,
+        kind: OperationKind,
+        protocol_request: bool,
+        route_override: Option<GameRoute>,
+    ) {
         if kind == OperationKind::Install {
             self.install_progress = InstallUiProgress::default();
         }
         self.operation = Some(OperationState {
             kind,
+            route: route_override.unwrap_or_else(|| self.settings.selected_route()),
             protocol_request,
             phase: OperationPhase::Pending,
         });
@@ -264,10 +282,10 @@ impl App {
         }
     }
 
-    fn perform_remove(&self) -> Result<String, String> {
+    fn perform_remove(&self, route: GameRoute) -> Result<String, String> {
         let game = self
             .settings
-            .installation()
+            .installation_for(route)
             .map_err(|error| error.to_string())?;
         let roots = install_roots(&game);
         match remove_installed_patch(&self.paths, &roots, game.route)
@@ -302,7 +320,7 @@ impl App {
     fn select_next_route(&mut self) {
         let old = self.settings.clone();
         self.settings.select_next_route();
-        self.settings.auto_detect_missing();
+        self.settings.auto_detect_selected_missing();
         if let Err(error) = self.settings.save(&self.paths.settings_path) {
             self.settings = old;
             self.notice = Some(format!("route 설정을 저장하지 못했습니다: {error}"));
@@ -369,8 +387,8 @@ impl App {
 
     fn activate_main(&mut self) {
         match self.main_selected {
-            0 => self.start_operation(OperationKind::Install, false),
-            1 => self.start_operation(OperationKind::Remove, false),
+            0 => self.start_operation(OperationKind::Install, false, None),
+            1 => self.start_operation(OperationKind::Remove, false, None),
             2 => {
                 self.screen = Screen::Settings;
                 self.notice = None;
@@ -562,7 +580,7 @@ pub fn run(
     paths: PatcherPaths,
     settings: AppSettings,
     installed_exe: PathBuf,
-    initial_action: UriAction,
+    initial_request: UriRequest,
     startup_notice: Option<String>,
     release_index_url: &'static str,
 ) -> io::Result<()> {
@@ -572,7 +590,7 @@ pub fn run(
             paths,
             settings,
             installed_exe,
-            initial_action,
+            initial_request,
             startup_notice,
             release_index_url,
         );
@@ -595,12 +613,16 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
 }
 
 fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
-    let Some(kind) = app.operation.as_ref().map(|state| state.kind) else {
+    let Some((kind, route)) = app
+        .operation
+        .as_ref()
+        .map(|state| (state.kind, state.route))
+    else {
         return;
     };
     let result = match kind {
-        OperationKind::Install => perform_install(terminal, app),
-        OperationKind::Remove => app.perform_remove(),
+        OperationKind::Install => perform_install(terminal, app, route),
+        OperationKind::Remove => app.perform_remove(route),
     };
     if let Some(operation) = &mut app.operation {
         operation.phase = match result {
@@ -616,11 +638,17 @@ fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
     }
 }
 
-fn perform_install(terminal: &mut DefaultTerminal, app: &mut App) -> Result<String, String> {
+fn perform_install(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    route: GameRoute,
+) -> Result<String, String> {
     let paths = app.paths.clone();
     let settings = app.settings.clone();
     let release_index_url = app.release_index_url;
-    let game = settings.installation().map_err(|error| error.to_string())?;
+    let game = settings
+        .installation_for(route)
+        .map_err(|error| error.to_string())?;
     let mut last_draw = Instant::now();
     let outcome =
         install_latest_compatible_with_progress(release_index_url, &paths, &game, |event| {
@@ -721,7 +749,7 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let rows = [
         status_row("Patcher 경로", app.installed_exe.display().to_string()),
         status_row("게임 route", route.as_str().to_string()),
-        status_row("Steam 경로", display_path(app.settings.steam_game_root())),
+        status_row("Steam 실행 경로", display_steam_route_path(&app.settings)),
         status_row("LocalLow 경로", display_path(app.settings.locallow_root())),
         status_row("게임 버전", game_version),
         status_row("Catalog", catalog),
@@ -770,11 +798,8 @@ fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             )),
         ]),
         Row::new(vec![
-            Cell::from("Steam 게임 경로"),
-            Cell::from(format!(
-                "[{}]",
-                display_path(app.settings.steam_game_root())
-            )),
+            Cell::from("Steam 실행 경로"),
+            Cell::from(format!("[{}]", display_steam_route_path(&app.settings))),
         ]),
         Row::new(vec![
             Cell::from("LocalLow 게임 경로"),
@@ -804,10 +829,11 @@ fn render_path_input(frame: &mut Frame<'_>, app: &App, area: Rect, kind: PathKin
         PathKind::Steam => (
             " Steam 게임 경로 입력 ",
             format!(
-                "Steam의 'Astral Party' 폴더 경로를 입력하세요. 선택 route: {}",
-                route.as_str()
+                "Steam의 'Astral Party', '{}', 또는 '{}' 경로를 입력하세요.",
+                route.executable_dir(),
+                route.data_dir()
             ),
-            display_path(app.settings.steam_game_root()),
+            display_steam_route_path(&app.settings),
         ),
         PathKind::LocalLow => (
             " LocalLow 게임 경로 입력 ",
@@ -864,6 +890,13 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 Line::from(vec![
                     Span::styled("요청: ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::raw(request),
+                ]),
+                Line::from(vec![
+                    Span::styled(
+                        "대상 route: ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(operation.route.as_str()),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(status, Style::default().fg(Color::Yellow))),
@@ -942,10 +975,19 @@ fn render_install_running(
         .patch_version
         .as_deref()
         .unwrap_or("확인 중...");
-    let mut detail_lines = vec![Line::from(vec![
-        Span::styled("대상 패치: ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(patch_version),
-    ])];
+    let mut detail_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "대상 route: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(operation.route.as_str()),
+        ]),
+        Line::from(vec![
+            Span::styled("대상 패치: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(patch_version),
+        ]),
+    ];
     if app.install_progress.files.is_empty() {
         detail_lines.push(Line::from("패치 파일 정보를 확인하는 중입니다..."));
     } else if area.width < 110 {
@@ -1110,6 +1152,14 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+fn display_steam_route_path(settings: &AppSettings) -> String {
+    settings
+        .steam_game_root()
+        .map(|root| root.join(settings.selected_route().executable_dir()))
+        .map(|value| value.display().to_string())
+        .unwrap_or_else(|| "미설정".into())
+}
+
 fn display_path(path: Option<&Path>) -> String {
     path.map(|value| value.display().to_string())
         .unwrap_or_else(|| "미설정".into())
@@ -1165,16 +1215,23 @@ mod tests {
 
     use super::*;
 
-    fn app(action: UriAction) -> App {
+    fn app_request(request: UriRequest) -> App {
         let temp = tempdir().unwrap();
         App::new(
             PatcherPaths::below(temp.path().join("state")),
             AppSettings::default(),
             temp.path().join("AstralAutoPatcher.exe"),
-            action,
+            request,
             None,
             "https://example.test/release-index.json",
         )
+    }
+
+    fn app(action: UriAction) -> App {
+        app_request(UriRequest {
+            action,
+            route: None,
+        })
     }
 
     #[test]
@@ -1183,6 +1240,26 @@ mod tests {
         assert_eq!(app.screen, Screen::Operation);
         assert!(app.operation_pending());
         assert!(app.operation.as_ref().unwrap().protocol_request);
+    }
+
+    #[test]
+    fn route_scoped_protocol_operation_does_not_change_selected_route() {
+        let app = app_request(UriRequest {
+            action: UriAction::Install,
+            route: Some(GameRoute::CnSteam),
+        });
+        assert_eq!(app.settings.selected_route(), GameRoute::IntSteam);
+        assert_eq!(app.operation.as_ref().unwrap().route, GameRoute::CnSteam);
+    }
+
+    #[test]
+    fn route_scoped_settings_opens_requested_route() {
+        let app = app_request(UriRequest {
+            action: UriAction::Settings,
+            route: Some(GameRoute::CnSteam),
+        });
+        assert_eq!(app.screen, Screen::Settings);
+        assert_eq!(app.settings.selected_route(), GameRoute::CnSteam);
     }
 
     #[test]

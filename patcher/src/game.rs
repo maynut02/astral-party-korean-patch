@@ -24,6 +24,14 @@ impl GameRoute {
         }
     }
 
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_uppercase().as_str() {
+            "INT_STEAM" => Some(Self::IntSteam),
+            "CN_STEAM" => Some(Self::CnSteam),
+            _ => None,
+        }
+    }
+
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::IntSteam => "INT_STEAM (글로벌 Steam)",
@@ -349,7 +357,7 @@ pub fn discover_windows_installation(
 pub fn detect_windows_routes() -> Vec<GameRoute> {
     GameRoute::ALL
         .into_iter()
-        .filter(|route| discover_windows_installation(*route).is_ok())
+        .filter(|route| discover_windows_steam_root(*route).is_ok())
         .collect()
 }
 

@@ -154,7 +154,7 @@ Patcher는 Neon DB에 직접 접근하지 않는다.
 - Steam app `2622000` 탐지 및 Steam 게임 경로 수동 설정
 - LocalLow Addressables 경로 탐지 및 LocalLow 경로 수동 설정
 - `%LOCALAPPDATA%\AstralAutoPatcher` self-registration
-- `astral://install`, `astral://remove`, `astral://settings` URI protocol 처리
+- `astral://install|remove|settings`와 `astral://<action>/<INT_STEAM|CN_STEAM>` URI protocol 처리
 - Ratatui/Crossterm 기반 고정 화면 TUI, 키보드/마우스 메뉴 조작
 - URI 진입에서도 Patcher/경로/게임/Catalog/채널/설치 상태를 먼저 표시
 - installed game revision/catalog hash 탐지

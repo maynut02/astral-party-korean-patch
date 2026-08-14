@@ -17,9 +17,9 @@ use crate::tui;
 use crate::updater::{
     UpdateError, apply_update_and_restart, check_and_launch_update, parse_apply_update_request,
 };
-#[cfg(windows)]
-use crate::uri::UriAction;
 use crate::uri::UriError;
+#[cfg(windows)]
+use crate::uri::UriRequest;
 
 #[cfg(windows)]
 const FALLBACK_RELEASE_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/patch-index/release-index.json";
@@ -73,7 +73,7 @@ fn patcher_release_base_url() -> &'static str {
 fn load_initial_settings(paths: &PatcherPaths) -> Result<AppSettings, CliError> {
     let mut settings = AppSettings::load(&paths.settings_path)?;
     settings.auto_detect_missing();
-    // Save on startup so legacy schema v1 settings are transparently rewritten as v2.
+    // Save on startup so legacy settings are transparently rewritten as schema v3.
     settings.save(&paths.settings_path)?;
     Ok(settings)
 }
@@ -103,11 +103,16 @@ pub fn run() -> Result<(), CliError> {
     }
 
     let installed_exe = ensure_self_installed_and_registered(&paths.state_root)?;
-    let settings = load_initial_settings(&paths)?;
-    let initial_action = match original_args.first() {
-        Some(uri) => UriAction::parse(&uri.to_string_lossy())?,
-        None => UriAction::Menu,
+    let mut settings = load_initial_settings(&paths)?;
+    let initial_request = match original_args.first() {
+        Some(uri) => UriRequest::parse(&uri.to_string_lossy())?,
+        None => UriRequest::menu(),
     };
+    if let Some(route) = initial_request.route
+        && settings.auto_detect_route_missing(route)
+    {
+        settings.save(&paths.settings_path)?;
+    }
     if std::env::current_exe()
         .ok()
         .is_some_and(|current| current != installed_exe)
@@ -123,7 +128,7 @@ pub fn run() -> Result<(), CliError> {
         paths,
         settings,
         installed_exe,
-        initial_action,
+        initial_request,
         startup_notice,
         release_index_url(),
     )?;

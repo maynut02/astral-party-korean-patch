@@ -143,9 +143,9 @@ Actions artifact에는 `AstralAutoPatcher.exe`만 포함합니다. `publish=true
 %LOCALAPPDATA%\AstralAutoPatcher\AstralAutoPatcher.exe
 ```
 
-같은 폴더에 `settings.json`, `installed.json`, staging/backup 상태를 관리합니다. 최초 실행 시 Steam과 LocalLow 경로를 자동 감지합니다.
+같은 폴더에 `settings.json`과 route별 installed/staging/backup 상태를 관리합니다. 최초 실행에서는 Steam 설치 구조를 기준으로 route를 감지합니다. CN_STEAM만 설치되어 있으면 CN_STEAM을 자동 선택하고, INT_STEAM과 CN_STEAM이 모두 설치되어 있으면 기존 선택을 유지합니다. 새 설정의 기본 선택은 INT_STEAM입니다. 선택된 route의 LocalLow는 각각 `AstralParty_INT`, `AstralParty_CN`에서 감지합니다. Steam의 공통 저장 루트는 동일할 수 있지만 UI에는 실제 route 실행 디렉터리인 `8vJXnINT` 또는 `8vJXn6CN`까지 표시합니다.
 
-Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 0.4.1부터 설치 대상 patch version/asset 목록과 다운로드·적용 진행률을 표시합니다. 0.5.0부터 사용자 channel 선택을 제거하고 항상 `release` channel의 현재 게임 version/catalog에 맞는 최신 entry만 설치합니다. 기존 settings schema v1의 `stable/preview` 값은 무시하고 경로 설정만 보존해 schema v2로 마이그레이션합니다. 0.6.0부터 시작 시 `patcher-index.json`을 확인해 더 높은 semantic version이 있으면 새 EXE를 다운로드하고 size/SHA-256을 검증한 뒤, 다운로드한 새 EXE 자체를 updater helper로 실행합니다. helper는 기존 프로세스 종료를 기다려 `%LOCALAPPDATA%\AstralAutoPatcher\AstralAutoPatcher.exe`를 교체하고 원래 실행 인수(`astral://install` 등)를 그대로 넘겨 새 버전을 재실행합니다. 업데이트 확인이나 다운로드가 실패하면 현재 버전 실행을 차단하지 않고 상태 안내만 남긴 채 기존 작업을 계속합니다.
+Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 0.4.1부터 설치 대상 patch version/asset 목록과 다운로드·적용 진행률을 표시합니다. 0.5.0부터 사용자 channel 선택을 제거하고 항상 `release` channel의 현재 게임 version/catalog에 맞는 최신 entry만 설치합니다. 0.6.0부터 시작 시 `patcher-index.json`을 확인해 더 높은 semantic version이 있으면 새 EXE를 다운로드하고 size/SHA-256을 검증한 뒤 자기 자신을 교체하고 원래 실행 인수를 유지해 재실행합니다. 0.7.0부터 INT_STEAM/CN_STEAM route별 설정과 설치 상태를 분리하고 settings schema v3를 사용합니다. 기존 schema v1/v2 경로는 INT_STEAM 설정으로 자동 이관됩니다. 업데이트 확인이나 다운로드가 실패하면 현재 버전 실행을 차단하지 않습니다.
 
 상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 게임 버전, Catalog hash, 설치된 패치 버전을 표시합니다.
 
@@ -157,7 +157,16 @@ Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 
 astral://install
 astral://remove
 astral://settings
+
+astral://install/INT_STEAM
+astral://install/CN_STEAM
+astral://remove/INT_STEAM
+astral://remove/CN_STEAM
+astral://settings/INT_STEAM
+astral://settings/CN_STEAM
 ```
+
+route가 없는 기존 URI는 현재 선택된 route를 사용합니다. route가 포함된 install/remove URI는 설정의 기본 route를 바꾸지 않고 해당 작업에만 지정 route를 사용합니다. `settings/<route>`는 지정 route의 설정 화면을 엽니다. query/fragment나 알 수 없는 route는 허용하지 않습니다.
 
 ## 8. 게임 버전 상승
 
