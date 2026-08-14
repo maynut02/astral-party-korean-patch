@@ -1,0 +1,59 @@
+name: TEMP Approve Current Translations
+
+on:
+  workflow_dispatch:
+    inputs:
+      route:
+        description: Latest processed route to approve
+        required: true
+        default: INT_ANDROID
+        type: choice
+        options:
+          - INT_ANDROID
+          - INT_STEAM
+          - CN_STEAM
+          - ALL
+      confirmation:
+        description: Type APPROVE_CURRENT_TRANSLATIONS to continue
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      ROUTE: ${{ inputs.route }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: builder/pyproject.toml
+
+      - name: Install builder
+        run: python -m pip install -e './builder[dev]'
+
+      - name: Validate one-shot confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMATION" != "APPROVE_CURRENT_TRANSLATIONS" ]; then
+            echo "Confirmation text did not match; no database changes were made." >&2
+            exit 1
+          fi
+          test -n "$DATABASE_URL"
+
+      - name: Approve current translations once
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/approve_current_translations_once.py \
+            --route "$ROUTE" \
+            --apply
