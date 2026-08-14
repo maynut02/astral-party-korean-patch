@@ -18,6 +18,23 @@ ANDROID_NS = "http://schemas.android.com/apk/res/android"
 A = f"{{{ANDROID_NS}}}"
 
 
+def test_parse_badging_version_name_reads_real_package_version() -> None:
+    output = (
+        "package: name='com.feimo.astralpartyjpn' versionCode='555' "
+        "versionName='3.2.0' compileSdkVersion='35'\n"
+    )
+    assert MODULE.parse_badging_version_name(output) == "3.2.0"
+
+
+def test_parse_badging_version_name_rejects_missing_version() -> None:
+    try:
+        MODULE.parse_badging_version_name("package: name='com.feimo.astralpartyjpn'\n")
+    except RuntimeError as exc:
+        assert "does not contain versionName" in str(exc)
+    else:
+        raise AssertionError("missing versionName should fail")
+
+
 def test_patch_manifest_moves_launcher_to_bootstrap(tmp_path: Path) -> None:
     manifest = tmp_path / "AndroidManifest.xml"
     manifest.write_text(

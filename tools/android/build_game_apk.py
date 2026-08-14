@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -80,6 +81,30 @@ def android_tools(sdk: Path) -> tuple[Path, Path, Path, Path]:
         if not item.exists():
             raise RuntimeError(f"Android SDK tool is missing: {item}")
     return android_jar, d8, zipalign, apksigner
+
+
+def parse_badging_version_name(text: str) -> str:
+    match = re.search(r"(?:^|\s)versionName='([^']+)'", text, re.MULTILINE)
+    if not match:
+        raise RuntimeError("aapt2 badging output does not contain versionName")
+    value = match.group(1).strip()
+    if not value or value.lower() == "unknown":
+        raise RuntimeError(f"invalid APK versionName from aapt2: {value!r}")
+    return value
+
+
+def read_apk_version_name(apk: Path, sdk: Path) -> str:
+    build_tools = latest_child(sdk / "build-tools")
+    aapt2 = build_tools / ("aapt2.exe" if os.name == "nt" else "aapt2")
+    if not aapt2.exists():
+        raise RuntimeError(f"Android SDK tool is missing: {aapt2}")
+    result = subprocess.run(
+        [str(aapt2), "dump", "badging", str(apk)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return parse_badging_version_name(result.stdout)
 
 
 def intent_is_launcher(intent: ET.Element) -> bool:
@@ -515,7 +540,8 @@ def main() -> int:
 
     try:
         base_apk = args.base_apk.resolve()
-        compiled_manifest, game_activity, version_name = compile_manifest(
+        version_name = read_apk_version_name(base_apk, sdk)
+        compiled_manifest, game_activity, _manifest_version = compile_manifest(
             base_apk, work, str(apktool)
         )
         if game_activity != DEFAULT_GAME_ACTIVITY:

@@ -21,7 +21,7 @@ Google Play APK / split APKs
        - 이식된 Play signing block에서 원본 인증서를 config에 캡처
        - nested origin.apk/file-link 구조를 한 번만 생성
        - 장기 Android signing key로 최종 서명
-  -> AstralParty_INT_Korean.apk
+  -> AstralParty_INT_ANDROID.apk
   -> GitHub immutable release
   -> android-apk-index.json 갱신
   -> AstralAutoPatcher가 SHA-256 검증 후 설치
@@ -126,7 +126,7 @@ AutoPatcher가 읽는 rolling index는 다음 형식입니다.
   "schemaVersion": 1,
   "packageName": "com.feimo.astralpartyjpn",
   "gameVersion": "3.2.0",
-  "downloadUrl": "https://github.com/.../releases/download/<immutable-tag>/AstralParty_INT_Korean.apk",
+  "downloadUrl": "https://github.com/.../releases/download/<immutable-tag>/AstralParty_INT_ANDROID.apk",
   "sha256": "...",
   "size": 123456789,
   "installerPackageName": "com.android.vending"

@@ -221,13 +221,13 @@ jobs:
             find .work/lspatch-final -maxdepth 1 -type f -printf '%f\n' >&2 || true
             exit 1
           fi
-          cp "${PATCHED_APKS[0]}" output/android/AstralParty_INT_Korean.apk
+          cp "${PATCHED_APKS[0]}" output/android/AstralParty_INT_ANDROID.apk
           python3 - <<'PYMETA'
           import json
           from pathlib import Path
 
           source = Path('.work/android-input/korean-pre-lspatch.apk.json')
-          target = Path('output/android/AstralParty_INT_Korean.apk.json')
+          target = Path('output/android/AstralParty_INT_ANDROID.apk.json')
           metadata = json.loads(source.read_text(encoding='utf-8'))
           metadata['output'] = str(target.with_suffix(''))
           target.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
@@ -236,19 +236,23 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
             --verbose \
             --print-certs \
-            output/android/AstralParty_INT_Korean.apk
+            output/android/AstralParty_INT_ANDROID.apk
 
       - name: Read APK metadata
         id: apk
         shell: bash
         run: |
           set -euo pipefail
-          APK=output/android/AstralParty_INT_Korean.apk
+          APK=output/android/AstralParty_INT_ANDROID.apk
           META="$APK.json"
           GAME_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["baseVersionName"])' "$META")"
+          if [ -z "$GAME_VERSION" ] || [ "${GAME_VERSION,,}" = "unknown" ]; then
+            echo "refusing to publish Android APK with invalid game version: $GAME_VERSION" >&2
+            exit 1
+          fi
           SHA256="$(sha256sum "$APK" | awk '{print $1}')"
           SIZE="$(stat -c '%s' "$APK")"
-          TAG="android-apk-v${GAME_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          TAG="int-android-v${GAME_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "game_version=$GAME_VERSION" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "size=$SIZE" >> "$GITHUB_OUTPUT"
@@ -260,7 +264,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
-          name: astral-party-int-android-korean-apk
+          name: astral-party-int-android-apk
           path: output/android/
           if-no-files-found: error
           compression-level: 0
@@ -276,11 +280,11 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$TAG" \
-            output/android/AstralParty_INT_Korean.apk \
-            output/android/AstralParty_INT_Korean.apk.json \
+            output/android/AstralParty_INT_ANDROID.apk \
+            output/android/AstralParty_INT_ANDROID.apk.json \
             --target "$GITHUB_SHA" \
-            --title "Astral Party Android Korean $GAME_VERSION" \
-            --notes "Android Korean APK for Astral Party $GAME_VERSION. Install through AstralAutoPatcher so the installer source is recorded as com.android.vending."
+            --title "Astral Party INT_ANDROID $GAME_VERSION" \
+            --notes "INT_ANDROID Korean-patched APK for Astral Party $GAME_VERSION. Install through AstralAutoPatcher so the installer source is recorded as com.android.vending."
 
       - name: Update AutoPatcher Android APK index
         if: ${{ inputs.publish }}
@@ -294,7 +298,7 @@ jobs:
         run: |
           set -euo pipefail
           INDEX="$RUNNER_TEMP/android-apk-index.json"
-          DOWNLOAD_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/AstralParty_INT_Korean.apk"
+          DOWNLOAD_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/AstralParty_INT_ANDROID.apk"
           python3 - "$INDEX" "$GAME_VERSION" "$DOWNLOAD_URL" "$SHA256" "$SIZE" <<'PY'
           import json
           import sys

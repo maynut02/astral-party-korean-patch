@@ -103,9 +103,9 @@ impl AndroidApkIndex {
             return Err(AndroidError::InvalidIndex("invalid APK SHA-256".into()));
         }
         let prefix = format!("{}/", release_base_url.trim_end_matches('/'));
-        if !self.download_url.starts_with(&prefix)
-            || !self.download_url.ends_with("/AstralParty_INT_Korean.apk")
-        {
+        let trusted_asset = self.download_url.ends_with("/AstralParty_INT_ANDROID.apk")
+            || self.download_url.ends_with("/AstralParty_INT_Korean.apk");
+        if !self.download_url.starts_with(&prefix) || !trusted_asset {
             return Err(AndroidError::InvalidIndex(format!(
                 "unexpected APK URL {}",
                 self.download_url
@@ -286,10 +286,11 @@ impl AndroidService {
         }
 
         progress(AndroidProgress::Verifying);
-        verify_install(&device, &index.installer_package_name, &index.game_version)?;
+        let actual_version =
+            verify_install(&device, &index.installer_package_name, &index.game_version)?;
         Ok(AndroidInstallOutcome::Installed {
             device,
-            game_version: index.game_version,
+            game_version: actual_version,
         })
     }
 }
@@ -337,7 +338,10 @@ where
 {
     let root = state_root.join("android").join("apk");
     fs::create_dir_all(&root)?;
-    let destination = root.join(format!("AstralParty_INT_Korean-{}.apk", index.game_version));
+    let destination = root.join(format!(
+        "AstralParty_INT_ANDROID-{}.apk",
+        index.game_version
+    ));
     if destination.is_file()
         && destination.metadata()?.len() == index.size
         && sha256_file(&destination)? == index.sha256
@@ -866,13 +870,14 @@ fn package_info(
 }
 
 fn parse_package_info(text: &str) -> AndroidPackageInfo {
-    let mut version_name = None;
+    let mut version_names = Vec::new();
     let mut installer_package_name = None;
     for line in text.lines().map(str::trim) {
-        if version_name.is_none()
-            && let Some(value) = line.strip_prefix("versionName=")
-        {
-            version_name = Some(value.trim().to_string());
+        if let Some(value) = line.strip_prefix("versionName=") {
+            let value = value.trim();
+            if !value.is_empty() && value != "null" {
+                version_names.push(value.to_string());
+            }
         }
         if installer_package_name.is_none()
             && let Some(value) = line.strip_prefix("installerPackageName=")
@@ -883,10 +888,23 @@ fn parse_package_info(text: &str) -> AndroidPackageInfo {
             }
         }
     }
+    let version_name = version_names
+        .iter()
+        .find(|value| looks_like_game_version(value))
+        .cloned()
+        .or_else(|| version_names.into_iter().next());
     AndroidPackageInfo {
         version_name,
         installer_package_name,
     }
+}
+
+fn looks_like_game_version(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    parts.len() >= 2
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn install_apk(
@@ -925,7 +943,7 @@ fn verify_install(
     device: &AndroidDevice,
     expected_installer: &str,
     expected_version: &str,
-) -> Result<(), AndroidError> {
+) -> Result<String, AndroidError> {
     let info = package_info(device, ANDROID_PACKAGE)?
         .ok_or_else(|| AndroidError::Adb("설치된 게임 패키지를 찾지 못했습니다".into()))?;
     let actual_installer = info
@@ -938,13 +956,13 @@ fn verify_install(
         });
     }
     let actual_version = info.version_name.unwrap_or_else(|| "<none>".into());
-    if actual_version != expected_version {
+    if !expected_version.eq_ignore_ascii_case("unknown") && actual_version != expected_version {
         return Err(AndroidError::InstalledVersionMismatch {
             expected: expected_version.into(),
             actual: actual_version,
         });
     }
-    Ok(())
+    Ok(actual_version)
 }
 
 fn is_signature_incompatible_install(message: &str) -> bool {
@@ -1061,7 +1079,7 @@ mod tests {
     #[test]
     fn parses_package_version_and_installer() {
         let info = parse_package_info(
-            "Packages:\n  Package [com.feimo.astralpartyjpn]\n    versionName=3.2.0\n    installerPackageName=com.android.vending\n",
+            "Packages:\n  versionName=11\n  Package [com.feimo.astralpartyjpn]\n    versionName=3.2.0\n    installerPackageName=com.android.vending\n",
         );
         assert_eq!(info.version_name.as_deref(), Some("3.2.0"));
         assert_eq!(
@@ -1076,11 +1094,17 @@ mod tests {
             schema_version: 1,
             package_name: ANDROID_PACKAGE.into(),
             game_version: "3.2.0".into(),
-            download_url: "https://github.com/example/repo/releases/download/android-v1/AstralParty_INT_Korean.apk".into(),
+            download_url: "https://github.com/example/repo/releases/download/android-v1/AstralParty_INT_ANDROID.apk".into(),
             sha256: "a".repeat(64),
             size: 123,
             installer_package_name: PLAY_INSTALLER_PACKAGE.into(),
         };
+        assert!(
+            index
+                .validate("https://github.com/example/repo/releases/download")
+                .is_ok()
+        );
+        index.download_url = "https://github.com/example/repo/releases/download/android-v1/AstralParty_INT_Korean.apk".into();
         assert!(
             index
                 .validate("https://github.com/example/repo/releases/download")
