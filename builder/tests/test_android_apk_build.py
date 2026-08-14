@@ -98,3 +98,84 @@ def test_assemble_unsigned_apk_replaces_only_owned_entries(tmp_path: Path) -> No
         assert json.loads(archive.read("assets/astralpatch/config.json")) == config
         assert "META-INF/MANIFEST.MF" not in names
         assert "META-INF/CERT.RSA" not in names
+
+
+def test_lspatch_assembly_uses_zfile_postprocessor_without_zip_repack(
+    tmp_path: Path, monkeypatch
+) -> None:
+    base = tmp_path / "base-lspatched.apk"
+    base.write_bytes(b"crafted-lspatch-apk")
+    manifest = tmp_path / "AndroidManifest.xml"
+    manifest.write_bytes(b"manifest")
+    unity = tmp_path / "data.unity3d"
+    unity.write_bytes(b"unity")
+    runtime = tmp_path / "runtime.dex"
+    runtime.write_bytes(b"dex")
+    lspatch_jar = tmp_path / "lspatch.jar"
+    lspatch_jar.write_bytes(b"jar")
+    keystore = tmp_path / "signing.keystore"
+    keystore.write_bytes(b"keystore")
+    output = tmp_path / "output.apk"
+    work = tmp_path / "work"
+    work.mkdir()
+
+    monkeypatch.setenv("TEST_KS_PASS", "store-password")
+    monkeypatch.setenv("TEST_KEY_PASS", "key-password")
+    monkeypatch.setattr(MODULE, "executable", lambda name: name)
+    monkeypatch.setattr(MODULE, "next_dex_name", lambda _apk: "classes2.dex")
+    monkeypatch.setattr(
+        MODULE,
+        "android_tools",
+        lambda _sdk: (
+            tmp_path / "android.jar",
+            tmp_path / "d8",
+            tmp_path / "zipalign",
+            tmp_path / "apksigner",
+        ),
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(MODULE, "run", fake_run)
+    config = {"schemaVersion": 1, "route": "INT_ANDROID"}
+    MODULE.assemble_lspatched_apk(
+        base,
+        manifest,
+        unity,
+        runtime,
+        config,
+        output,
+        work,
+        lspatch_jar,
+        keystore,
+        "astralparty",
+        "TEST_KS_PASS",
+        "TEST_KEY_PASS",
+        tmp_path,
+    )
+
+    assert output.read_bytes() == base.read_bytes()
+    assert json.loads((work / "astralpatch-config.json").read_text()) == config
+    java_call = next(call for call in calls if "LspatchPostProcessor" in call)
+    assert "classes2.dex" in java_call
+    assert str(output) in java_call
+    assert str(lspatch_jar) in java_call[2]
+    assert any(call[0].endswith("apksigner") and "verify" in call for call in calls)
+
+
+def test_lspatch_postprocessor_preserves_nested_apk_design() -> None:
+    source = (ROOT / "tools" / "android" / "LspatchPostProcessor.java").read_text()
+    assert 'ORIGINAL_APK_ASSET_PATH = "assets/lspatch/origin.apk"' in source
+    assert "ZFile.openReadWrite" in source
+    assert "SigningExtension" in source
+    assert 'zFile.add("assets/bin/Data/data.unity3d", input, false)' in source
+
+
+def test_detects_lspatch_nested_origin_member(tmp_path: Path) -> None:
+    apk = tmp_path / "lspatched.apk"
+    with zipfile.ZipFile(apk, "w") as archive:
+        archive.writestr(MODULE.LSPATCH_ORIGINAL_APK_PATH, b"origin")
+        archive.writestr("classes.dex", b"loader")
+    assert MODULE.apk_contains_member(apk, MODULE.LSPATCH_ORIGINAL_APK_PATH)

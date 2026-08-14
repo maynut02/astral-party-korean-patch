@@ -23,6 +23,7 @@ A = f"{{{ANDROID_NS}}}"
 BOOTSTRAP_ACTIVITY = "com.astralpatch.runtime.BootstrapActivity"
 DEFAULT_GAME_ACTIVITY = "com.femoo.sdk.Femoo_UnityActivity"
 DATA_UNITY_PATH = "assets/bin/Data/data.unity3d"
+LSPATCH_ORIGINAL_APK_PATH = "assets/lspatch/origin.apk"
 
 
 def run(
@@ -206,6 +207,11 @@ def next_dex_name(apk: Path) -> str:
     return f"classes{highest + 1}.dex" if highest else "classes.dex"
 
 
+def apk_contains_member(apk: Path, member: str) -> bool:
+    with zipfile.ZipFile(apk, "r") as archive:
+        return member in archive.namelist()
+
+
 def extract_apk_member(apk: Path, member: str, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(apk, "r") as archive:
@@ -310,6 +316,83 @@ def assemble_unsigned_apk(
         )
 
 
+def assemble_lspatched_apk(
+    base_apk: Path,
+    compiled_manifest: Path,
+    patched_unity: Path,
+    runtime_dex: Path,
+    config: dict[str, object],
+    output: Path,
+    work: Path,
+    lspatch_jar: Path,
+    keystore: Path,
+    alias: str,
+    ks_pass_env: str,
+    key_pass_env: str,
+    sdk: Path,
+) -> None:
+    dex_name = next_dex_name(base_apk)
+    helper_source = ROOT / "tools" / "android" / "LspatchPostProcessor.java"
+    if not helper_source.is_file():
+        raise RuntimeError(f"LSPatch post-processor source not found: {helper_source}")
+    if not lspatch_jar.is_file():
+        raise RuntimeError(f"LSPatch jar not found: {lspatch_jar}")
+
+    helper_classes = work / "lspatch-postprocessor-classes"
+    helper_classes.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            executable("javac"),
+            "-encoding",
+            "UTF-8",
+            "-classpath",
+            str(lspatch_jar),
+            "-d",
+            str(helper_classes),
+            str(helper_source),
+        ]
+    )
+
+    config_json = work / "astralpatch-config.json"
+    config_json.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    shutil.copy2(base_apk, output)
+    env = os.environ.copy()
+    if ks_pass_env not in env:
+        raise RuntimeError(
+            f"missing signing password environment variable: {ks_pass_env}"
+        )
+    if key_pass_env not in env:
+        raise RuntimeError(
+            f"missing signing password environment variable: {key_pass_env}"
+        )
+    classpath = os.pathsep.join([str(helper_classes), str(lspatch_jar)])
+    run(
+        [
+            executable("java"),
+            "-classpath",
+            classpath,
+            "LspatchPostProcessor",
+            str(output),
+            str(compiled_manifest),
+            str(patched_unity),
+            str(runtime_dex),
+            dex_name,
+            str(config_json),
+            str(keystore),
+            alias,
+            ks_pass_env,
+            key_pass_env,
+        ],
+        env=env,
+    )
+    _, _, _, apksigner = android_tools(sdk)
+    run(
+        [str(apksigner), "verify", "--verbose", "--print-certs", str(output)],
+        env=env,
+    )
+
 def sign_apk(
     unsigned: Path,
     output: Path,
@@ -375,6 +458,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ks-pass-env", default="ASTRAL_ANDROID_KEYSTORE_PASSWORD")
     parser.add_argument("--key-pass-env", default="ASTRAL_ANDROID_KEY_PASSWORD")
     parser.add_argument("--apktool", default="apktool")
+    parser.add_argument(
+        "--lspatch-jar",
+        type=Path,
+        help="Use apkzlib from this LSPatch jar to preserve nested origin.apk/file links",
+    )
     parser.add_argument("--android-sdk", type=Path)
     parser.add_argument("--keep-work", action="store_true")
     return parser.parse_args()
@@ -409,6 +497,17 @@ def main() -> int:
 
     try:
         base_apk = args.base_apk.resolve()
+        base_is_lspatched = apk_contains_member(base_apk, LSPATCH_ORIGINAL_APK_PATH)
+        if base_is_lspatched and args.lspatch_jar is None:
+            raise RuntimeError(
+                "LSPatch APKs contain nested origin.apk/file links and must be "
+                "post-processed with --lspatch-jar instead of normal ZIP repacking"
+            )
+        if args.lspatch_jar is not None and not base_is_lspatched:
+            raise RuntimeError(
+                "--lspatch-jar requires an LSPatch input APK containing "
+                f"{LSPATCH_ORIGINAL_APK_PATH}"
+            )
         compiled_manifest, game_activity, version_name = compile_manifest(
             base_apk, work, str(apktool)
         )
@@ -428,32 +527,50 @@ def main() -> int:
         )
 
         runtime_dex = compile_runtime(ROOT / "android" / "runtime" / "src", work, sdk)
-        injected = work / "runtime-injected.apk"
-        assemble_unsigned_apk(
-            base_apk,
-            compiled_manifest,
-            patched_unity,
-            runtime_dex,
-            {
-                "schemaVersion": 1,
-                "route": "INT_ANDROID",
-                "channel": "release",
-                "releaseIndexUrl": args.release_index_url,
-                "gameActivity": game_activity,
-                "addressablesDir": "com.unity.addressables",
-                "watcherIntervalSeconds": 30,
-            },
-            injected,
-        )
-        sign_apk(
-            injected,
-            output,
-            sdk,
-            args.keystore.resolve(),
-            args.key_alias,
-            args.ks_pass_env,
-            args.key_pass_env,
-        )
+        config = {
+            "schemaVersion": 1,
+            "route": "INT_ANDROID",
+            "channel": "release",
+            "releaseIndexUrl": args.release_index_url,
+            "gameActivity": game_activity,
+            "addressablesDir": "com.unity.addressables",
+            "watcherIntervalSeconds": 30,
+        }
+        if args.lspatch_jar is not None:
+            assemble_lspatched_apk(
+                base_apk,
+                compiled_manifest,
+                patched_unity,
+                runtime_dex,
+                config,
+                output,
+                work,
+                args.lspatch_jar.resolve(),
+                args.keystore.resolve(),
+                args.key_alias,
+                args.ks_pass_env,
+                args.key_pass_env,
+                sdk,
+            )
+        else:
+            injected = work / "runtime-injected.apk"
+            assemble_unsigned_apk(
+                base_apk,
+                compiled_manifest,
+                patched_unity,
+                runtime_dex,
+                config,
+                injected,
+            )
+            sign_apk(
+                injected,
+                output,
+                sdk,
+                args.keystore.resolve(),
+                args.key_alias,
+                args.ks_pass_env,
+                args.key_pass_env,
+            )
         metadata = {
             "package": "com.feimo.astralpartyjpn",
             "baseVersionName": version_name,

@@ -13,10 +13,12 @@ Google Play APK / split APKs
   -> JingMatrix/LSPatch v0.8 sigbypass level 2
        - Google Play 원본 signature를 config에 캡처
        - 장기 Android signing key로 서명
-  -> assets/bin/Data/data.unity3d의 MochiyPopOne-Regular 교체
-  -> com.astralpatch.runtime.BootstrapActivity 주입
-  -> AstralPatchRuntime DEX 추가
-  -> 같은 장기 signing key로 최종 서명
+  -> LSPatch의 apkzlib ZFile로 후처리
+       - assets/lspatch/origin.apk + file-link 구조 보존
+       - assets/bin/Data/data.unity3d의 MochiyPopOne-Regular 교체
+       - com.astralpatch.runtime.BootstrapActivity 주입
+       - AstralPatchRuntime DEX 추가
+       - 같은 장기 signing key로 최종 서명
   -> AstralParty_INT_Korean.apk
   -> GitHub immutable release
   -> android-apk-index.json 갱신
@@ -139,4 +141,4 @@ APK가 바뀌지 않고 Addressables만 변경되면 APK를 다시 배포할 필
 
 ## 로컬 빌드 주의사항
 
-운영 빌드의 핵심 순서는 `Google Play 병합본 -> LSPatch -> build_game_apk.py`입니다. `build_game_apk.py`만 독립 실행하면 LSPatch의 원본 Play signature capture 단계가 포함되지 않으므로 운영 배포물과 동일한 결과가 아닙니다. 운영 APK는 GitHub Actions workflow를 기준으로 생성합니다.
+운영 빌드의 핵심 순서는 `Google Play 병합본 -> LSPatch -> build_game_apk.py --lspatch-jar ...`입니다. LSPatch 출력은 `assets/lspatch/origin.apk`가 원본 APK 데이터와 file-link를 공유하는 특수 ZIP 구조이므로 Python `zipfile`, 일반 ZIP 재패킹, 외부 zipalign 재작성으로 평탄화하지 않습니다. Builder는 LSPatch JAR에 포함된 동일 apkzlib `ZFile` API로 소유 entry만 교체하고 그 상태에서 다시 서명합니다. `--lspatch-jar` 없이 LSPatch APK를 입력하면 builder가 즉시 거부합니다. 운영 APK는 GitHub Actions workflow를 기준으로 생성합니다.

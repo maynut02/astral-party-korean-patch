@@ -229,7 +229,8 @@ jobs:
             --output output/android/AstralParty_INT_Korean.apk \
             --release-index-url "$RELEASE_INDEX_URL" \
             --keystore .secrets/android-signing.keystore \
-            --key-alias "$KEY_ALIAS"
+            --key-alias "$KEY_ALIAS" \
+            --lspatch-jar .work/android-tools/lspatch.jar
 
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
             --verbose \
