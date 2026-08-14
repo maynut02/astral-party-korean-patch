@@ -245,7 +245,8 @@ revision changed
 ## INT_ANDROID Android APK + AutoPatcher
 
 - Google Play에서 `apkeep`으로 APK/split APK를 취득하고 APKEditor로 병합하되 원본 Play signature metadata를 유지.
-- JingMatrix/LSPatch v0.8 sigbypass level 2를 먼저 적용해 원본 Play signature를 runtime config에 보존.
+- legacy font/runtime 변경과 zipalign을 먼저 수행한 뒤 원본 Play APK Signing Block을 중간 수정본에 이식.
+- JingMatrix/LSPatch v0.8 sigbypass level 2를 마지막에 적용해 이식된 signing block의 원본 Play 인증서를 runtime config에 보존하고 최종 nested APK를 생성.
 - `assets/bin/Data/data.unity3d` legacy TTF 교체 후 `com.astralpatch.runtime.BootstrapActivity`와 runtime DEX를 주입.
 - Android APK는 Actions Secrets의 장기 signing key로 계속 서명하고 immutable GitHub Release + `android-apk-index.json`으로 배포.
 - Windows AstralAutoPatcher가 Google Platform-Tools를 자체 관리하고 실제 USB 기기 및 MuMu/BlueStacks/LDPlayer를 자동 탐색.

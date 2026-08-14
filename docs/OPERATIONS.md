@@ -177,7 +177,7 @@ route가 없는 기존 URI는 현재 선택된 route를 사용합니다. route�
 
 Route revision은 서로 독립적으로 추적합니다. `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 revision 번호가 서로 달라도 정상이며, `canonicalFallbackRoute`는 같은 `game_version`에서 가장 최근에 처리된 fallback route revision의 원문을 보충용으로 사용합니다. fallback 대상 route와 현재 route의 revision 번호가 같을 필요는 없습니다.
 
-`Build Android APK` workflow는 Google Play 원본 split APK를 취득한 뒤 원본 Play signature metadata를 보존해 standalone으로 병합하고, JingMatrix/LSPatch v0.8 signature bypass level 2를 먼저 적용합니다. 그 다음 `MochiyPopOne-Regular` legacy font와 `AstralPatchRuntime`을 삽입하고 같은 장기 signing key로 최종 서명합니다.
+`Build Android APK` workflow는 Google Play 원본 split APK를 취득해 standalone으로 병합한 뒤, 먼저 `MochiyPopOne-Regular` legacy font와 `AstralPatchRuntime`을 삽입하고 `zipalign -p`를 수행합니다. 이어 원본 Play APK의 APK Signing Block을 중간 수정본에 이식한 다음 JingMatrix/LSPatch v0.8 signature bypass level 2를 마지막에 적용합니다. LSPatch는 이 signing block에서 원본 Play 인증서를 읽고, 최종 nested APK/file-link 구조를 생성하면서 같은 장기 signing key로 서명합니다.
 
 운영 배포 시 `publish=true`로 실행하면 immutable Android APK Release를 만든 뒤 `android-apk-index/android-apk-index.json`을 갱신합니다. 이 index가 공개된 뒤 `Build Patcher`를 `publish=true`로 실행해 Android endpoint가 내장된 `AstralAutoPatcher.exe` 0.8.x 이상을 배포합니다.
 

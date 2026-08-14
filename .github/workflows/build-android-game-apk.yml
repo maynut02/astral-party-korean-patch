@@ -160,8 +160,8 @@ jobs:
           if [ "${#APK_FILES[@]}" -eq 1 ]; then
             cp "${APK_FILES[0]}" .work/android-input/base-google-play.apk
           else
-            # Keep the original Google Play signature metadata. LSPatch lv2 reads it
-            # from this input before the APK is modified and re-signed.
+            # Preserve the merged Play APK signing metadata. The builder later
+            # transplants this signing block into the modified LSPatch input.
             java -jar .work/android-tools/APKEditor.jar m \
               -i .work/google-play-apks \
               -o .work/android-input/base-google-play.apk \
@@ -182,7 +182,19 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > .secrets/android-signing.keystore
           chmod 600 .secrets/android-signing.keystore
 
-      - name: Capture original Play signature with LSPatch
+      - name: Build Korean APK input for LSPatch
+        shell: bash
+        env:
+          RELEASE_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patch-index/release-index.json
+        run: |
+          set -euo pipefail
+          python tools/android/build_game_apk.py \
+            --base-apk .work/android-input/base-google-play.apk \
+            --output .work/android-input/korean-pre-lspatch.apk \
+            --release-index-url "$RELEASE_INDEX_URL" \
+            --prepare-for-lspatch
+
+      - name: Apply LSPatch and sign final Korean APK
         shell: bash
         env:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -190,7 +202,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p .work/lspatch-base
+          mkdir -p .work/lspatch-final output/android
           java -jar .work/android-tools/lspatch.jar \
             --verbose \
             --force \
@@ -200,37 +212,26 @@ jobs:
               "$KEYSTORE_PASSWORD" \
               "$KEY_ALIAS" \
               "$KEY_PASSWORD" \
-            --output .work/lspatch-base \
-            .work/android-input/base-google-play.apk
+            --output .work/lspatch-final \
+            .work/android-input/korean-pre-lspatch.apk
 
-          mapfile -d '' PATCHED_APKS < <(find .work/lspatch-base -maxdepth 1 -type f -name '*.apk' -print0)
+          mapfile -d '' PATCHED_APKS < <(find .work/lspatch-final -maxdepth 1 -type f -name '*.apk' -print0)
           if [ "${#PATCHED_APKS[@]}" -ne 1 ]; then
             echo "expected exactly one LSPatch output APK, found ${#PATCHED_APKS[@]}" >&2
-            find .work/lspatch-base -maxdepth 1 -type f -printf '%f\n' >&2 || true
+            find .work/lspatch-final -maxdepth 1 -type f -printf '%f\n' >&2 || true
             exit 1
           fi
-          cp "${PATCHED_APKS[0]}" .work/android-input/base-lspatched.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
-            --verbose \
-            --print-certs \
-            .work/android-input/base-lspatched.apk
+          cp "${PATCHED_APKS[0]}" output/android/AstralParty_INT_Korean.apk
+          python3 - <<'PYMETA'
+          import json
+          from pathlib import Path
 
-      - name: Build self-patching Korean APK
-        shell: bash
-        env:
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ASTRAL_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ASTRAL_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          RELEASE_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patch-index/release-index.json
-        run: |
-          set -euo pipefail
-          python tools/android/build_game_apk.py \
-            --base-apk .work/android-input/base-lspatched.apk \
-            --output output/android/AstralParty_INT_Korean.apk \
-            --release-index-url "$RELEASE_INDEX_URL" \
-            --keystore .secrets/android-signing.keystore \
-            --key-alias "$KEY_ALIAS" \
-            --lspatch-jar .work/android-tools/lspatch.jar
+          source = Path('.work/android-input/korean-pre-lspatch.apk.json')
+          target = Path('output/android/AstralParty_INT_Korean.apk.json')
+          metadata = json.loads(source.read_text(encoding='utf-8'))
+          metadata['output'] = str(target.with_suffix(''))
+          target.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+          PYMETA
 
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
             --verbose \

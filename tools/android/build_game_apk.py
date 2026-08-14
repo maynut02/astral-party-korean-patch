@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -23,7 +24,10 @@ A = f"{{{ANDROID_NS}}}"
 BOOTSTRAP_ACTIVITY = "com.astralpatch.runtime.BootstrapActivity"
 DEFAULT_GAME_ACTIVITY = "com.femoo.sdk.Femoo_UnityActivity"
 DATA_UNITY_PATH = "assets/bin/Data/data.unity3d"
-LSPATCH_ORIGINAL_APK_PATH = "assets/lspatch/origin.apk"
+APK_SIG_BLOCK_MAGIC = b"APK Sig Block 42"
+ZIP_EOCD_SIGNATURE = b"PK\x05\x06"
+ZIP_EOCD_MIN_SIZE = 22
+ZIP_MAX_COMMENT = 0xFFFF
 
 
 def run(
@@ -207,10 +211,97 @@ def next_dex_name(apk: Path) -> str:
     return f"classes{highest + 1}.dex" if highest else "classes.dex"
 
 
-def apk_contains_member(apk: Path, member: str) -> bool:
-    with zipfile.ZipFile(apk, "r") as archive:
-        return member in archive.namelist()
+def _find_eocd(apk: Path) -> tuple[int, int]:
+    size = apk.stat().st_size
+    tail_size = min(size, ZIP_EOCD_MIN_SIZE + ZIP_MAX_COMMENT)
+    with apk.open("rb") as handle:
+        handle.seek(size - tail_size)
+        tail = handle.read(tail_size)
+    search_end = len(tail)
+    while True:
+        position = tail.rfind(ZIP_EOCD_SIGNATURE, 0, search_end)
+        if position < 0:
+            raise RuntimeError(f"APK has no valid ZIP EOCD: {apk}")
+        if position + ZIP_EOCD_MIN_SIZE <= len(tail):
+            comment_length = struct.unpack_from("<H", tail, position + 20)[0]
+            if position + ZIP_EOCD_MIN_SIZE + comment_length == len(tail):
+                eocd_offset = size - tail_size + position
+                central_directory_offset = struct.unpack_from("<I", tail, position + 16)[0]
+                if central_directory_offset == 0xFFFFFFFF:
+                    raise RuntimeError("ZIP64 APKs are not supported by the signing-block bridge")
+                return eocd_offset, central_directory_offset
+        search_end = position
 
+
+def extract_apk_signing_block(apk: Path) -> bytes:
+    _, central_directory_offset = _find_eocd(apk)
+    if central_directory_offset < 32:
+        raise RuntimeError(f"APK has no v2/v3 signing block: {apk}")
+    with apk.open("rb") as handle:
+        handle.seek(central_directory_offset - 24)
+        footer = handle.read(24)
+        if len(footer) != 24 or footer[8:] != APK_SIG_BLOCK_MAGIC:
+            raise RuntimeError(f"APK has no v2/v3 signing block: {apk}")
+        block_size_without_first_size = struct.unpack_from("<Q", footer, 0)[0]
+        block_size = block_size_without_first_size + 8
+        if block_size > central_directory_offset or block_size < 32:
+            raise RuntimeError("APK signing block has an invalid size")
+        block_start = central_directory_offset - block_size
+        handle.seek(block_start)
+        block = handle.read(block_size)
+    if len(block) != block_size:
+        raise RuntimeError("APK signing block is truncated")
+    first_size = struct.unpack_from("<Q", block, 0)[0]
+    if first_size != block_size_without_first_size:
+        raise RuntimeError("APK signing block size fields do not match")
+    return block
+
+
+def inject_apk_signing_block(source: Path, output: Path, signing_block: bytes) -> None:
+    eocd_offset, central_directory_offset = _find_eocd(source)
+    if central_directory_offset + len(signing_block) >= 0xFFFFFFFF:
+        raise RuntimeError("APK central directory offset exceeds ZIP32 after signing-block insertion")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as input_handle, output.open("wb") as output_handle:
+        remaining = central_directory_offset
+        while remaining:
+            chunk = input_handle.read(min(1024 * 1024, remaining))
+            if not chunk:
+                raise RuntimeError("APK ended before its central directory")
+            output_handle.write(chunk)
+            remaining -= len(chunk)
+        output_handle.write(signing_block)
+        suffix = bytearray(input_handle.read())
+
+    relative_eocd = eocd_offset - central_directory_offset
+    if relative_eocd < 0 or relative_eocd + ZIP_EOCD_MIN_SIZE > len(suffix):
+        raise RuntimeError("APK EOCD is outside the central-directory suffix")
+    struct.pack_into(
+        "<I",
+        suffix,
+        relative_eocd + 16,
+        central_directory_offset + len(signing_block),
+    )
+    with output.open("ab") as output_handle:
+        output_handle.write(suffix)
+
+    if extract_apk_signing_block(output) != signing_block:
+        raise RuntimeError("failed to preserve the original APK signing block")
+    with zipfile.ZipFile(output, "r") as archive:
+        if archive.testzip() is not None:
+            raise RuntimeError("prepared LSPatch input contains a corrupt ZIP entry")
+
+
+def prepare_lspatch_input(
+    unsigned: Path, output: Path, sdk: Path, original_play_apk: Path
+) -> None:
+    _, _, zipalign, _ = android_tools(sdk)
+    aligned = output.with_suffix(".aligned.apk")
+    run([str(zipalign), "-f", "-p", "4", str(unsigned), str(aligned)])
+    signing_block = extract_apk_signing_block(original_play_apk)
+    inject_apk_signing_block(aligned, output, signing_block)
+    aligned.unlink(missing_ok=True)
 
 def extract_apk_member(apk: Path, member: str, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -316,82 +407,6 @@ def assemble_unsigned_apk(
         )
 
 
-def assemble_lspatched_apk(
-    base_apk: Path,
-    compiled_manifest: Path,
-    patched_unity: Path,
-    runtime_dex: Path,
-    config: dict[str, object],
-    output: Path,
-    work: Path,
-    lspatch_jar: Path,
-    keystore: Path,
-    alias: str,
-    ks_pass_env: str,
-    key_pass_env: str,
-    sdk: Path,
-) -> None:
-    dex_name = next_dex_name(base_apk)
-    helper_source = ROOT / "tools" / "android" / "LspatchPostProcessor.java"
-    if not helper_source.is_file():
-        raise RuntimeError(f"LSPatch post-processor source not found: {helper_source}")
-    if not lspatch_jar.is_file():
-        raise RuntimeError(f"LSPatch jar not found: {lspatch_jar}")
-
-    helper_classes = work / "lspatch-postprocessor-classes"
-    helper_classes.mkdir(parents=True, exist_ok=True)
-    run(
-        [
-            executable("javac"),
-            "-encoding",
-            "UTF-8",
-            "-classpath",
-            str(lspatch_jar),
-            "-d",
-            str(helper_classes),
-            str(helper_source),
-        ]
-    )
-
-    config_json = work / "astralpatch-config.json"
-    config_json.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    shutil.copy2(base_apk, output)
-    env = os.environ.copy()
-    if ks_pass_env not in env:
-        raise RuntimeError(
-            f"missing signing password environment variable: {ks_pass_env}"
-        )
-    if key_pass_env not in env:
-        raise RuntimeError(
-            f"missing signing password environment variable: {key_pass_env}"
-        )
-    classpath = os.pathsep.join([str(helper_classes), str(lspatch_jar)])
-    run(
-        [
-            executable("java"),
-            "-classpath",
-            classpath,
-            "LspatchPostProcessor",
-            str(output),
-            str(compiled_manifest),
-            str(patched_unity),
-            str(runtime_dex),
-            dex_name,
-            str(config_json),
-            str(keystore),
-            alias,
-            ks_pass_env,
-            key_pass_env,
-        ],
-        env=env,
-    )
-    _, _, _, apksigner = android_tools(sdk)
-    run(
-        [str(apksigner), "verify", "--verbose", "--print-certs", str(output)],
-        env=env,
-    )
 
 def sign_apk(
     unsigned: Path,
@@ -453,15 +468,15 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "resources" / "int_android" / "legacy-font.ttf",
     )
     parser.add_argument("--font-name", default="MochiyPopOne-Regular")
-    parser.add_argument("--keystore", type=Path, required=True)
-    parser.add_argument("--key-alias", required=True)
+    parser.add_argument("--keystore", type=Path)
+    parser.add_argument("--key-alias")
     parser.add_argument("--ks-pass-env", default="ASTRAL_ANDROID_KEYSTORE_PASSWORD")
     parser.add_argument("--key-pass-env", default="ASTRAL_ANDROID_KEY_PASSWORD")
     parser.add_argument("--apktool", default="apktool")
     parser.add_argument(
-        "--lspatch-jar",
-        type=Path,
-        help="Use apkzlib from this LSPatch jar to preserve nested origin.apk/file links",
+        "--prepare-for-lspatch",
+        action="store_true",
+        help="Build a zipaligned modified APK and transplant the original Play signing block for final LSPatch processing",
     )
     parser.add_argument("--android-sdk", type=Path)
     parser.add_argument("--keep-work", action="store_true")
@@ -474,8 +489,11 @@ def main() -> int:
         raise RuntimeError(f"base APK not found: {args.base_apk}")
     if not args.font_file.is_file():
         raise RuntimeError(f"Korean legacy font not found: {args.font_file}")
-    if not args.keystore.is_file():
-        raise RuntimeError(f"Android signing keystore not found: {args.keystore}")
+    if not args.prepare_for_lspatch:
+        if args.keystore is None or not args.keystore.is_file():
+            raise RuntimeError(f"Android signing keystore not found: {args.keystore}")
+        if not args.key_alias:
+            raise RuntimeError("--key-alias is required when producing a signed APK")
     if not args.release_index_url.startswith("https://"):
         raise RuntimeError("release index URL must use HTTPS")
 
@@ -497,17 +515,6 @@ def main() -> int:
 
     try:
         base_apk = args.base_apk.resolve()
-        base_is_lspatched = apk_contains_member(base_apk, LSPATCH_ORIGINAL_APK_PATH)
-        if base_is_lspatched and args.lspatch_jar is None:
-            raise RuntimeError(
-                "LSPatch APKs contain nested origin.apk/file links and must be "
-                "post-processed with --lspatch-jar instead of normal ZIP repacking"
-            )
-        if args.lspatch_jar is not None and not base_is_lspatched:
-            raise RuntimeError(
-                "--lspatch-jar requires an LSPatch input APK containing "
-                f"{LSPATCH_ORIGINAL_APK_PATH}"
-            )
         compiled_manifest, game_activity, version_name = compile_manifest(
             base_apk, work, str(apktool)
         )
@@ -536,32 +543,20 @@ def main() -> int:
             "addressablesDir": "com.unity.addressables",
             "watcherIntervalSeconds": 30,
         }
-        if args.lspatch_jar is not None:
-            assemble_lspatched_apk(
-                base_apk,
-                compiled_manifest,
-                patched_unity,
-                runtime_dex,
-                config,
-                output,
-                work,
-                args.lspatch_jar.resolve(),
-                args.keystore.resolve(),
-                args.key_alias,
-                args.ks_pass_env,
-                args.key_pass_env,
-                sdk,
-            )
+        injected = work / "runtime-injected.apk"
+        assemble_unsigned_apk(
+            base_apk,
+            compiled_manifest,
+            patched_unity,
+            runtime_dex,
+            config,
+            injected,
+        )
+        if args.prepare_for_lspatch:
+            prepare_lspatch_input(injected, output, sdk, base_apk)
         else:
-            injected = work / "runtime-injected.apk"
-            assemble_unsigned_apk(
-                base_apk,
-                compiled_manifest,
-                patched_unity,
-                runtime_dex,
-                config,
-                injected,
-            )
+            assert args.keystore is not None
+            assert args.key_alias is not None
             sign_apk(
                 injected,
                 output,

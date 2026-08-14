@@ -10,15 +10,17 @@ INT_ANDROID는 Google Play에서 받은 Astral Party APK를 기반으로 한국�
 Google Play APK / split APKs
   -> apkeep로 취득
   -> APKEditor standalone 병합 (원본 Play signature metadata 보존)
-  -> JingMatrix/LSPatch v0.8 sigbypass level 2
-       - Google Play 원본 signature를 config에 캡처
-       - 장기 Android signing key로 서명
-  -> LSPatch의 apkzlib ZFile로 후처리
-       - assets/lspatch/origin.apk + file-link 구조 보존
+  -> 한국어/runtime 수정본 생성
        - assets/bin/Data/data.unity3d의 MochiyPopOne-Regular 교체
        - com.astralpatch.runtime.BootstrapActivity 주입
        - AstralPatchRuntime DEX 추가
-       - 같은 장기 signing key로 최종 서명
+  -> zipalign -p
+  -> Google Play 원본 APK Signing Block을 수정본에 이식
+       - 수정으로 인해 서명 digest는 유효하지 않지만 원본 인증서 정보는 유지
+  -> JingMatrix/LSPatch v0.8 sigbypass level 2를 마지막에 적용
+       - 이식된 Play signing block에서 원본 인증서를 config에 캡처
+       - nested origin.apk/file-link 구조를 한 번만 생성
+       - 장기 Android signing key로 최종 서명
   -> AstralParty_INT_Korean.apk
   -> GitHub immutable release
   -> android-apk-index.json 갱신
@@ -141,4 +143,4 @@ APK가 바뀌지 않고 Addressables만 변경되면 APK를 다시 배포할 필
 
 ## 로컬 빌드 주의사항
 
-운영 빌드의 핵심 순서는 `Google Play 병합본 -> LSPatch -> build_game_apk.py --lspatch-jar ...`입니다. LSPatch 출력은 `assets/lspatch/origin.apk`가 원본 APK 데이터와 file-link를 공유하는 특수 ZIP 구조이므로 Python `zipfile`, 일반 ZIP 재패킹, 외부 zipalign 재작성으로 평탄화하지 않습니다. Builder는 LSPatch JAR에 포함된 동일 apkzlib `ZFile` API로 소유 entry만 교체하고 그 상태에서 다시 서명합니다. `--lspatch-jar` 없이 LSPatch APK를 입력하면 builder가 즉시 거부합니다. 운영 APK는 GitHub Actions workflow를 기준으로 생성합니다.
+운영 빌드의 핵심 순서는 `Google Play 병합본 -> build_game_apk.py --prepare-for-lspatch -> LSPatch`입니다. LSPatch 출력은 `assets/lspatch/origin.apk`와 file-link가 겹치는 특수 ZIP 구조라 생성 후 다시 열어 수정하지 않습니다. Builder가 먼저 일반 APK 상태에서 한국어/runtime 변경과 `zipalign -p`를 끝낸 뒤, 원본 Play APK의 v2/v3 APK Signing Block을 그대로 이식합니다. 이 중간 APK의 cryptographic digest는 수정 때문에 유효하지 않지만 LSPatch의 signature helper는 signing block의 인증서 정보를 읽어 원본 signature를 config에 기록합니다. 그 후 LSPatch가 최종 nested APK 구조를 한 번만 생성하고 장기 signing key로 서명합니다.
