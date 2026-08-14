@@ -38,7 +38,7 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" \
             --output .work/android-tools/lspatch-release.json \
             "https://api.github.com/repos/$LSPATCH_REPOSITORY/releases/latest"
-          LSPATCH_URL="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); a=[x for x in p.get("assets",[]) if str(x.get("name","")).lower().endswith(".jar")]; r=[x for x in a if "release" in str(x.get("name","")).lower()]; c=r or a; len(c)==1 or sys.exit("expected exactly one JingMatrix LSPatch jar asset; assets: "+", ".join(str(x.get("name")) for x in p.get("assets",[]))); print(c[0]["browser_download_url"])' .work/android-tools/lspatch-release.json)"
+          LSPATCH_URL="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); a=[x for x in p.get("assets",[]) if str(x.get("name","")).lower().endswith(".jar")]; exact=[x for x in a if str(x.get("name","")).lower()=="lspatch.jar"]; non_debug=[x for x in a if "debug" not in str(x.get("name","")).lower()]; c=exact or non_debug or a; len(c)==1 or sys.exit("could not select a unique JingMatrix LSPatch release jar; assets: "+", ".join(str(x.get("name")) for x in p.get("assets",[]))); print(c[0]["browser_download_url"])' .work/android-tools/lspatch-release.json)"
           LSPATCH_TAG="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag_name"])' .work/android-tools/lspatch-release.json)"
           echo "Using JingMatrix/LSPatch $LSPATCH_TAG"
           curl --fail --location --retry 3 \
