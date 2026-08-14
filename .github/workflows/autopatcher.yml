@@ -1,13 +1,11 @@
-name: Build Patcher
+name: AutoPatcher
 
 on:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish the portable EXE as an immutable GitHub Release
-        required: true
-        default: false
-        type: boolean
+
+concurrency:
+  group: autopatcher-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -20,13 +18,17 @@ jobs:
         working-directory: patcher
     env:
       GH_TOKEN: ${{ github.token }}
-      ASTRAL_PATCH_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patch-index/release-index.json
-      ASTRAL_PATCHER_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patcher-index/patcher-index.json
+      GITHUB_TOKEN: ${{ github.token }}
+      ASTRAL_PATCH_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
+      ASTRAL_PATCHER_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/patcher-index.json
       ASTRAL_PATCHER_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
-      ASTRAL_ANDROID_APK_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/android-apk-index/android-apk-index.json
+      ASTRAL_ANDROID_APK_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/android-apk-index.json
       ASTRAL_ANDROID_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -77,8 +79,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
-      - name: Publish immutable patcher release
-        if: ${{ inputs.publish }}
+      - name: Publish immutable AutoPatcher release
         shell: pwsh
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -98,14 +99,13 @@ jobs:
           gh release create $env:TAG `
             $env:EXE `
             --target $env:GITHUB_SHA `
-            --title "AstralAutoPatcher $env:VERSION" `
+            --title "AutoPatcher v$env:VERSION" `
             --notes "Portable Windows x64 AstralAutoPatcher $env:VERSION. Includes Android USB/app-player auto-detection, managed ADB Platform-Tools, verified Android APK installation with Google Play installer attribution, Steam patching, automatic verified self-update, and astral:// protocol integration."
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to publish patcher release $env:TAG."
           }
 
-      - name: Update automatic patcher index
-        if: ${{ inputs.publish }}
+      - name: Update AutoPatcher distribution index
         shell: pwsh
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -114,7 +114,6 @@ jobs:
           SIZE: ${{ steps.executable.outputs.size }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $PSNativeCommandUseErrorActionPreference = $false
           $indexPath = Join-Path $env:RUNNER_TEMP 'patcher-index.json'
           $metadata = [ordered]@{
             schemaVersion = 1
@@ -124,28 +123,21 @@ jobs:
             size = [int64]$env:SIZE
           }
           $metadata | ConvertTo-Json | Set-Content -Path $indexPath -Encoding utf8NoBOM
+          python ../tools/distribution/publish_file.py `
+            --source $indexPath `
+            --path patcher-index.json `
+            --message "chore: update AutoPatcher distribution index"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to publish patcher-index.json to the distribution branch.'
+          }
 
+          $PSNativeCommandUseErrorActionPreference = $false
           gh release view patcher-index *> $null
-          if ($LASTEXITCODE -ne 0) {
-            git ls-remote --exit-code --tags origin refs/tags/patcher-index *> $null
-            if ($LASTEXITCODE -eq 0) {
-              gh release create patcher-index `
-                --verify-tag `
-                --title "Patcher Index" `
-                --notes "Machine-readable AstralAutoPatcher update index" `
-                --prerelease
-            } else {
-              gh release create patcher-index `
-                --target $env:GITHUB_SHA `
-                --title "Patcher Index" `
-                --notes "Machine-readable AstralAutoPatcher update index" `
-                --prerelease
-            }
+          $legacyIndexExists = $LASTEXITCODE -eq 0
+          if ($legacyIndexExists) {
+            gh release upload patcher-index $indexPath --clobber
             if ($LASTEXITCODE -ne 0) {
-              throw 'Failed to create patcher-index release.'
+              Write-Warning 'Failed to mirror the legacy patcher-index release.'
             }
           }
-          gh release upload patcher-index $indexPath --clobber
-          if ($LASTEXITCODE -ne 0) {
-            throw 'Failed to update patcher-index.json.'
-          }
+          $global:LASTEXITCODE = 0

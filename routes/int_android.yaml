@@ -2,7 +2,7 @@ schemaVersion: 2
 route: INT_ANDROID
 platform: android
 translation:
-  canonicalFallbackRoute: INT_STEAM
+  sourceRoute: INT_STEAM
   lang:
     assets:
       jp: Japanese

@@ -16,8 +16,8 @@ def _bundle() -> ResolvedBundle:
 
 
 def test_release_asset_name_is_flat_and_deterministic() -> None:
-    name = _release_name("lang", _bundle())
-    assert name == f"lang-root-id-{'a' * 32}.bin"
+    name = _release_name("INT_STEAM", "lang", _bundle())
+    assert name == f"int-steam-lang-root-id-{'a' * 32}.bin"
     assert "/" not in name
 
 

@@ -1,13 +1,11 @@
-name: Build Android APK
+name: INT_ANDROID APK
 
 on:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish the APK and update the AutoPatcher Android index
-        required: true
-        default: false
-        type: boolean
+
+concurrency:
+  group: int-android-apk-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -20,6 +18,8 @@ jobs:
       APKEEP_IMAGE: ghcr.io/efforg/apkeep:stable
       PLAY_OPTIONS: locale=ja_JP,timezone=Asia/Tokyo,split_apk=1,include_additional_files=true
       LSPATCH_VERSION: v0.8
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
 
@@ -185,7 +185,7 @@ jobs:
       - name: Build Korean APK input for LSPatch
         shell: bash
         env:
-          RELEASE_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patch-index/release-index.json
+          RELEASE_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
         run: |
           set -euo pipefail
           python tools/android/build_game_apk.py \
@@ -252,7 +252,7 @@ jobs:
           fi
           SHA256="$(sha256sum "$APK" | awk '{print $1}')"
           SIZE="$(stat -c '%s' "$APK")"
-          TAG="int-android-v${GAME_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          TAG="int-android-v${GAME_VERSION}"
           echo "game_version=$GAME_VERSION" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "size=$SIZE" >> "$GITHUB_OUTPUT"
@@ -271,7 +271,6 @@ jobs:
           retention-days: 14
 
       - name: Publish immutable Android APK release
-        if: ${{ inputs.publish }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -279,18 +278,22 @@ jobs:
           GAME_VERSION: ${{ steps.apk.outputs.game_version }}
         run: |
           set -euo pipefail
+          # The display name stays INT_ANDROID v<game-version>. Replace only after the
+          # new APK has passed the complete build/signature verification pipeline.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag
+          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            git push origin ":refs/tags/$TAG"
+          fi
           gh release create "$TAG" \
             output/android/AstralParty_INT_ANDROID.apk \
-            output/android/AstralParty_INT_ANDROID.apk.json \
             --target "$GITHUB_SHA" \
-            --title "Astral Party INT_ANDROID $GAME_VERSION" \
+            --title "INT_ANDROID v$GAME_VERSION" \
             --notes "INT_ANDROID Korean-patched APK for Astral Party $GAME_VERSION. Install through AstralAutoPatcher so the installer source is recorded as com.android.vending."
 
-      - name: Update AutoPatcher Android APK index
-        if: ${{ inputs.publish }}
+      - name: Update Android APK distribution index
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.apk.outputs.tag }}
           GAME_VERSION: ${{ steps.apk.outputs.game_version }}
           SHA256: ${{ steps.apk.outputs.sha256 }}
@@ -299,7 +302,7 @@ jobs:
           set -euo pipefail
           INDEX="$RUNNER_TEMP/android-apk-index.json"
           DOWNLOAD_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/AstralParty_INT_ANDROID.apk"
-          python3 - "$INDEX" "$GAME_VERSION" "$DOWNLOAD_URL" "$SHA256" "$SIZE" <<'PY'
+          python3 - "$INDEX" "$GAME_VERSION" "$DOWNLOAD_URL" "$SHA256" "$SIZE" <<'PYINDEX'
           import json
           import sys
 
@@ -316,21 +319,11 @@ jobs:
           with open(path, "w", encoding="utf-8") as handle:
               json.dump(payload, handle, ensure_ascii=False, indent=2)
               handle.write("\n")
-          PY
-
-          if ! gh release view android-apk-index >/dev/null 2>&1; then
-            if git ls-remote --exit-code --tags origin refs/tags/android-apk-index >/dev/null 2>&1; then
-              gh release create android-apk-index \
-                --verify-tag \
-                --title "Android APK Index" \
-                --notes "Machine-readable AstralAutoPatcher Android APK index" \
-                --prerelease
-            else
-              gh release create android-apk-index \
-                --target "$GITHUB_SHA" \
-                --title "Android APK Index" \
-                --notes "Machine-readable AstralAutoPatcher Android APK index" \
-                --prerelease
-            fi
+          PYINDEX
+          python tools/distribution/publish_file.py \
+            --source "$INDEX" \
+            --path android-apk-index.json \
+            --message "chore: update Android APK distribution index"
+          if gh release view android-apk-index >/dev/null 2>&1; then
+            gh release upload android-apk-index "$INDEX" --clobber ||               echo 'warning: failed to mirror legacy android-apk-index release' >&2
           fi
-          gh release upload android-apk-index "$INDEX" --clobber

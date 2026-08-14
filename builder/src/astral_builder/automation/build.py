@@ -15,7 +15,7 @@ from astral_builder.database.builds import (
     record_build_files,
     set_build_status,
 )
-from astral_builder.database.repository import load_translation_snapshot
+from astral_builder.database.repository import load_latest_translation_snapshot
 from astral_builder.extract.unity import extract_object_names, extract_text_assets
 from astral_builder.game.source import GameSource, GameSourceClient
 from astral_builder.patch.builder import patch_lang_bundle, patch_str_bundle
@@ -146,8 +146,9 @@ def _one_bundle_with_text_asset(items: tuple[DownloadedBundle, ...], name: str) 
     return matches[0]
 
 
-def _release_name(prefix: str, bundle: ResolvedBundle) -> str:
-    return f"{prefix}-{bundle.bundle_name}-{bundle.cache_hash}.bin"
+def _release_name(route: str, prefix: str, bundle: ResolvedBundle) -> str:
+    route_slug = route.lower().replace("_", "-")
+    return f"{route_slug}-{prefix}-{bundle.bundle_name}-{bundle.cache_hash}.bin"
 
 
 def _download_url(base: str, name: str) -> str:
@@ -181,7 +182,11 @@ def build_patch(
     revision = load_stored_revision(conn, revision_id)
     if revision.route != config.route:
         raise RuntimeError(f"route mismatch: db={revision.route} config={config.route}")
-    snapshot = load_translation_snapshot(conn, revision_id)
+    snapshot = load_latest_translation_snapshot(
+        conn,
+        route=config.translation_source_route,
+        game_version=revision.game_version,
+    )
     stored = load_stored_bundles(conn, revision_id)
     source = GameSource(
         route=revision.route,
@@ -222,7 +227,7 @@ def build_patch(
         bundles_root,
     )
     lang_item = _one_bundle_with_text_asset(lang_items, lang_name)
-    lang_release_name = _release_name("lang", lang_item.resolved)
+    lang_release_name = _release_name(revision.route, "lang", lang_item.resolved)
     lang_out = payloads / lang_release_name
     patch_lang_bundle(lang_item.path, lang_out, snapshot, asset_name=lang_name, channel=channel)
     validate_file(lang_out)
@@ -249,7 +254,7 @@ def build_patch(
     if len(str_candidates) != 1:
         raise RuntimeError("expected exactly one STR source bundle")
     str_item = str_candidates[0]
-    str_release_name = _release_name("str", str_item.resolved)
+    str_release_name = _release_name(revision.route, "str", str_item.resolved)
     str_out = payloads / str_release_name
     patch_str_bundle(
         str_item.path,
@@ -286,7 +291,7 @@ def build_patch(
         raise RuntimeError("expected exactly one remote bundle containing the TMP font assets")
     tmp_item = tmp_candidates[0]
     resource_root = Path(resources_root or config.resources_root)
-    tmp_release_name = _release_name("tmp-font", tmp_item.resolved)
+    tmp_release_name = _release_name(revision.route, "tmp-font", tmp_item.resolved)
     tmp_out = payloads / tmp_release_name
     patch_tmp_font_bundle(
         tmp_item.path,
@@ -315,7 +320,8 @@ def build_patch(
                 "legacy data.unity3d input is required for this route before a complete patch "
                 "manifest can be written"
             )
-        legacy_release_name = "game-data-data.unity3d"
+        route_slug = revision.route.lower().replace("_", "-")
+        legacy_release_name = f"{route_slug}-game-data-data.unity3d"
         legacy_out = payloads / legacy_release_name
         patch_legacy_font(
             legacy_data_path,

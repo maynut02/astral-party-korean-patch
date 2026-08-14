@@ -162,6 +162,16 @@ def _all_unit_ids(conn: psycopg.Connection) -> dict[Identity, UUID]:
         return {(row[0], row[1], row[2]): row[3] for row in cur.fetchall()}
 
 
+def sync_revision_metadata(
+    conn: psycopg.Connection,
+    revision: RevisionInput,
+) -> tuple[UUID, bool]:
+    """Persist immutable route compatibility metadata without source translations."""
+    with conn.transaction():
+        revision_id, existed = _ensure_revision(conn, revision)
+    return revision_id, existed
+
+
 def sync_revision_sources(
     conn: psycopg.Connection,
     revision: RevisionInput,
@@ -324,6 +334,36 @@ def load_translation_snapshot(
         locale=locale,
         units=units,
     )
+
+
+def load_latest_translation_snapshot(
+    conn: psycopg.Connection,
+    *,
+    route: str,
+    game_version: str,
+    locale: str = "ko",
+):
+    """Load the latest processed canonical source snapshot for a game version."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id
+            FROM game_revisions
+            WHERE route = %s
+              AND game_version = %s
+              AND processed_at IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM source_texts st WHERE st.revision_id = game_revisions.id
+              )
+            ORDER BY detected_at DESC, processed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (route, game_version),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise KeyError(f"canonical translation revision not found: {route}/{game_version}")
+    return load_translation_snapshot(conn, row[0], locale=locale)
 
 
 @dataclass(frozen=True, slots=True)

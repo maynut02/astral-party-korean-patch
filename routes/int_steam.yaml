@@ -2,6 +2,7 @@ schemaVersion: 2
 route: INT_STEAM
 platform: windows
 translation:
+  sourceRoute: INT_STEAM
   lang:
     assets:
       cn_s: Simplified Chinese

@@ -64,7 +64,7 @@ def test_processed_revision_is_unchanged() -> None:
     assert result.changed is False
 
 
-def test_processed_revision_without_release_is_retried() -> None:
+def test_processed_revision_without_published_build_is_retried() -> None:
     result = check_revision(
         _Connection(("fd58ba01bbca5e5e389b5b73240df134", object(), False)),  # type: ignore[arg-type]
         route="INT_STEAM",

@@ -22,14 +22,14 @@ use crate::uri::UriError;
 use crate::uri::UriRequest;
 
 #[cfg(windows)]
-const FALLBACK_RELEASE_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/patch-index/release-index.json";
+const FALLBACK_RELEASE_INDEX_URL: &str = "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/release-index.json";
 #[cfg(windows)]
-const FALLBACK_PATCHER_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/patcher-index/patcher-index.json";
+const FALLBACK_PATCHER_INDEX_URL: &str = "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/patcher-index.json";
 #[cfg(windows)]
 const FALLBACK_PATCHER_RELEASE_BASE_URL: &str =
     "https://github.com/maynut02/astral-party-korean-patch/releases/download";
 #[cfg(windows)]
-const FALLBACK_ANDROID_APK_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/android-apk-index/android-apk-index.json";
+const FALLBACK_ANDROID_APK_INDEX_URL: &str = "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/android-apk-index.json";
 #[cfg(windows)]
 const FALLBACK_ANDROID_RELEASE_BASE_URL: &str =
     "https://github.com/maynut02/astral-party-korean-patch/releases/download";

@@ -38,9 +38,9 @@ def check_revision(
                     SELECT 1
                     FROM builds AS b
                     WHERE b.revision_id = gr.id
-                      AND b.channel = 'release'
+                      AND b.channel IN ('develop', 'release')
                       AND b.status = 'released'
-                ) AS has_release
+                ) AS has_published_build
             FROM game_revisions AS gr
             WHERE gr.route = %s AND gr.game_version = %s AND gr.revision = %s
             """,
@@ -51,7 +51,7 @@ def check_revision(
     if row is None:
         return RevisionCheck(source=source, catalog_hash=catalog_hash, changed=True)
 
-    persisted_hash, processed_at, has_release = row
+    persisted_hash, processed_at, has_published_build = row
     if persisted_hash != catalog_hash:
         raise RevisionConflictError(
             "remote catalog hash changed for an existing immutable revision: "
@@ -61,7 +61,7 @@ def check_revision(
     return RevisionCheck(
         source=source,
         catalog_hash=catalog_hash,
-        changed=processed_at is None or not has_release,
+        changed=processed_at is None or not has_published_build,
     )
 
 

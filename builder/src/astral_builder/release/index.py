@@ -66,7 +66,21 @@ class ReleaseIndex:
 
     def upsert(self, entry: ReleaseIndexEntry) -> ReleaseIndex:
         entry.validate()
-        by_identity = {item.identity: item for item in self.releases}
+        existing = self.releases
+        if entry.channel == "develop":
+            # Develop uses one rolling GitHub Release/tag. Keeping historical
+            # develop entries would make old catalog hashes point at the new
+            # manifest bytes under the same URL.
+            existing = tuple(
+                item
+                for item in existing
+                if not (
+                    item.route == entry.route
+                    and item.game_version == entry.game_version
+                    and item.channel == "develop"
+                )
+            )
+        by_identity = {item.identity: item for item in existing}
         by_identity[entry.identity] = entry
         ordered = tuple(sorted(by_identity.values(), key=lambda item: item.identity))
         return ReleaseIndex(ordered, self.schema_version)

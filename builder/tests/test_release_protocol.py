@@ -102,8 +102,8 @@ def test_release_index_upserts_exact_route_revision_channel() -> None:
         revision="1042",
         catalog_hash="b" * 32,
         channel="release",
-        patch_version="v3.2.0-r1042-pre",
-        manifest_url="https://example.test/pre/manifest.json",
+        patch_version="v3.2.0_r1042-old",
+        manifest_url="https://example.test/old/manifest.json",
         manifest_sha256="c" * 64,
     )
     second = ReleaseIndexEntry(
@@ -112,13 +112,13 @@ def test_release_index_upserts_exact_route_revision_channel() -> None:
         revision="1042",
         catalog_hash="b" * 32,
         channel="release",
-        patch_version="v3.2.0-r1042-release",
+        patch_version="v3.2.0_r1042",
         manifest_url="https://example.test/release/manifest.json",
         manifest_sha256="d" * 64,
     )
     index = ReleaseIndex(()).upsert(first).upsert(second)
     assert len(index.releases) == 1
-    assert index.releases[0].patch_version == "v3.2.0-r1042-release"
+    assert index.releases[0].patch_version == "v3.2.0_r1042"
     assert ReleaseIndex.from_json(index.to_json()) == index
 
     schema = json.loads((ROOT / "schemas/release-index.schema.json").read_text())
@@ -160,3 +160,42 @@ def test_release_index_drops_legacy_channels_on_read() -> None:
 def test_manifest_digest_hashes_exact_bytes() -> None:
     expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     assert manifest_digest(b"abc") == expected
+
+
+def test_develop_release_index_is_rolling_per_route_and_game_version() -> None:
+    first = ReleaseIndexEntry(
+        route="INT_STEAM",
+        game_version="3.2.0",
+        revision="115",
+        catalog_hash="1" * 32,
+        channel="develop",
+        patch_version="v3.2.0_r115-pre",
+        manifest_url="https://example.test/patch-pre/INT_STEAM_manifest.json",
+        manifest_sha256="a" * 64,
+    )
+    current = ReleaseIndexEntry(
+        route="INT_STEAM",
+        game_version="3.2.0",
+        revision="116",
+        catalog_hash="2" * 32,
+        channel="develop",
+        patch_version="v3.2.0_r116-pre",
+        manifest_url="https://example.test/patch-pre/INT_STEAM_manifest.json",
+        manifest_sha256="b" * 64,
+    )
+    stable = ReleaseIndexEntry(
+        route="INT_STEAM",
+        game_version="3.2.0",
+        revision="115",
+        catalog_hash="1" * 32,
+        channel="release",
+        patch_version="v3.2.0_r115",
+        manifest_url="https://example.test/v3.2.0_r115/INT_STEAM_manifest.json",
+        manifest_sha256="c" * 64,
+    )
+
+    updated = ReleaseIndex((first, stable)).upsert(current)
+
+    assert updated.releases == (current, stable) or updated.releases == (stable, current)
+    assert [item for item in updated.releases if item.channel == "develop"] == [current]
+    assert [item for item in updated.releases if item.channel == "release"] == [stable]

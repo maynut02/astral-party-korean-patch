@@ -89,3 +89,16 @@ def test_parser_exposes_release_commands() -> None:
         ["mark-released", "--build-id", "00000000-0000-0000-0000-000000000001"]
     )
     assert released.command == "mark-released"
+
+
+def test_parser_exposes_translation_status_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "translation-status",
+            "--revision-id",
+            "00000000-0000-0000-0000-000000000001",
+        ]
+    )
+    assert args.command == "translation-status"
+    assert args.strict is False

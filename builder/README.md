@@ -1,5 +1,36 @@
 # Builder
 
-`astral_builder`는 로컬 패치 제작기가 아니라 GitHub Actions에서 실행되는 빌드 파이프라인입니다.
+`astral_builder`는 GitHub Actions에서 게임 원본을 탐색하고 Neon DB와 동기화한 뒤 검증 가능한 patch manifest/payload를 생성하는 Python 3.12 도구입니다.
 
-현재 단계에서는 패키지/CLI 골격만 제공합니다. 게임 원본 다운로드, 추출, DB 동기화 및 패치 생성 기능은 `docs/PLAN.md`의 Phase 순서대로 추가합니다.
+주요 CLI:
+
+```text
+astral-builder check
+astral-builder sync
+astral-builder build
+astral-builder validate-build
+astral-builder translation-status
+astral-builder update-index
+astral-builder mark-released
+```
+
+## 번역 source 구조
+
+번역 원문은 `INT_STEAM` 하나만 canonical source로 사용합니다.
+
+- `INT_STEAM`: LANG/STR 원문 추출 후 `source_texts` 동기화.
+- `CN_STEAM`: catalog/bundle target metadata만 동기화.
+- `INT_ANDROID`: catalog/bundle target metadata만 동기화.
+- 세 route build: 같은 game version의 최신 processed `INT_STEAM` translation snapshot 사용.
+
+`approved`이면서 현재 source fingerprint와 일치하는 번역만 patch에 들어갑니다. 다른 상태는 원문을 유지하며 `translation-status`가 상세 상태를 보고합니다.
+
+## 로컬 검증
+
+```bash
+python -m pip install -e './builder[dev]'
+python -m ruff check builder tools
+python -m pytest builder/tests
+```
+
+운영 workflow와 Release 정책은 [`../docs/OPERATIONS.md`](../docs/OPERATIONS.md)를 참조합니다.

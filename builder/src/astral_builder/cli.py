@@ -21,8 +21,13 @@ from astral_builder.automation.sync import (
     prepare_revision,
     write_sync_github_output,
 )
+from astral_builder.automation.translation_status import (
+    summarize_translation_snapshot,
+    write_translation_status_github_output,
+)
 from astral_builder.automation.validate_build import validate_built_patch
 from astral_builder.database.builds import set_build_status
+from astral_builder.database.repository import load_translation_snapshot
 from astral_builder.patch.translations import DistributionChannel
 
 
@@ -77,6 +82,18 @@ def build_parser() -> argparse.ArgumentParser:
     update_index.add_argument("--manifest", required=True)
     update_index.add_argument("--manifest-url", required=True)
     update_index.add_argument("--index", required=True)
+
+    translation_status = subparsers.add_parser(
+        "translation-status",
+        help="Report canonical translation readiness without blocking safe source fallback.",
+    )
+    translation_status.add_argument("--revision-id", required=True)
+    translation_status.add_argument("--github-output")
+    translation_status.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail when any unit is not approved for the current source fingerprint.",
+    )
 
     mark_released = subparsers.add_parser("mark-released", help="Mark a Neon build as released.")
     mark_released.add_argument("--build-id", required=True)
@@ -228,6 +245,41 @@ def _run_update_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_translation_status(args: argparse.Namespace) -> int:
+    with psycopg.connect(_database_url()) as conn:
+        snapshot = load_translation_snapshot(conn, UUID(args.revision_id))
+    report = summarize_translation_snapshot(snapshot)
+    if not report.releasable:
+        raise SystemExit(f"Revision {args.revision_id} has no translation units")
+    if args.github_output:
+        write_translation_status_github_output(report, args.github_output)
+    payload = {
+        "total": report.total,
+        "approved": report.approved,
+        "untranslated": report.untranslated,
+        "draft": report.draft,
+        "reviewed": report.reviewed,
+        "needsReview": report.needs_review,
+        "incomplete": report.incomplete,
+        "examples": list(report.examples),
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    if report.incomplete:
+        print(
+            "Translation warning: "
+            f"{report.incomplete}/{report.total} units are not currently approved; "
+            "they will keep the original game text."
+        )
+        for example in report.examples:
+            print(f"  - {example}")
+    if args.strict and report.incomplete:
+        raise SystemExit(
+            "Strict translation check failed: "
+            f"{report.incomplete}/{report.total} units are incomplete"
+        )
+    return 0
+
+
 def _run_mark_released(args: argparse.Namespace) -> int:
     with psycopg.connect(_database_url()) as conn:
         set_build_status(conn, UUID(args.build_id), "released")
@@ -251,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_release_info(args)
     if args.command == "update-index":
         return _run_update_index(args)
+    if args.command == "translation-status":
+        return _run_translation_status(args)
     if args.command == "mark-released":
         return _run_mark_released(args)
 

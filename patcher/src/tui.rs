@@ -1782,7 +1782,7 @@ mod tests {
     fn install_progress_updates_version_and_bars() {
         let mut app = app(UriAction::Menu);
         app.update_install_progress(InstallProgress::Selected {
-            patch_version: "v3.2.0-r116-pre".into(),
+            patch_version: "v3.2.0_r116-pre".into(),
             files: vec![PatchFileInfo {
                 download_name: "data.unity3d.gz".into(),
                 install_path: "data.unity3d".into(),
@@ -1810,7 +1810,7 @@ mod tests {
 
         assert_eq!(
             app.install_progress.patch_version.as_deref(),
-            Some("v3.2.0-r116-pre")
+            Some("v3.2.0_r116-pre")
         );
         assert_eq!(app.install_progress.download_current, 5);
         assert_eq!(app.install_progress.download_total, 10);

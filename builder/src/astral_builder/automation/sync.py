@@ -14,11 +14,12 @@ from astral_builder.database.repository import (
     SourceSyncResult,
     mark_revision_processed,
     sync_asset_locations,
+    sync_revision_metadata,
     sync_revision_sources,
 )
 from astral_builder.extract.translations import extract_lang_units, extract_str_units
 from astral_builder.extract.unity import extract_text_assets
-from astral_builder.formats.model import SourceStrings, TranslationUnit
+from astral_builder.formats.model import TranslationUnit
 from astral_builder.game.source import DownloadedCatalog, GameSource, GameSourceClient
 from astral_builder.source.downloader import DownloadedBundle, RemoteBundleDownloader
 
@@ -27,7 +28,7 @@ from astral_builder.source.downloader import DownloadedBundle, RemoteBundleDownl
 class RouteSyncConfig:
     route: str
     platform: str
-    canonical_fallback_route: str | None
+    translation_source_route: str
     lang_assets: dict[str, str]
     lang_target: str
     str_catalog_key: str
@@ -48,7 +49,7 @@ class PreparedRevision:
     asset_locations: tuple[AssetLocationInput, ...]
     downloaded_bundles: tuple[DownloadedBundle, ...]
     empty_str_assets: tuple[str, ...]
-    canonical_fallback_route: str | None = None
+    translation_source_route: str = "INT_STEAM"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,13 +76,13 @@ def load_route_sync_config(path: str | Path) -> RouteSyncConfig:
         str_config = translation["str"]
         tmp_config = data["fonts"]["tmp"]
         legacy_config = data["fonts"].get("legacy")
-        fallback = translation.get("canonicalFallbackRoute")
+        translation_source_route = str(translation.get("sourceRoute", route)).upper()
         default_lang_target = "en" if "en" in lang_assets else next(iter(lang_assets))
         lang_target = str(lang_config.get("target", default_lang_target))
         config = RouteSyncConfig(
             route=route,
             platform=platform,
-            canonical_fallback_route=str(fallback).upper() if fallback else None,
+            translation_source_route=translation_source_route,
             lang_assets=lang_assets,
             lang_target=lang_target,
             str_catalog_key=str(str_config["catalogKey"]),
@@ -102,8 +103,8 @@ def load_route_sync_config(path: str | Path) -> RouteSyncConfig:
         raise ValueError("route config lang target must reference a configured language asset")
     if config.str_target_field not in valid_codes:
         raise ValueError("route config STR targetField must be cn_s/en/jp/cn_t")
-    if config.canonical_fallback_route == config.route:
-        raise ValueError("canonical fallback route must differ from route")
+    if not config.translation_source_route:
+        raise ValueError("translation source route cannot be empty")
     if config.platform not in {"windows", "android"}:
         raise ValueError(f"unsupported route platform: {config.platform}")
     return config
@@ -222,7 +223,8 @@ def prepare_revision(
         for item in downloaded:
             all_downloads[(item.resolved.bundle_name, item.resolved.cache_hash)] = item
         asset_locations.extend(_bundle_locations(target, downloaded))
-        language_payloads[code] = _find_text_asset(downloaded, asset_name)
+        if config.translation_source_route == config.route:
+            language_payloads[code] = _find_text_asset(downloaded, asset_name)
 
     str_target = resolve_target(
         catalog,
@@ -240,8 +242,9 @@ def prepare_revision(
     asset_locations.extend(_bundle_locations(str_target, str_downloaded))
 
     str_assets: dict[str, bytes] = {}
-    for item in str_downloaded:
-        str_assets.update(extract_text_assets(item.path, name_prefix=config.str_asset_prefix))
+    if config.translation_source_route == config.route:
+        for item in str_downloaded:
+            str_assets.update(extract_text_assets(item.path, name_prefix=config.str_asset_prefix))
     empty_str_assets = tuple(sorted(name for name, payload in str_assets.items() if not payload))
 
     tmp_target = resolve_target(
@@ -255,9 +258,12 @@ def prepare_revision(
         all_downloads[(item.resolved.bundle_name, item.resolved.cache_hash)] = item
     asset_locations.extend(_bundle_locations(tmp_target, tmp_downloaded))
 
-    lang_units = extract_lang_units(language_payloads)
-    str_units = extract_str_units(str_assets, asset_prefix=config.str_asset_prefix)
-    units = lang_units + str_units
+    if config.translation_source_route == config.route:
+        lang_units = extract_lang_units(language_payloads)
+        str_units = extract_str_units(str_assets, asset_prefix=config.str_asset_prefix)
+        units = lang_units + str_units
+    else:
+        units = ()
 
     return PreparedRevision(
         source=source,
@@ -267,81 +273,8 @@ def prepare_revision(
         asset_locations=tuple(asset_locations),
         downloaded_bundles=tuple(all_downloads.values()),
         empty_str_assets=empty_str_assets,
-        canonical_fallback_route=config.canonical_fallback_route,
+        translation_source_route=config.translation_source_route,
     )
-
-
-def _canonicalize_units_from_fallback(
-    conn: psycopg.Connection,
-    prepared: PreparedRevision,
-) -> tuple[TranslationUnit, ...]:
-    fallback_route = prepared.canonical_fallback_route
-    if not fallback_route:
-        return prepared.units
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, revision
-            FROM game_revisions
-            WHERE route = %s
-              AND game_version = %s
-              AND processed_at IS NOT NULL
-            ORDER BY detected_at DESC, processed_at DESC, id DESC
-            LIMIT 1
-            """,
-            (fallback_route, prepared.source.version),
-        )
-        fallback_revision = cur.fetchone()
-        if fallback_revision is None:
-            raise RuntimeError(
-                "canonical fallback has no processed source revision: "
-                f"{fallback_route}/{prepared.source.version}"
-            )
-
-        fallback_revision_id, _fallback_revision = fallback_revision
-        cur.execute(
-            """
-            SELECT tu.kind, tu.namespace, tu.unit_key, st.cn_s, st.en, st.jp, st.cn_t
-            FROM source_texts st
-            JOIN translation_units tu ON tu.id = st.unit_id
-            WHERE st.revision_id = %s
-            """,
-            (fallback_revision_id,),
-        )
-        rows = cur.fetchall()
-    if not rows:
-        raise RuntimeError(
-            "canonical fallback processed revision has no source texts: "
-            f"{fallback_route}/{prepared.source.version}/{_fallback_revision}"
-        )
-
-    fallback = {
-        (str(row[0]), str(row[1]), str(row[2])): SourceStrings(
-            cn_s=str(row[3]), en=str(row[4]), jp=str(row[5]), cn_t=str(row[6])
-        )
-        for row in rows
-    }
-    result: list[TranslationUnit] = []
-    for unit in prepared.units:
-        source = unit.source
-        other = fallback.get(unit.identity)
-        if other is not None:
-            source = SourceStrings(
-                cn_s=source.cn_s or other.cn_s,
-                en=source.en or other.en,
-                jp=source.jp or other.jp,
-                cn_t=source.cn_t or other.cn_t,
-            )
-        result.append(
-            TranslationUnit(
-                kind=unit.kind,
-                namespace=unit.namespace,
-                key=unit.key,
-                source=source,
-            )
-        )
-    return tuple(result)
 
 
 def persist_prepared_revision(
@@ -357,18 +290,23 @@ def persist_prepared_revision(
         catalog_sha256=prepared.catalog.sha256,
         catalog_build_hash=prepared.catalog_hash,
     )
-    canonical_units = _canonicalize_units_from_fallback(conn, prepared)
-    source_result: SourceSyncResult = sync_revision_sources(conn, revision, canonical_units)
+    if prepared.translation_source_route == prepared.source.route:
+        source_result: SourceSyncResult = sync_revision_sources(conn, revision, prepared.units)
+        revision_id = source_result.revision_id
+        source_idempotent = source_result.idempotent
+    else:
+        revision_id, source_idempotent = sync_revision_metadata(conn, revision)
+
     locations_idempotent = sync_asset_locations(
         conn,
-        source_result.revision_id,
+        revision_id,
         prepared.asset_locations,
     )
-    mark_revision_processed(conn, source_result.revision_id)
+    mark_revision_processed(conn, revision_id)
     return SyncRevisionResult(
-        revision_id=str(source_result.revision_id),
-        idempotent=source_result.idempotent and locations_idempotent,
-        unit_count=len(canonical_units),
+        revision_id=str(revision_id),
+        idempotent=source_idempotent and locations_idempotent,
+        unit_count=len(prepared.units),
         asset_location_count=len(prepared.asset_locations),
         downloaded_bundle_count=len(prepared.downloaded_bundles),
         empty_str_assets=prepared.empty_str_assets,

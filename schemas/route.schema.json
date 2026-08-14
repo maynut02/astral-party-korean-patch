@@ -8,64 +8,62 @@
     "route",
     "platform",
     "translation",
-    "fonts"
+    "fonts",
+    "resources"
   ],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": {
-      "const": 1
+      "const": 2
     },
     "route": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "#/$defs/routeName"
     },
     "platform": {
       "enum": [
-        "windows"
+        "windows",
+        "android"
       ]
     },
     "translation": {
       "type": "object",
       "required": [
+        "sourceRoute",
         "lang",
         "str"
       ],
       "additionalProperties": false,
       "properties": {
+        "sourceRoute": {
+          "$ref": "#/$defs/routeName"
+        },
         "lang": {
           "type": "object",
           "required": [
-            "assets"
+            "assets",
+            "target"
           ],
           "additionalProperties": false,
           "properties": {
             "assets": {
               "type": "object",
-              "required": [
-                "cn_s",
-                "en",
-                "jp",
-                "cn_t"
-              ],
-              "additionalProperties": false,
-              "properties": {
-                "cn_s": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "en": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "jp": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "cn_t": {
-                  "type": "string",
-                  "minLength": 1
-                }
+              "minProperties": 1,
+              "maxProperties": 4,
+              "propertyNames": {
+                "enum": [
+                  "cn_s",
+                  "en",
+                  "jp",
+                  "cn_t"
+                ]
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
               }
+            },
+            "target": {
+              "$ref": "#/$defs/languageCode"
             }
           }
         },
@@ -78,17 +76,16 @@
           ],
           "additionalProperties": false,
           "properties": {
+            "catalogKey": {
+              "type": "string",
+              "minLength": 1
+            },
             "assetPrefix": {
               "type": "string",
               "minLength": 1
             },
             "targetField": {
-              "type": "string",
-              "minLength": 1
-            },
-            "catalogKey": {
-              "type": "string",
-              "minLength": 1
+              "$ref": "#/$defs/languageCode"
             }
           }
         }
@@ -103,32 +100,66 @@
       "additionalProperties": false,
       "properties": {
         "tmp": {
-          "$ref": "#/$defs/fontTarget"
+          "$ref": "#/$defs/tmpFontTarget"
         },
         "legacy": {
-          "$ref": "#/$defs/fontTarget"
+          "$ref": "#/$defs/legacyFontTarget"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "required": [
+        "root"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 1
         }
       }
     }
   },
   "$defs": {
-    "fontTarget": {
+    "routeName": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "languageCode": {
+      "enum": [
+        "cn_s",
+        "en",
+        "jp",
+        "cn_t"
+      ]
+    },
+    "tmpFontTarget": {
       "type": "object",
       "required": [
-        "asset",
-        "replacement"
+        "catalogKey",
+        "asset"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "catalogKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "asset": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "legacyFontTarget": {
+      "type": "object",
+      "required": [
+        "asset"
       ],
       "additionalProperties": false,
       "properties": {
         "asset": {
-          "type": "string",
-          "minLength": 1
-        },
-        "replacement": {
-          "type": "string",
-          "minLength": 1
-        },
-        "catalogKey": {
           "type": "string",
           "minLength": 1
         }

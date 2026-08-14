@@ -1,10 +1,10 @@
 # Astral Party Korean Patch - Implementation Plan
 
-## 구현 상태 (2026-08-13)
+## 구현 상태 (2026-08-15)
 
 Phase 0~8의 로컬 구현과 테스트용 통합 검증은 완료했습니다. Builder/DB/Patcher/Release protocol/GitHub Actions workflow가 모두 monorepo에 구현되어 있습니다.
 
-남은 검증은 새 GitHub repository, Neon credential, Steam refresh token을 연결한 뒤 hosted Actions에서 `check -> sync -> legacy -> build -> release` 전체 흐름과 실제 게임 install/remove를 실행하는 운영 integration입니다. 설정 절차는 [`OPERATIONS.md`](OPERATIONS.md)를 참조합니다.
+현재 운영 구조는 INT_STEAM 하나를 canonical translation source로 사용하고, CN_STEAM/INT_ANDROID는 route target compatibility만 별도로 관리하도록 단순화했습니다. hosted Actions에서 `Patch -> unified build/release`, AutoPatcher, Android APK의 실제 운영 integration을 계속 검증합니다. 설정 절차는 [`OPERATIONS.md`](OPERATIONS.md)를 참조합니다.
 
 ## 1. 기본 원칙
 
@@ -172,40 +172,63 @@ Patcher는 Neon DB에 직접 접근하지 않는다.
 
 ### Phase 8 - GitHub Actions automation
 
-Workflow 분리:
+Actions 화면에는 사용자 관점의 네 workflow만 노출합니다.
 
-1. `check-game.yml`: 외부 scheduler가 dispatch하는 revision check + 새 revision `-pre` orchestration
-2. `sync-game.yml`: catalog resolve/download/extract/DB sync
-3. `build-patch.yml`: reusable snapshot/build/validate (`release`/`develop` distribution channel)
-4. `release-patch.yml`: reusable immutable Patch Release + release index 갱신
-5. `release.yml`: 입력값 없이 최신 processed revision의 정식 `-release` 수동 build/release
-6. `build-patcher.yml`: patcher build/release
+1. `CI`: Builder/Patcher lint와 test.
+2. `Patch`: 자동 pre와 수동 release를 하나의 pipeline으로 처리.
+3. `AutoPatcher`: 수동 Windows EXE release.
+4. `INT_ANDROID APK`: 수동 Android APK release.
 
-운영 흐름:
+`Patch` 내부 동작은 다음과 같습니다.
 
 ```text
-revision changed
-  -> resolve catalog
-  -> fetch only required bundles
-  -> extract sources
-  -> Neon sync
-  -> translation snapshot
-  -> approved translations only
-  -> release-channel `-pre` patch
-  -> validate
-  -> manifest
-  -> GitHub Release
+scheduled pre
+  -> INT_STEAM만 remote revision check
+  -> INT_STEAM canonical source sync
+  -> CN_STEAM / INT_ANDROID target compatibility sync
+  -> approved translation status report
+  -> Steam legacy inputs 한 번에 취득
+  -> 세 route build + validation
+  -> 하나의 v<game>_r<canonical-revision>-pre prerelease
+
+manual release
+  -> 최신 세 route target sync
+  -> 같은 INT_STEAM canonical translation snapshot 사용
+  -> 세 route build + validation
+  -> 하나의 v<game>_r<canonical-revision> release (같은 revision 재배포 시 검증 후 교체)
 ```
 
-번역 승인 자체는 release를 트리거하지 않는다. 번역 완료 시 운영자가 `Release Patch`를 수동 실행해 같은 revision의 `-release`를 만들고 release index의 `release` entry를 교체한다. 개발 검증용 `develop` channel도 승인된 번역만 사용한다.
+번역 승인 자체는 release를 트리거하지 않습니다. `approved + current fingerprint` 번역만 payload에 들어가고 나머지는 원문을 유지합니다. 미번역 unit은 상태 보고에는 포함하지만 release 전체를 막지 않습니다.
+
+세 route별 manifest는 한 Release에 함께 배포합니다. payload filename에는 route prefix를 붙여 asset 충돌을 방지합니다.
+
+rolling machine metadata는 Releases 화면에 별도 배포물로 만들지 않고 `distribution` branch의 `release-index.json`, `patcher-index.json`, `android-apk-index.json`으로 관리합니다. 기존 client 호환을 위해 이미 존재하는 legacy index Release에는 같은 파일을 mirror하되 새 legacy index Release를 생성하지 않습니다.
+
+Release 표시 이름은 다음 규칙을 사용합니다.
+
+```text
+AutoPatcher v<patcher-version>
+INT_ANDROID v<game-version>
+v<game-version>_r<canonical-revision>
+```
+
 
 ## 5. DB 동기화 규칙
 
-- 동일 key + 동일 source fingerprint: 기존 번역 그대로 사용
-- 동일 key + 변경 fingerprint: 기존 번역 보존, `needs_review`를 계산
-- 신규 key: untranslated
-- 최신 revision에 없는 key: historical data는 유지하되 현재 revision에서는 retired/missing으로 계산
-- 빌드 도중 DB 변경 영향을 막기 위해 build 시작 시 immutable translation snapshot 생성
+번역 source와 route compatibility를 분리합니다.
+
+- `INT_STEAM`만 `source_texts`를 생성하는 canonical translation source다.
+- `CN_STEAM`/`INT_ANDROID`는 `game_revisions`와 `asset_locations`로 target catalog/bundle 호환 정보만 저장한다.
+- 세 route 빌드는 같은 game version의 최신 processed `INT_STEAM` translation snapshot을 사용한다.
+- 동일 key + 동일 source fingerprint: 기존 번역 그대로 사용.
+- 동일 key + 변경 fingerprint: 기존 번역 variant를 보존하고 현재 snapshot에서 `needs_review`로 계산.
+- 신규 key: `untranslated`.
+- 최신 canonical revision에 없는 key: historical data는 보존하되 현재 snapshot에서는 사용하지 않는다.
+- sync는 translation row를 삭제하지 않는다.
+- 과거 CN/Android source snapshot은 이력으로 남기지만 새 빌드에서는 canonical source로 사용하지 않는다.
+
+빌드 중에는 선택된 canonical snapshot의 fingerprint를 build metadata에 기록해 어떤 번역 상태로 생성됐는지 추적합니다.
+
 
 ## 6. Patch installation protocol
 
@@ -248,7 +271,7 @@ revision changed
 - legacy font/runtime 변경과 zipalign을 먼저 수행한 뒤 원본 Play APK Signing Block을 중간 수정본에 이식.
 - JingMatrix/LSPatch v0.8 sigbypass level 2를 마지막에 적용해 이식된 signing block의 원본 Play 인증서를 runtime config에 보존하고 최종 nested APK를 생성.
 - `assets/bin/Data/data.unity3d` legacy TTF 교체 후 `com.astralpatch.runtime.BootstrapActivity`와 runtime DEX를 주입.
-- Android APK는 Actions Secrets의 장기 signing key로 계속 서명하고 immutable GitHub Release + `android-apk-index.json`으로 배포.
+- Android APK는 Actions Secrets의 장기 signing key로 계속 서명하고 `INT_ANDROID v<game-version>` GitHub Release + `distribution/android-apk-index.json`으로 배포.
 - Windows AstralAutoPatcher가 Google Platform-Tools를 자체 관리하고 실제 USB 기기 및 MuMu/BlueStacks/LDPlayer를 자동 탐색.
 - AutoPatcher는 APK size/SHA-256을 검증하고 `installerPackageName=com.android.vending`으로 설치한 뒤 installer를 재검증.
 - 공식판에서 최초 전환할 때 다른 signature 때문에 제거가 필요하면 앱 데이터 삭제 가능성을 경고하고 사용자 확인을 받은 뒤 진행.
