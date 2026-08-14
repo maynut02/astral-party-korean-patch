@@ -12,7 +12,7 @@ jobs:
     env:
       ANDROID_PACKAGE: com.feimo.astralpartyjpn
       APKEEP_IMAGE: ghcr.io/efforg/apkeep:stable
-      PLAY_OPTIONS: locale=jp,timezone=UTC+9,split_apk=1,include_additional_files=true
+      PLAY_OPTIONS: locale=ja_JP,timezone=Asia/Tokyo,split_apk=1,include_additional_files=true
     steps:
       - uses: actions/checkout@v6
 
@@ -79,6 +79,7 @@ jobs:
           set -euo pipefail
           mkdir -p .work/google-play
           docker pull "$APKEEP_IMAGE"
+          set +e
           docker run --rm \
             -v "$PWD/.work/google-play:/output" \
             "$APKEEP_IMAGE" \
@@ -87,10 +88,33 @@ jobs:
             -o "$PLAY_OPTIONS" \
             -e "$PLAY_EMAIL" \
             -t "$AAS_TOKEN" \
-            /output
+            /output 2>&1 | tee .work/apkeep.log
+          APKEEP_STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$APKEEP_STATUS" -ne 0 ]; then
+            echo "apkeep exited with status $APKEEP_STATUS" >&2
+            exit "$APKEEP_STATUS"
+          fi
 
           echo "Downloaded Google Play files:"
           find .work/google-play -type f -printf '%P\n' | sort
+
+          mapfile -d '' DOWNLOADED_APKS < <(find .work/google-play -type f -name '*.apk' -print0)
+          if [ "${#DOWNLOADED_APKS[@]}" -eq 0 ]; then
+            if grep -Fq "Invalid app response" .work/apkeep.log; then
+              echo "Google Play returned an invalid app response for $ANDROID_PACKAGE." >&2
+              echo "The PLAY_EMAIL account must already have access to this region-locked app." >&2
+              echo "Bind/install the app once with that Google account from a supported region, then retry." >&2
+            elif grep -Fq "Permission denied" .work/apkeep.log; then
+              echo "apkeep could not write the downloaded files to the mounted output directory." >&2
+            elif grep -Fq "Skipping" .work/apkeep.log; then
+              echo "apkeep skipped the Google Play download; inspect the apkeep output above for the reason." >&2
+            else
+              echo "apkeep exited successfully but produced no APK files." >&2
+            fi
+            exit 1
+          fi
 
       - name: Merge Google Play split APKs
         shell: bash

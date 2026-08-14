@@ -110,8 +110,8 @@ Google Play 다운로드 설정은 다음 값으로 고정합니다.
 
 ```text
 package: com.feimo.astralpartyjpn
-locale: jp
-timezone: UTC+9
+locale: ja_JP
+timezone: Asia/Tokyo
 split_apk: true
 include_additional_files: true
 ```
@@ -135,6 +135,8 @@ include_additional_files: true
 - `ANDROID_KEY_PASSWORD`
 
 `PLAY_EMAIL`과 `AAS_TOKEN`은 Google Play 다운로드 전용입니다. Android signing 관련 4개 secret은 우리가 배포하는 한국어 APK의 고정 signing identity입니다.
+
+Google Play 앱이 지역 제한되어 있으면 locale/timezone 설정만으로는 우회되지 않습니다. `PLAY_EMAIL` 계정이 해당 앱을 지원 지역에서 한 번 이상 취득해 계정에 연결된 상태여야 합니다. `apkeep`이 `Invalid app response`로 다운로드를 건너뛰면 workflow는 즉시 실패하며 이 조건을 안내합니다.
 
 workflow는 `output/android/AstralParty_INT_Korean.apk`를 만들고 결과를 `astral-party-int-android-korean-apk` Actions artifact로 업로드합니다. 같은 게임 패키지에 업데이트 설치하려면 이후 모든 한국어 APK 빌드에서 같은 signing key를 계속 사용해야 합니다.
 
