@@ -13,7 +13,8 @@ jobs:
       ANDROID_PACKAGE: com.feimo.astralpartyjpn
       APKEEP_IMAGE: ghcr.io/efforg/apkeep:stable
       PLAY_OPTIONS: locale=ja_JP,timezone=Asia/Tokyo,split_apk=1,include_additional_files=true
-      LSPATCH_URL: https://github.com/LSPosed/LSPatch/releases/download/v0.6/jar-v0.6-398-release.jar
+      LSPATCH_REPOSITORY: JingMatrix/LSPatch
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
 
@@ -33,10 +34,23 @@ jobs:
             --output .work/android-tools/APKEditor.jar \
             https://github.com/REAndroid/APKEditor/releases/download/V1.4.9/APKEditor-1.4.9.jar
           curl --fail --location --retry 3 \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            --output .work/android-tools/lspatch-release.json \
+            "https://api.github.com/repos/$LSPATCH_REPOSITORY/releases/latest"
+          LSPATCH_URL="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); a=[x for x in p.get("assets",[]) if str(x.get("name","")).lower().endswith(".jar")]; r=[x for x in a if "release" in str(x.get("name","")).lower()]; c=r or a; len(c)==1 or sys.exit("expected exactly one JingMatrix LSPatch jar asset; assets: "+", ".join(str(x.get("name")) for x in p.get("assets",[]))); print(c[0]["browser_download_url"])' .work/android-tools/lspatch-release.json)"
+          LSPATCH_TAG="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag_name"])' .work/android-tools/lspatch-release.json)"
+          echo "Using JingMatrix/LSPatch $LSPATCH_TAG"
+          curl --fail --location --retry 3 \
             --output .work/android-tools/lspatch.jar \
             "$LSPATCH_URL"
 
-          java -jar .work/android-tools/lspatch.jar --help || true
+          java -jar .work/android-tools/lspatch.jar --help | tee .work/android-tools/lspatch-help.txt || true
+          grep -Eq -- '(^|[[:space:]])(-l|--sigbypasslv)([=[:space:]]|$)' .work/android-tools/lspatch-help.txt || {
+            echo "JingMatrix LSPatch CLI does not expose the expected signature bypass option." >&2
+            cat .work/android-tools/lspatch-help.txt >&2
+            exit 1
+          }
 
       - name: Validate Google Play secrets
         shell: bash
@@ -111,7 +125,7 @@ jobs:
           if [ "${#APK_FILES[@]}" -eq 1 ]; then
             cp "${APK_FILES[0]}" .work/android-input/base-google-play.apk
           else
-            # Intentionally do not use -clean-meta here. LSPatch level 2 needs the
+            # Intentionally do not use -clean-meta here. LSPatch signature bypass needs the
             # original Play signing certificate from the input APK for spoofing.
             java -jar .work/android-tools/APKEditor.jar m \
               -i .work/google-play-apks \
@@ -133,14 +147,19 @@ jobs:
           set -euo pipefail
           mkdir -p .work/lspatch output/android
 
+          SIG_BYPASS_ARGS=(-l 2)
+          if grep -q -- '--sigbypasslv' .work/android-tools/lspatch-help.txt; then
+            SIG_BYPASS_ARGS=(--sigbypasslv 2)
+          fi
+
           java -jar .work/android-tools/lspatch.jar \
             -v \
             -f \
-            -l 2 \
+            "${SIG_BYPASS_ARGS[@]}" \
             -o .work/lspatch \
             .work/android-input/base-google-play.apk
 
-          mapfile -d '' PATCHED_APKS < <(find .work/lspatch -maxdepth 1 -type f -name '*-lspatched.apk' -print0)
+          mapfile -d '' PATCHED_APKS < <(find .work/lspatch -maxdepth 1 -type f -name '*.apk' -print0)
           if [ "${#PATCHED_APKS[@]}" -ne 1 ]; then
             echo "expected exactly one LSPatch output APK, found ${#PATCHED_APKS[@]}" >&2
             find .work/lspatch -maxdepth 1 -type f -printf '%f\n' >&2 || true
