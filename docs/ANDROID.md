@@ -145,3 +145,16 @@ workflow는 `output/android/AstralParty_INT_Korean.apk`를 만들고 결과를 `
 APK가 업데이트되면 `Build Android APK` workflow가 Google Play에서 새 APK/split APK를 다시 취득하고 병합한 뒤 한국어 APK를 빌드합니다. 이때 legacy TTF와 runtime을 새 APK에 다시 삽입합니다.
 
 APK 업데이트가 없고 Addressables만 바뀌면 APK를 다시 빌드할 필요가 없습니다. Builder가 새 INT_ANDROID revision/catalog용 patch release를 만들고, 이미 설치된 한국어 APK의 runtime이 새 catalog를 감지해 다음 실행에 새 Addressables 패치를 적용합니다.
+
+## LSPatch signature bypass 진단
+
+Google Play에서 설치하지 않은 재서명 APK가 실행 직후 Play Store로 이동하는 경우, 최종 한국어 APK 구조를 변경하기 전에 `.github/workflows/test-android-signature-bypass.yml`의 `Test Android Signature Bypass` workflow로 서명 검사만 분리해 확인합니다.
+
+이 workflow는 번역, legacy TTF 교체, `AstralPatchRuntime` 주입을 하지 않습니다. Google Play에서 현재 APK/split APK를 받고, split APK가 있으면 APKEditor로 standalone APK를 만들되 `-clean-meta`를 사용하지 않아 원본 Play signature metadata를 보존합니다. 그 다음 LSPatch 0.6 integrated mode에서 `--sigbypasslv 2`만 적용합니다. 진단 APK는 LSPatch 자체 keystore로 재서명되며 결과 artifact 이름은 `astral-party-int-lspatch-test`입니다.
+
+진단 목적은 다음 두 경우를 구분하는 것입니다.
+
+- 진단 APK가 정상 실행됨: 로컬 signature/package-manager 계층의 검사를 LSPatch 방식으로 처리할 수 있으므로 최종 APK Builder에 동일 계층을 통합할 가치가 있습니다.
+- 진단 APK도 동일하게 Google Play 이동: 현재 LSPatch signature bypass만으로는 해당 검사를 처리할 수 없으므로 최종 APK Builder에 바로 통합하지 않습니다.
+
+진단 APK는 공식판 및 기존 한국어 APK와 서명이 다릅니다. 같은 package를 설치하려면 기존 `com.feimo.astralpartyjpn`을 먼저 제거해야 하며 앱 데이터가 삭제될 수 있습니다. 진단이 끝난 뒤 결과에 따라 최종 signing/update 전략을 결정합니다.
