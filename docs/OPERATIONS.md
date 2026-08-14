@@ -1,6 +1,6 @@
 # 운영 설정 및 배포 절차
 
-이 문서는 Astral Party 한국어 패치의 INT_STEAM, CN_STEAM, INT_ANDROID 자동화와 AstralAutoPatcher/Android 내장 패처 운영 절차를 정리합니다.
+이 문서는 Astral Party 한국어 패치의 INT_STEAM, CN_STEAM, INT_ANDROID 자동화와 AstralAutoPatcher/Android APK 운영 절차를 정리합니다.
 
 ## 1. GitHub 저장소 설정
 
@@ -150,9 +150,9 @@ Actions artifact에는 `AstralAutoPatcher.exe`만 포함합니다. `publish=true
 
 같은 폴더에 `settings.json`과 route별 installed/staging/backup 상태를 관리합니다. 최초 실행에서는 Steam 설치 구조를 기준으로 route를 감지합니다. CN_STEAM만 설치되어 있으면 CN_STEAM을 자동 선택하고, INT_STEAM과 CN_STEAM이 모두 설치되어 있으면 기존 선택을 유지합니다. 새 설정의 기본 선택은 INT_STEAM입니다. 선택된 route의 LocalLow는 각각 `AstralParty_INT`, `AstralParty_CN`에서 감지합니다. Steam의 공통 저장 루트는 동일할 수 있지만 UI에는 실제 route 실행 디렉터리인 `8vJXnINT` 또는 `8vJXn6CN`까지 표시합니다.
 
-Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 0.4.1부터 설치 대상 patch version/asset 목록과 다운로드·적용 진행률을 표시합니다. 0.5.0부터 사용자 channel 선택을 제거하고 항상 `release` channel의 현재 게임 version/catalog에 맞는 최신 entry만 설치합니다. 0.6.0부터 시작 시 `patcher-index.json`을 확인해 더 높은 semantic version이 있으면 새 EXE를 다운로드하고 size/SHA-256을 검증한 뒤 자기 자신을 교체하고 원래 실행 인수를 유지해 재실행합니다. 0.7.0부터 INT_STEAM/CN_STEAM route별 설정과 설치 상태를 분리하고 settings schema v3를 사용합니다. 기존 schema v1/v2 경로는 INT_STEAM 설정으로 자동 이관됩니다. 업데이트 확인이나 다운로드가 실패하면 현재 버전 실행을 차단하지 않습니다.
+Patcher 0.4.0부터 Ratatui/Crossterm 기반 고정 화면 TUI를 사용하고, 0.4.1부터 설치 대상 patch version/asset 목록과 다운로드·적용 진행률을 표시합니다. 0.5.0부터 사용자 channel 선택을 제거하고 항상 `release` channel의 현재 게임 version/catalog에 맞는 최신 entry만 설치합니다. 0.6.0부터 시작 시 `patcher-index.json`을 확인해 더 높은 semantic version이 있으면 새 EXE를 다운로드하고 size/SHA-256을 검증한 뒤 자기 자신을 교체하고 원래 실행 인수를 유지해 재실행합니다. 0.7.0부터 INT_STEAM/CN_STEAM route별 설정과 설치 상태를 분리하고 settings schema v3를 사용합니다. 0.8.0부터 Android USB/앱플레이어 탐색, Google Platform-Tools 자동 준비, Android APK verified download, `com.android.vending` installer 설치/검증을 같은 EXE에서 처리합니다. 기존 schema v1/v2 경로는 INT_STEAM 설정으로 자동 이관됩니다. 업데이트 확인이나 다운로드가 실패하면 현재 버전 실행을 차단하지 않습니다.
 
-상태 영역에는 Patcher 경로, Steam/LocalLow 경로, 게임 버전, Catalog hash, 설치된 패치 버전을 표시합니다.
+상태 영역에는 Android 연결/installer 상태와 기존 Steam route, Steam/LocalLow 경로, 게임 버전, Catalog hash, 설치된 Steam 패치 버전을 함께 표시합니다.
 
 자동 업데이트용 `patcher-index`는 사용자용 버전 Release와 분리된 고정 prerelease입니다. 이 Release에는 `patcher-index.json` 하나만 mutable asset으로 유지합니다. 버전별 `patcher-v<version>` Release는 immutable이며 `AstralAutoPatcher.exe` 하나만 포함합니다. `Build Patcher`를 `publish=true`로 실행하면 버전 Release 공개가 성공한 뒤 마지막 단계에서 `patcher-index.json`을 갱신하므로, index가 아직 존재하지 않는 EXE를 가리키는 상태가 생기지 않습니다.
 
@@ -173,15 +173,19 @@ astral://settings/CN_STEAM
 
 route가 없는 기존 URI는 현재 선택된 route를 사용합니다. route가 포함된 install/remove URI는 설정의 기본 route를 바꾸지 않고 해당 작업에만 지정 route를 사용합니다. `settings/<route>`는 지정 route의 설정 화면을 엽니다. query/fragment나 알 수 없는 route는 허용하지 않습니다.
 
-## 8. INT_ANDROID 한국어 APK
+## 8. INT_ANDROID 한국어 APK + AutoPatcher
 
 Route revision은 서로 독립적으로 추적합니다. `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 revision 번호가 서로 달라도 정상이며, `canonicalFallbackRoute`는 같은 `game_version`에서 가장 최근에 처리된 fallback route revision의 원문을 보충용으로 사용합니다. fallback 대상 route와 현재 route의 revision 번호가 같을 필요는 없습니다.
 
-INT_ANDROID는 Windows AstralAutoPatcher나 ADB를 사용하지 않습니다. `Build Android APK` workflow가 `apkeep`으로 Google Play의 현재 APK/split APK를 취득하고 APKEditor로 standalone APK를 만든 뒤, APK 내부 `MochiyPopOne-Regular` TTF를 교체하고 `AstralPatchRuntime`을 주입해 장기간 유지할 동일 signing key로 재서명합니다. `tools/android/build_game_apk.py`는 이미 병합된 standalone APK를 입력으로 받습니다.
+`Build Android APK` workflow는 Google Play 원본 split APK를 취득한 뒤 원본 Play signature metadata를 보존해 standalone으로 병합하고, JingMatrix/LSPatch v0.8 signature bypass level 2를 먼저 적용합니다. 그 다음 `MochiyPopOne-Regular` legacy font와 `AstralPatchRuntime`을 삽입하고 같은 장기 signing key로 최종 서명합니다.
 
-Addressables 패치는 APK 내부 `BootstrapActivity`가 자기 app-specific storage의 `com.unity.addressables`를 직접 처리합니다. 최초 설치 또는 새 인게임 리소스가 아직 내려받아지는 중이면 Unity 게임을 먼저 실행합니다. 게임 실행 중 `UpdateWatcher`는 새 catalog와 원본 bundle 준비 상태를 관찰하되 파일을 수정하지 않습니다. manifest의 모든 `sourceSize`/`sourceSha256`이 일치하면 재실행 안내를 표시하고, 다음 실행에서 Unity 시작 전에 LANG/STR/TMP bundle을 검증/백업/교체합니다.
+운영 배포 시 `publish=true`로 실행하면 immutable Android APK Release를 만든 뒤 `android-apk-index/android-apk-index.json`을 갱신합니다. 이 index가 공개된 뒤 `Build Patcher`를 `publish=true`로 실행해 Android endpoint가 내장된 `AstralAutoPatcher.exe` 0.8.x 이상을 배포합니다.
 
-APK 자체가 업데이트되지 않고 Addressables catalog만 바뀌는 경우에는 새 한국어 APK가 필요하지 않습니다. 새 INT_ANDROID patch release만 생성하면 기존 APK의 내장 런타임이 새 catalog용 패치를 적용합니다. 상세 구조와 빌드 방법은 `docs/ANDROID.md`를 참조합니다.
+AutoPatcher는 Google Platform-Tools를 `%LOCALAPPDATA%\AstralAutoPatcher\tools` 아래에 자동 준비합니다. 실제 Android 기기는 USB 디버깅과 최초 RSA 승인만 사용자가 직접 수행하고, MuMu/BlueStacks/LDPlayer는 실행 중인 ADB endpoint를 자동 탐색합니다. APK는 size/SHA-256 검증 후 `installerPackageName=com.android.vending`으로 설치하며 설치 후 version과 installer를 다시 확인합니다.
+
+Google Play 공식판에서 처음 한국어판으로 전환할 때는 signature가 다르므로 기존 앱 제거가 필요합니다. AutoPatcher는 먼저 update install을 시도하고 signature mismatch가 확인된 경우에만 앱 데이터 삭제 가능성을 경고해 사용자의 명시적 확인을 받은 뒤 제거/재설치합니다. 같은 장기 signing key로 만든 이후 한국어판 update는 `-r` update 설치로 처리합니다.
+
+Addressables 패치는 APK 내부 `BootstrapActivity`가 자기 app-specific storage의 `com.unity.addressables`를 직접 처리합니다. APK 자체가 업데이트되지 않고 Addressables catalog만 바뀌는 경우에는 새 한국어 APK가 필요하지 않습니다. 새 INT_ANDROID patch release만 생성하면 기존 APK의 내장 런타임이 새 catalog용 패치를 적용합니다. 상세 구조는 `docs/ANDROID.md`를 참조합니다.
 
 ## 9. 게임 버전 상승
 
@@ -222,7 +226,9 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 4. `Check Game`을 한 번 수동 실행해 migration과 revision check 확인.
 5. 현재 revision에 새 `-pre`가 필요한데 이미 revision이 processed 상태라면 번역 상태를 확인한 뒤 `Release Patch` 버튼으로 현재 revision의 정식 release를 생성.
 6. `patch-index/release-index.json`에 `channel=release` entry가 생성됐는지 확인.
-7. `Build Patcher`로 `AstralAutoPatcher.exe`를 만들고 Steam install/update/remove 및 `astral://` URI를 실게임에서 검증.
-8. `Build Android APK`가 Google Play에서 현재 APK를 자동 취득·병합·패치하는지 확인하고, 동일 signing key 유지 및 최초/인게임 Addressables 다운로드 후 재실행 패치를 실기기에서 검증.
-9. 이후 게임 revision 변경은 GCP Scheduler -> `Check Game` -> `-pre` 자동 생성으로 운영.
-10. 번역 완료 시에만 `Release Patch` 버튼으로 정식 `-release`를 생성.
+7. `Build Android APK`를 먼저 `publish=true`로 실행해 Google Play 취득 -> LSPatch -> 한국어 APK build -> immutable APK Release -> `android-apk-index.json` 갱신까지 확인.
+8. `Build Patcher`를 `publish=true`로 실행해 `AstralAutoPatcher.exe`를 배포하고 Android 실제 기기 USB 설치, MuMu 자동 탐색, `installerPackageName=com.android.vending` 검증, Steam install/update/remove 및 `astral://` URI를 확인.
+9. Android 공식판 -> 한국어판 최초 전환에서는 데이터 삭제 경고가 표시되는지, 이후 한국어판 update에서는 제거 없이 update되는지 실기기에서 확인.
+10. 최초 인게임 Addressables 다운로드 및 catalog update 후 재실행 patch를 검증.
+11. 이후 게임 revision 변경은 GCP Scheduler -> `Check Game` -> `-pre` 자동 생성으로 운영.
+12. 번역 완료 시에만 `Release Patch` 버튼으로 정식 `-release`를 생성.

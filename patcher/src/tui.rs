@@ -16,6 +16,9 @@ use ratatui::widgets::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::android::{
+    AndroidInstallOutcome, AndroidProgress, AndroidService, PLAY_INSTALLER_PACKAGE,
+};
 use crate::game::GameRoute;
 use crate::install::ApplyPhase;
 use crate::service::{
@@ -28,8 +31,22 @@ use crate::uri::{UriAction, UriRequest};
 
 const MIN_WIDTH: u16 = 72;
 const MIN_HEIGHT: u16 = 27;
-const MAIN_ITEMS: [&str; 4] = ["패치 설치 / 업데이트", "패치 제거", "프로그램 설정", "종료"];
+const MAIN_ITEMS: [&str; 5] = [
+    "Android 패치 / 업데이트",
+    "PC(Steam) 패치 설치 / 업데이트",
+    "PC(Steam) 패치 제거",
+    "PC(Steam) 설정",
+    "종료",
+];
 const RESULT_ITEMS: [&str; 2] = ["메인 메뉴", "종료"];
+const REINSTALL_ITEMS: [&str; 2] = ["기존 앱 제거 후 계속", "취소하고 메인 메뉴"];
+
+#[derive(Debug, Clone, Copy)]
+pub struct RemoteEndpoints {
+    pub patch_release_index: &'static str,
+    pub android_apk_index: &'static str,
+    pub android_release_base: &'static str,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Screen {
@@ -47,15 +64,17 @@ enum PathKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationKind {
-    Install,
-    Remove,
+    AndroidInstall,
+    SteamInstall,
+    SteamRemove,
 }
 
 impl OperationKind {
     fn title(self) -> &'static str {
         match self {
-            Self::Install => "패치 설치 / 업데이트",
-            Self::Remove => "패치 제거",
+            Self::AndroidInstall => "Android 패치 / 업데이트",
+            Self::SteamInstall => "PC(Steam) 패치 설치 / 업데이트",
+            Self::SteamRemove => "PC(Steam) 패치 제거",
         }
     }
 }
@@ -64,6 +83,7 @@ impl OperationKind {
 enum OperationPhase {
     Pending,
     Running,
+    NeedsReinstall { message: String },
     Finished { success: bool, message: String },
 }
 
@@ -72,6 +92,7 @@ struct OperationState {
     kind: OperationKind,
     route: GameRoute,
     protocol_request: bool,
+    force_reinstall: bool,
     phase: OperationPhase,
 }
 
@@ -100,11 +121,31 @@ impl Default for InstallUiProgress {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AndroidUiProgress {
+    device: Option<String>,
+    status: String,
+    current: u64,
+    total: u64,
+}
+
+impl Default for AndroidUiProgress {
+    fn default() -> Self {
+        Self {
+            device: None,
+            status: "기기를 확인할 준비가 되었습니다.".into(),
+            current: 0,
+            total: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitTarget {
     Main(usize),
     Settings(usize),
     Result(usize),
+    Reinstall(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +159,7 @@ struct App {
     paths: PatcherPaths,
     settings: AppSettings,
     installed_exe: PathBuf,
-    release_index_url: &'static str,
+    endpoints: RemoteEndpoints,
     screen: Screen,
     main_selected: usize,
     settings_selected: usize,
@@ -126,6 +167,7 @@ struct App {
     input: String,
     operation: Option<OperationState>,
     install_progress: InstallUiProgress,
+    android_progress: AndroidUiProgress,
     notice: Option<String>,
     hit_regions: Vec<HitRegion>,
     should_quit: bool,
@@ -138,13 +180,13 @@ impl App {
         installed_exe: PathBuf,
         initial_request: UriRequest,
         startup_notice: Option<String>,
-        release_index_url: &'static str,
+        endpoints: RemoteEndpoints,
     ) -> Self {
         let mut app = Self {
             paths,
             settings,
             installed_exe,
-            release_index_url,
+            endpoints,
             screen: Screen::Main,
             main_selected: 0,
             settings_selected: 0,
@@ -152,6 +194,7 @@ impl App {
             input: String::new(),
             operation: None,
             install_progress: InstallUiProgress::default(),
+            android_progress: AndroidUiProgress::default(),
             notice: startup_notice,
             hit_regions: Vec::new(),
             should_quit: false,
@@ -162,10 +205,10 @@ impl App {
         match initial_request.action {
             UriAction::Menu => {}
             UriAction::Install => {
-                app.start_operation(OperationKind::Install, true, initial_request.route)
+                app.start_operation(OperationKind::SteamInstall, true, initial_request.route)
             }
             UriAction::Remove => {
-                app.start_operation(OperationKind::Remove, true, initial_request.route)
+                app.start_operation(OperationKind::SteamRemove, true, initial_request.route)
             }
             UriAction::Settings => {
                 if let Some(route) = initial_request.route {
@@ -184,13 +227,16 @@ impl App {
         protocol_request: bool,
         route_override: Option<GameRoute>,
     ) {
-        if kind == OperationKind::Install {
-            self.install_progress = InstallUiProgress::default();
+        match kind {
+            OperationKind::AndroidInstall => self.android_progress = AndroidUiProgress::default(),
+            OperationKind::SteamInstall => self.install_progress = InstallUiProgress::default(),
+            OperationKind::SteamRemove => {}
         }
         self.operation = Some(OperationState {
             kind,
             route: route_override.unwrap_or_else(|| self.settings.selected_route()),
             protocol_request,
+            force_reinstall: false,
             phase: OperationPhase::Pending,
         });
         self.result_selected = 0;
@@ -278,6 +324,42 @@ impl App {
                 };
                 self.install_progress.status =
                     format!("{action} 중 ({file_index}/{file_count}): {path}");
+            }
+        }
+    }
+
+    fn update_android_progress(&mut self, event: AndroidProgress) {
+        match event {
+            AndroidProgress::PreparingAdb => {
+                self.android_progress.status = "Android 연결 도구를 준비하는 중입니다...".into();
+            }
+            AndroidProgress::DiscoveringDevices => {
+                self.android_progress.status =
+                    "USB 기기와 앱플레이어를 자동으로 찾는 중입니다...".into();
+            }
+            AndroidProgress::DeviceSelected { name } => {
+                self.android_progress.device = Some(name);
+                self.android_progress.status = "패치할 기기를 확인했습니다.".into();
+            }
+            AndroidProgress::ResolvingApk => {
+                self.android_progress.status =
+                    "최신 Android 패치 APK를 확인하는 중입니다...".into();
+            }
+            AndroidProgress::DownloadingApk { current, total } => {
+                self.android_progress.current = current;
+                self.android_progress.total = total;
+                self.android_progress.status = "Android 패치 APK를 다운로드하는 중입니다...".into();
+            }
+            AndroidProgress::Installing => {
+                self.android_progress.status =
+                    "Google Play installer 정보로 APK를 설치하는 중입니다...".into();
+            }
+            AndroidProgress::RemovingOfficialInstall => {
+                self.android_progress.status = "기존 공식판을 제거하는 중입니다...".into();
+            }
+            AndroidProgress::Verifying => {
+                self.android_progress.status =
+                    "설치 결과와 installer를 검증하는 중입니다...".into();
             }
         }
     }
@@ -387,13 +469,14 @@ impl App {
 
     fn activate_main(&mut self) {
         match self.main_selected {
-            0 => self.start_operation(OperationKind::Install, false, None),
-            1 => self.start_operation(OperationKind::Remove, false, None),
-            2 => {
+            0 => self.start_operation(OperationKind::AndroidInstall, false, None),
+            1 => self.start_operation(OperationKind::SteamInstall, false, None),
+            2 => self.start_operation(OperationKind::SteamRemove, false, None),
+            3 => {
                 self.screen = Screen::Settings;
                 self.notice = None;
             }
-            3 => self.should_quit = true,
+            4 => self.should_quit = true,
             _ => {}
         }
     }
@@ -420,6 +503,23 @@ impl App {
                 self.notice = None;
             }
             1 => self.should_quit = true,
+            _ => {}
+        }
+    }
+
+    fn activate_reinstall_result(&mut self) {
+        match self.result_selected {
+            0 => {
+                if let Some(operation) = &mut self.operation {
+                    operation.force_reinstall = true;
+                    operation.phase = OperationPhase::Pending;
+                }
+            }
+            1 => {
+                self.operation = None;
+                self.screen = Screen::Main;
+                self.notice = None;
+            }
             _ => {}
         }
     }
@@ -480,24 +580,40 @@ impl App {
     }
 
     fn handle_operation_key(&mut self, code: KeyCode) {
-        let finished = self
+        let phase = self
             .operation
             .as_ref()
-            .is_some_and(|operation| matches!(&operation.phase, OperationPhase::Finished { .. }));
-        if !finished {
-            return;
-        }
-        match code {
-            KeyCode::Up => {
-                self.result_selected = previous(self.result_selected, RESULT_ITEMS.len())
-            }
-            KeyCode::Down => self.result_selected = next(self.result_selected, RESULT_ITEMS.len()),
-            KeyCode::Enter => self.activate_result(),
-            KeyCode::Esc => {
-                self.operation = None;
-                self.screen = Screen::Main;
-            }
-            KeyCode::Char('q') => self.should_quit = true,
+            .map(|operation| operation.phase.clone());
+        match phase {
+            Some(OperationPhase::NeedsReinstall { .. }) => match code {
+                KeyCode::Up => {
+                    self.result_selected = previous(self.result_selected, REINSTALL_ITEMS.len())
+                }
+                KeyCode::Down => {
+                    self.result_selected = next(self.result_selected, REINSTALL_ITEMS.len())
+                }
+                KeyCode::Enter => self.activate_reinstall_result(),
+                KeyCode::Esc => {
+                    self.operation = None;
+                    self.screen = Screen::Main;
+                }
+                _ => {}
+            },
+            Some(OperationPhase::Finished { .. }) => match code {
+                KeyCode::Up => {
+                    self.result_selected = previous(self.result_selected, RESULT_ITEMS.len())
+                }
+                KeyCode::Down => {
+                    self.result_selected = next(self.result_selected, RESULT_ITEMS.len())
+                }
+                KeyCode::Enter => self.activate_result(),
+                KeyCode::Esc => {
+                    self.operation = None;
+                    self.screen = Screen::Main;
+                }
+                KeyCode::Char('q') => self.should_quit = true,
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -522,6 +638,10 @@ impl App {
                     Some(HitTarget::Result(index)) => {
                         self.result_selected = index;
                         self.activate_result();
+                    }
+                    Some(HitTarget::Reinstall(index)) => {
+                        self.result_selected = index;
+                        self.activate_reinstall_result();
                     }
                     None => {}
                 }
@@ -582,7 +702,7 @@ pub fn run(
     installed_exe: PathBuf,
     initial_request: UriRequest,
     startup_notice: Option<String>,
-    release_index_url: &'static str,
+    endpoints: RemoteEndpoints,
 ) -> io::Result<()> {
     ratatui::run(|terminal| {
         let _extras = TerminalExtras::enable()?;
@@ -592,7 +712,7 @@ pub fn run(
             installed_exe,
             initial_request,
             startup_notice,
-            release_index_url,
+            endpoints,
         );
         run_loop(terminal, &mut app)
     })
@@ -613,16 +733,57 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
 }
 
 fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
-    let Some((kind, route)) = app
+    let Some((kind, route, force_reinstall)) = app
         .operation
         .as_ref()
-        .map(|state| (state.kind, state.route))
+        .map(|state| (state.kind, state.route, state.force_reinstall))
     else {
         return;
     };
+
+    if kind == OperationKind::AndroidInstall {
+        let result = perform_android_install(terminal, app, force_reinstall);
+        let phase = match result {
+            Ok(AndroidInstallOutcome::Installed {
+                device,
+                game_version,
+            }) => OperationPhase::Finished {
+                success: true,
+                message: format!(
+                    "{}에 Astral Party Android 한국어판 {} 설치를 완료했습니다. installer={} 검증도 통과했습니다.",
+                    device.display_name(),
+                    game_version,
+                    PLAY_INSTALLER_PACKAGE
+                ),
+            },
+            Ok(AndroidInstallOutcome::NeedsReinstall {
+                device,
+                game_version,
+            }) => {
+                app.result_selected = 0;
+                OperationPhase::NeedsReinstall {
+                    message: format!(
+                        "{}에 Google Play 공식판 또는 다른 서명의 APK가 설치되어 있습니다. 한국어판 {}은 다른 서명을 사용하므로 최초 1회 기존 앱을 제거해야 합니다. 제거하면 앱 로컬 데이터가 삭제될 수 있습니다. 게임 계정 연동을 확인한 뒤 계속하세요.",
+                        device.display_name(),
+                        game_version
+                    ),
+                }
+            }
+            Err(message) => OperationPhase::Finished {
+                success: false,
+                message,
+            },
+        };
+        if let Some(operation) = &mut app.operation {
+            operation.phase = phase;
+        }
+        return;
+    }
+
     let result = match kind {
-        OperationKind::Install => perform_install(terminal, app, route),
-        OperationKind::Remove => app.perform_remove(route),
+        OperationKind::SteamInstall => perform_install(terminal, app, route),
+        OperationKind::SteamRemove => app.perform_remove(route),
+        OperationKind::AndroidInstall => unreachable!(),
     };
     if let Some(operation) = &mut app.operation {
         operation.phase = match result {
@@ -638,6 +799,29 @@ fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
     }
 }
 
+fn perform_android_install(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    force_reinstall: bool,
+) -> Result<AndroidInstallOutcome, String> {
+    let service = AndroidService::new(
+        app.paths.state_root.clone(),
+        app.endpoints.android_apk_index,
+        app.endpoints.android_release_base,
+    );
+    let mut last_draw = Instant::now();
+    service
+        .install_latest_with_progress(force_reinstall, |event| {
+            let immediate = !matches!(event, AndroidProgress::DownloadingApk { .. });
+            app.update_android_progress(event);
+            if immediate || last_draw.elapsed() >= Duration::from_millis(50) {
+                let _ = terminal.draw(|frame| render(frame, app));
+                last_draw = Instant::now();
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
 fn perform_install(
     terminal: &mut DefaultTerminal,
     app: &mut App,
@@ -645,7 +829,7 @@ fn perform_install(
 ) -> Result<String, String> {
     let paths = app.paths.clone();
     let settings = app.settings.clone();
-    let release_index_url = app.release_index_url;
+    let release_index_url = app.endpoints.patch_release_index;
     let game = settings
         .installation_for(route)
         .map_err(|error| error.to_string())?;
@@ -719,7 +903,7 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(9),
+            Constraint::Length(11),
             Constraint::Min(9),
             Constraint::Length(3),
         ])
@@ -746,14 +930,21 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Ok(None) => "미설치".into(),
         Err(error) => format!("상태 확인 실패 ({error})"),
     };
+    let android_device = app
+        .android_progress
+        .device
+        .clone()
+        .unwrap_or_else(|| "USB / MuMu / BlueStacks / LDPlayer 자동 감지".into());
     let rows = [
         status_row("Patcher 경로", app.installed_exe.display().to_string()),
-        status_row("게임 route", route.as_str().to_string()),
+        status_row("Android 기기", android_device),
+        status_row("Android 상태", app.android_progress.status.clone()),
+        status_row("Android installer", PLAY_INSTALLER_PACKAGE.into()),
+        status_row("Steam route", route.as_str().to_string()),
         status_row("Steam 실행 경로", display_steam_route_path(&app.settings)),
         status_row("LocalLow 경로", display_path(app.settings.locallow_root())),
-        status_row("게임 버전", game_version),
-        status_row("Catalog", catalog),
-        status_row("설치된 패치", installed),
+        status_row("Steam 게임", format!("{game_version} · catalog {catalog}")),
+        status_row("Steam 패치", installed),
     ];
     let title = format!(" AstralAutoPatcher v{} ", env!("CARGO_PKG_VERSION"));
     let table = Table::new(
@@ -872,25 +1063,23 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let pending = matches!(&operation.phase, OperationPhase::Pending);
     match operation.phase {
         OperationPhase::Pending | OperationPhase::Running => {
-            if operation.kind == OperationKind::Install {
-                render_install_running(frame, app, area, &operation, pending);
-                return;
+            match operation.kind {
+                OperationKind::AndroidInstall => {
+                    render_android_running(frame, app, area, pending);
+                    return;
+                }
+                OperationKind::SteamInstall => {
+                    render_install_running(frame, app, area, &operation, pending);
+                    return;
+                }
+                OperationKind::SteamRemove => {}
             }
-            let request = if operation.protocol_request {
-                "웹사이트 프로토콜 요청"
-            } else {
-                "프로그램 메뉴 요청"
-            };
             let status = if pending {
                 "현재 상태 정보를 표시했습니다. 작업을 시작합니다..."
             } else {
-                "설치 기록을 검증하고 패치를 제거하는 중입니다..."
+                "설치 기록을 검증하고 PC 패치를 제거하는 중입니다..."
             };
             let text = Text::from(vec![
-                Line::from(vec![
-                    Span::styled("요청: ", Style::default().add_modifier(Modifier::BOLD)),
-                    Span::raw(request),
-                ]),
                 Line::from(vec![
                     Span::styled(
                         "대상 route: ",
@@ -908,6 +1097,47 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     .block(Block::default().borders(Borders::ALL).title(title))
                     .wrap(Wrap { trim: false }),
                 area,
+            );
+        }
+        OperationPhase::NeedsReinstall { message } => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(8), Constraint::Length(4)])
+                .split(area);
+            let text = Text::from(vec![
+                Line::from(Span::styled(
+                    "최초 설치 확인 필요",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(message),
+                Line::from(""),
+                Line::from("계속하면 기존 Astral Party 앱을 제거한 뒤 한국어판을 설치합니다."),
+            ]);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::default().borders(Borders::ALL).title(title))
+                    .wrap(Wrap { trim: false }),
+                chunks[0],
+            );
+            let result_block = Block::default().borders(Borders::ALL).title(" 선택 ");
+            let inner = result_block.inner(chunks[1]);
+            let list = List::new(REINSTALL_ITEMS.map(ListItem::new))
+                .block(result_block)
+                .highlight_symbol("▶ ")
+                .highlight_style(
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                );
+            let mut state = ListState::default();
+            state.select(Some(app.result_selected));
+            frame.render_stateful_widget(list, chunks[1], &mut state);
+            add_list_hits(
+                &mut app.hit_regions,
+                inner,
+                REINSTALL_ITEMS.len(),
+                HitTarget::Reinstall,
             );
         }
         OperationPhase::Finished { success, message } => {
@@ -951,6 +1181,72 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             );
         }
     }
+}
+
+fn render_android_running(frame: &mut Frame<'_>, app: &App, area: Rect, pending: bool) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(3)])
+        .split(area);
+    let device = app
+        .android_progress
+        .device
+        .as_deref()
+        .unwrap_or("자동 감지 중");
+    let status = if pending {
+        "Android 자동 패치를 시작합니다..."
+    } else {
+        app.android_progress.status.as_str()
+    };
+    let text = Text::from(vec![
+        Line::from(vec![
+            Span::styled("기기: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(device),
+        ]),
+        Line::from(vec![
+            Span::styled("설치 방식: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format!(
+                "ADB 자동 관리 · installer={PLAY_INSTALLER_PACKAGE}"
+            )),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(status, Style::default().fg(Color::Yellow))),
+        Line::from(""),
+        Line::from("실제 기기: USB 디버깅과 최초 RSA 승인만 필요합니다."),
+        Line::from("앱플레이어: 실행 중인 MuMu/BlueStacks/LDPlayer를 자동 탐색합니다."),
+    ]);
+    frame.render_widget(
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Android 원클릭 패치 "),
+            )
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+
+    let ratio = if app.android_progress.total == 0 {
+        0.0
+    } else {
+        (app.android_progress.current as f64 / app.android_progress.total as f64).clamp(0.0, 1.0)
+    };
+    let label = if app.android_progress.total == 0 {
+        "APK 준비".to_string()
+    } else {
+        format!(
+            "APK {} / {}",
+            format_bytes(app.android_progress.current),
+            format_bytes(app.android_progress.total)
+        )
+    };
+    frame.render_widget(
+        Gauge::default()
+            .block(Block::default().borders(Borders::ALL).title(" 다운로드 "))
+            .ratio(ratio)
+            .label(label),
+        chunks[1],
+    );
 }
 
 fn render_install_running(
@@ -1223,7 +1519,11 @@ mod tests {
             temp.path().join("AstralAutoPatcher.exe"),
             request,
             None,
-            "https://example.test/release-index.json",
+            RemoteEndpoints {
+                patch_release_index: "https://example.test/release-index.json",
+                android_apk_index: "https://example.test/android-apk-index.json",
+                android_release_base: "https://example.test/releases/download",
+            },
         )
     }
 
@@ -1260,6 +1560,31 @@ mod tests {
         });
         assert_eq!(app.screen, Screen::Settings);
         assert_eq!(app.settings.selected_route(), GameRoute::CnSteam);
+    }
+
+    #[test]
+    fn android_is_the_primary_main_menu_action() {
+        let mut app = app(UriAction::Menu);
+        app.main_selected = 0;
+        app.activate_main();
+        let operation = app.operation.as_ref().unwrap();
+        assert_eq!(operation.kind, OperationKind::AndroidInstall);
+        assert!(!operation.force_reinstall);
+        assert_eq!(app.screen, Screen::Operation);
+    }
+
+    #[test]
+    fn reinstall_confirmation_requeues_android_operation() {
+        let mut app = app(UriAction::Menu);
+        app.start_operation(OperationKind::AndroidInstall, false, None);
+        app.operation.as_mut().unwrap().phase = OperationPhase::NeedsReinstall {
+            message: "confirm".into(),
+        };
+        app.result_selected = 0;
+        app.activate_reinstall_result();
+        let operation = app.operation.as_ref().unwrap();
+        assert!(operation.force_reinstall);
+        assert!(matches!(operation.phase, OperationPhase::Pending));
     }
 
     #[test]

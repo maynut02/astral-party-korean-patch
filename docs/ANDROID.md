@@ -1,31 +1,50 @@
-# INT_ANDROID 한국어 APK 및 내장 패처
+# INT_ANDROID 한국어 APK 및 AutoPatcher
 
-INT_ANDROID는 Windows AstralAutoPatcher/ADB를 사용하지 않습니다. Android 게임 APK 자체에 한국어 legacy TTF와 `AstralPatchRuntime`을 넣고, 같은 signing key로 계속 재서명해 배포합니다. Addressables 번역/TMP 폰트는 기존 `release-index.json` + patch manifest를 사용해 게임 APK 내부 런타임이 자기 app-specific storage에서 직접 적용합니다.
+INT_ANDROID는 Google Play에서 받은 Astral Party APK를 기반으로 한국어 legacy font와 `AstralPatchRuntime`을 삽입한 APK를 배포합니다. 실제 설치는 `AstralAutoPatcher.exe`가 담당합니다. 사용자는 ADB를 직접 설치하거나 명령을 입력할 필요가 없습니다.
 
-## 구성
+실제 기기에서는 최초 1회 Android 개발자 옵션의 USB 디버깅을 켜고 PC의 RSA 디버깅 승인을 허용해야 합니다. 이후에는 기기를 연결하고 AutoPatcher에서 `Android 패치 / 업데이트`를 선택하면 됩니다. MuMu/BlueStacks/LDPlayer는 실행 중인 인스턴스를 자동 탐색합니다.
+
+## 최종 구조
 
 ```text
 Google Play APK / split APKs
   -> apkeep로 취득
-  -> APKEditor로 standalone APK 병합
+  -> APKEditor standalone 병합 (원본 Play signature metadata 보존)
+  -> JingMatrix/LSPatch v0.8 sigbypass level 2
+       - Google Play 원본 signature를 config에 캡처
+       - 장기 Android signing key로 서명
   -> assets/bin/Data/data.unity3d의 MochiyPopOne-Regular 교체
   -> com.astralpatch.runtime.BootstrapActivity 주입
   -> AstralPatchRuntime DEX 추가
-  -> 고정 signing key로 재서명
-  -> 한국어 게임 APK
-
-INT_ANDROID patch release
-  -> Japanese LANG bundle
-  -> GameData_INT / STR bundle
-  -> MochiyPopOne-Regular_TMP bundle
-  -> manifest.json (sourceSha256/sourceSize 포함)
+  -> 같은 장기 signing key로 최종 서명
+  -> AstralParty_INT_Korean.apk
+  -> GitHub immutable release
+  -> android-apk-index.json 갱신
+  -> AstralAutoPatcher가 SHA-256 검증 후 설치
+       installerPackageName=com.android.vending
 ```
 
-APK 내부 legacy TTF는 patch release asset으로 배포하지 않습니다. `resources/int_android/legacy-font.ttf`는 APK 빌드 단계에서만 사용합니다.
+Astral Party에는 Google Play installer 검사가 있으며 일반 파일 관리자/앱플레이어의 APK 설치 기능으로 설치하면 Play Store로 이동할 수 있습니다. 실제 로그에서는 `LicenseClient: Local install check failed due to wrong installer.`와 `com.pairip.licensecheck.LicenseActivity`가 확인됐습니다. AutoPatcher는 내부적으로 installer를 `com.android.vending`으로 지정하고 설치 후 `dumpsys package`로 다시 검증합니다.
+
+## AutoPatcher Android 동작
+
+AutoPatcher는 `%LOCALAPPDATA%\AstralAutoPatcher` 아래에 Android 연결 도구와 APK cache를 관리합니다.
+
+1. 내부 Platform-Tools가 없으면 Google의 공식 Windows Platform-Tools를 자동 준비합니다.
+2. USB Android 기기를 `adb devices -l`로 찾습니다.
+3. MuMu, BlueStacks, LDPlayer의 알려진 ADB executable도 자동 탐색합니다.
+4. 패치 가능한 기기가 1대이면 자동 선택합니다.
+5. `android-apk-index.json`을 받아 package/game version/download URL/size/SHA-256/installer를 검증합니다.
+6. APK를 cache에 다운로드하며 size와 SHA-256을 검증합니다.
+7. 기존 한국어판이면 `adb install -r -i com.android.vending`으로 업데이트합니다.
+8. Google Play 공식판처럼 다른 서명의 앱이 설치되어 있으면 최초 1회 제거가 필요하므로 앱 데이터 삭제 가능성을 명확히 경고하고 사용자의 확인을 받습니다.
+9. 설치 후 `installerPackageName=com.android.vending`인지 확인하고 성공 처리합니다.
+
+기기가 `unauthorized`이면 휴대폰 화면에서 USB 디버깅 RSA 허용을 안내합니다. 여러 기기가 동시에 연결돼 있으면 오설치를 막기 위해 자동 설치하지 않고 사용자에게 한 대만 남기도록 안내합니다.
 
 ## Addressables 실행 순서
 
-게임 자체의 인게임 리소스 다운로드가 항상 우선입니다.
+APK 내부 legacy TTF는 APK 빌드 단계에서만 사용합니다. Addressables 번역/TMP font는 기존 `release-index.json` + patch manifest를 사용해 게임 APK 내부 runtime이 app-specific storage에서 적용합니다.
 
 ```text
 한국어 APK 실행
@@ -33,80 +52,35 @@ APK 내부 legacy TTF는 patch release asset으로 배포하지 않습니다. `r
   -> 현재 catalog/hash 검사
       -> catalog 없음: 원본 게임 Activity 실행
       -> 호환 patch 없음: 원본 게임 Activity 실행
-      -> 필요한 원본 bundle이 아직 없음/불일치: 원본 게임 Activity 실행
-      -> manifest의 모든 sourceSize/sourceSha256 일치: 게임 Activity 시작 전에 patch 적용
+      -> 필요한 원본 bundle 미완료/불일치: 원본 게임 Activity 실행
+      -> sourceSize/sourceSha256 모두 일치: Unity 시작 전에 patch 적용
   -> com.femoo.sdk.Femoo_UnityActivity 실행
 ```
 
-게임 실행 중에는 Addressables를 수정하지 않습니다. `UpdateWatcher`가 catalog 변경 또는 아직 준비되지 않았던 현재 catalog를 주기적으로 확인하고, 호환 manifest의 모든 원본 파일 SHA-256/size가 맞아 인게임 다운로드 완료가 확인되면 사용자에게 게임을 완전히 종료한 뒤 다시 실행하라는 안내를 표시합니다. 다음 실행의 BootstrapActivity가 Unity 시작 전에 패치를 적용합니다.
+게임 실행 중에는 Addressables를 수정하지 않습니다. `UpdateWatcher`가 새 catalog 또는 다운로드 완료 상태를 감지하면 완전 종료 후 재실행을 안내하고, 다음 실행의 BootstrapActivity가 patch를 적용합니다.
 
-이 흐름은 다음 두 경우를 같은 방식으로 처리합니다.
-
-- APK 최초 설치 후 첫 인게임 리소스 다운로드
-- APK version은 그대로인데 게임 서버가 새 catalog/AssetBundle만 배포한 경우
-
-패치 호환성 기준은 APK version 자체가 아니라 `gameVersion + catalogHash + route + channel`입니다.
+호환성 기준은 `gameVersion + catalogHash + route + channel`입니다.
 
 ## 안전성
 
-Addressables 적용 전에는 manifest에 기록된 `sourceSize`와 `sourceSha256`을 모두 확인합니다. 모든 patch payload는 staging에서 다운로드 SHA-256, 압축 해제 후 payload SHA-256을 검증한 뒤 적용합니다.
-
-실제 파일을 바꾸기 전에 현재 원본을 `.astralpatch/backups/<catalogHash>/...`에 백업합니다. 적용 중 실패하면 백업에서 원본을 복구합니다. 중간 종료 흔적이 남아 있으면 다음 실행에서 완전한 백업 세트가 있는 경우 원본으로 되돌린 뒤 다시 검증합니다.
-
-게임 실행 중에는 파일을 교체하지 않으므로 Unity가 이미 연 AssetBundle과 충돌하지 않습니다.
-
-## INT_ANDROID patch 자동화
-
-`Check Game`은 INT_STEAM을 먼저 처리한 뒤 INT_ANDROID를 처리합니다. INT_ANDROID는 `canonicalFallbackRoute: INT_STEAM`을 사용하며 Steam legacy data 취득 단계는 없습니다.
-
-Android patch manifest에는 Addressables 3종만 들어갑니다.
-
-- `Japanese` LANG
-- `GameData_INT` STR
-- `MochiyPopOne-Regular_TMP`
-
-각 Addressables entry에는 patched payload 정보 외에 `sourceSha256`과 `sourceSize`가 추가됩니다. Android runtime은 이 값으로 게임 자체 다운로드 완료 여부를 판단합니다.
-
-## 한국어 게임 APK 로컬 빌드
-
-필요 도구:
-
-- Python 3.12 + `builder[dev]`
-- JDK 17
-- Android SDK platform/build-tools (`d8`, `zipalign`, `apksigner`)
-- `apktool`
-- 현재 게임 버전의 merged standalone APK (로컬 빌드 시 직접 준비)
-- 장기간 유지할 Android signing keystore
-
-비밀번호는 명령행 값으로 직접 넘기지 않고 환경변수로 전달합니다.
-
-```bash
-export ANDROID_SDK_ROOT=/path/to/android-sdk
-export ASTRAL_ANDROID_KEYSTORE_PASSWORD='...'
-export ASTRAL_ANDROID_KEY_PASSWORD='...'
-
-python tools/android/build_game_apk.py \
-  --base-apk '.int_android/current-merged.apk' \
-  --output 'output/android/AstralParty_INT_Korean.apk' \
-  --release-index-url 'https://github.com/<owner>/<repo>/releases/download/patch-index/release-index.json' \
-  --keystore '.secrets/android-signing.keystore' \
-  --key-alias 'astralparty'
-```
-
-빌드 스크립트는 다음을 수행합니다.
-
-1. Apktool 3의 `decode --no-src --no-assets`로 manifest/resources 전용 임시 프로젝트를 만들고 `AndroidManifest.xml`만 수정·재컴파일합니다.
-2. 기존 MAIN/LAUNCHER intent를 `com.femoo.sdk.Femoo_UnityActivity`에서 제거하고 `com.astralpatch.runtime.BootstrapActivity`에 부여합니다.
-3. 원본 APK ZIP에서 `assets/bin/Data/data.unity3d`만 추출해 `MochiyPopOne-Regular`를 `resources/int_android/legacy-font.ttf`로 교체하고 UnityPy 재로드 검증을 수행합니다.
-4. Android runtime Java 소스를 `javac` + `d8`로 별도 DEX로 빌드합니다.
-5. 원본 APK를 전체 rebuild하지 않고 기존 ZIP entry를 스트리밍 복사하면서 binary manifest, `data.unity3d`, 새 `classesN.dex`, `assets/astralpatch/config.json`만 교체/추가합니다.
-6. 기존 서명 entry를 제거한 뒤 `zipalign`하고 지정된 고정 keystore로 `apksigner` 서명/검증합니다.
+- manifest의 `sourceSize`/`sourceSha256` 검증
+- transport SHA-256 및 압축 해제 후 payload SHA-256 이중 검증
+- `.astralpatch/backups/<catalogHash>/...` 원본 backup
+- 적용 실패 시 rollback
+- Unity 실행 중 AssetBundle 교체 금지
+- AutoPatcher APK download size/SHA-256 검증
+- 설치 후 package와 installer 재검증
 
 ## GitHub Actions APK 빌드
 
-`.github/workflows/build-android-game-apk.yml`을 수동 실행합니다. workflow 입력값은 없으며 원본 APK URL도 입력하지 않습니다. Actions가 `apkeep`으로 Google Play에서 `com.feimo.astralpartyjpn`의 현재 APK/split APK를 직접 내려받고, split이 여러 개면 APKEditor로 단일 APK로 병합한 뒤 한국어 APK를 빌드합니다.
+`.github/workflows/build-android-game-apk.yml`의 `Build Android APK`를 수동 실행합니다.
 
-Google Play 다운로드 설정은 다음 값으로 고정합니다.
+입력:
+
+- `publish=false`: build artifact만 생성
+- `publish=true`: immutable Android APK release를 생성하고 `android-apk-index/android-apk-index.json`을 갱신
+
+Google Play 다운로드 설정:
 
 ```text
 package: com.feimo.astralpartyjpn
@@ -116,14 +90,14 @@ split_apk: true
 include_additional_files: true
 ```
 
-빌드 도구는 다음 버전/채널을 사용합니다. `apkeep`은 upstream이 권장하는 `stable` floating tag를 사용하고, 나머지 빌드 도구는 고정 버전을 사용합니다.
+고정/관리 도구:
 
-- `apkeep` Docker image: `ghcr.io/efforg/apkeep:stable`
+- `apkeep`: `ghcr.io/efforg/apkeep:stable`
 - APKEditor: `1.4.9`
 - Apktool: `3.0.3`
+- JingMatrix/LSPatch: `v0.8`
+- JDK: `21`
 - Android build-tools: `35.0.0`
-
-`apkeep`이 split APK 여러 개를 반환하면 APKEditor `merge`를 사용합니다. APK가 하나뿐이면 그대로 Builder 입력으로 사용합니다. Google Play가 OBB expansion file을 반환하면 현재 flow에서는 조용히 무시하지 않고 빌드를 실패시킵니다. 이 경우 OBB 지원을 별도로 추가해야 합니다.
 
 필수 Actions Secrets:
 
@@ -134,27 +108,35 @@ include_additional_files: true
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
-`PLAY_EMAIL`과 `AAS_TOKEN`은 Google Play 다운로드 전용입니다. Android signing 관련 4개 secret은 우리가 배포하는 한국어 APK의 고정 signing identity입니다.
+Android signing 관련 4개 secret은 앞으로 모든 한국어 APK update에서 같은 값을 유지해야 합니다.
 
-Google Play 앱이 지역 제한되어 있으면 locale/timezone 설정만으로는 우회되지 않습니다. `PLAY_EMAIL` 계정이 해당 앱을 지원 지역에서 한 번 이상 취득해 계정에 연결된 상태여야 합니다. `apkeep`이 `Invalid app response`로 다운로드를 건너뛰면 workflow는 즉시 실패하며 이 조건을 안내합니다.
+## Android APK index
 
-workflow는 `output/android/AstralParty_INT_Korean.apk`를 만들고 결과를 `astral-party-int-android-korean-apk` Actions artifact로 업로드합니다. 같은 게임 패키지에 업데이트 설치하려면 이후 모든 한국어 APK 빌드에서 같은 signing key를 계속 사용해야 합니다.
+정식 schema는 `schemas/android-apk-index.schema.json`에 있습니다.
+
+
+AutoPatcher가 읽는 rolling index는 다음 형식입니다.
+
+```json
+{
+  "schemaVersion": 1,
+  "packageName": "com.feimo.astralpartyjpn",
+  "gameVersion": "3.2.0",
+  "downloadUrl": "https://github.com/.../releases/download/<immutable-tag>/AstralParty_INT_Korean.apk",
+  "sha256": "...",
+  "size": 123456789,
+  "installerPackageName": "com.android.vending"
+}
+```
+
+AutoPatcher는 GitHub release base URL 밖의 APK URL이나 다른 package/installer를 거부합니다.
 
 ## APK 업데이트와 Addressables 업데이트
 
-APK가 업데이트되면 `Build Android APK` workflow가 Google Play에서 새 APK/split APK를 다시 취득하고 병합한 뒤 한국어 APK를 빌드합니다. 이때 legacy TTF와 runtime을 새 APK에 다시 삽입합니다.
+APK가 업데이트되면 `Build Android APK`를 `publish=true`로 실행해 새 APK release와 Android index를 발행합니다. AutoPatcher 사용자는 다음 실행에서 새 APK를 자동으로 받아 같은 signing key로 update 설치합니다.
 
-APK 업데이트가 없고 Addressables만 바뀌면 APK를 다시 빌드할 필요가 없습니다. Builder가 새 INT_ANDROID revision/catalog용 patch release를 만들고, 이미 설치된 한국어 APK의 runtime이 새 catalog를 감지해 다음 실행에 새 Addressables 패치를 적용합니다.
+APK가 바뀌지 않고 Addressables만 변경되면 APK를 다시 배포할 필요가 없습니다. 새 INT_ANDROID patch release만 생성하면 설치된 APK의 runtime이 새 catalog를 감지해 다음 실행에 적용합니다.
 
-## LSPatch signature bypass 진단
+## 로컬 빌드 주의사항
 
-Google Play에서 설치하지 않은 재서명 APK가 실행 직후 Play Store로 이동하는 경우, 최종 한국어 APK 구조를 변경하기 전에 `.github/workflows/test-android-signature-bypass.yml`의 `Test Android Signature Bypass` workflow로 서명 검사만 분리해 확인합니다.
-
-이 workflow는 번역, legacy TTF 교체, `AstralPatchRuntime` 주입을 하지 않습니다. Google Play에서 현재 APK/split APK를 받고, split APK가 있으면 APKEditor로 standalone APK를 만들되 `-clean-meta`를 사용하지 않아 원본 Play signature metadata를 보존합니다. 그 다음 현재 유지보수되는 `JingMatrix/LSPatch`의 최신 stable release를 GitHub API에서 자동 선택해 integrated mode에서 `--sigbypasslv 2`만 적용합니다. 진단 APK는 LSPatch 자체 keystore로 재서명되며 결과 artifact 이름은 `astral-party-int-lspatch-test`입니다.
-
-진단 목적은 다음 두 경우를 구분하는 것입니다.
-
-- 진단 APK가 정상 실행됨: 로컬 signature/package-manager 계층의 검사를 LSPatch 방식으로 처리할 수 있으므로 최종 APK Builder에 동일 계층을 통합할 가치가 있습니다.
-- 진단 APK도 동일하게 Google Play 이동: 현재 JingMatrix LSPatch signature bypass만으로는 해당 검사를 처리할 수 없으므로 최종 APK Builder에 바로 통합하지 않습니다.
-
-진단 APK는 공식판 및 기존 한국어 APK와 서명이 다릅니다. 같은 package를 설치하려면 기존 `com.feimo.astralpartyjpn`을 먼저 제거해야 하며 앱 데이터가 삭제될 수 있습니다. 진단이 끝난 뒤 결과에 따라 최종 signing/update 전략을 결정합니다.
+운영 빌드의 핵심 순서는 `Google Play 병합본 -> LSPatch -> build_game_apk.py`입니다. `build_game_apk.py`만 독립 실행하면 LSPatch의 원본 Play signature capture 단계가 포함되지 않으므로 운영 배포물과 동일한 결과가 아닙니다. 운영 APK는 GitHub Actions workflow를 기준으로 생성합니다.

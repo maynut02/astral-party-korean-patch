@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://astral-party-korean.invalid/schemas/android-apk-index.schema.json",
+  "title": "AstralAutoPatcher Android APK Index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "packageName",
+    "gameVersion",
+    "downloadUrl",
+    "sha256",
+    "size",
+    "installerPackageName"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "packageName": {
+      "const": "com.feimo.astralpartyjpn"
+    },
+    "gameVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "downloadUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "installerPackageName": {
+      "const": "com.android.vending"
+    }
+  }
+}

@@ -242,12 +242,14 @@ revision changed
 대규모 작업 중에도 테스트 가능한 독립 단계가 완성되면 추가 commit을 허용한다.
 
 
-## INT_ANDROID Android 내장 패처
+## INT_ANDROID Android APK + AutoPatcher
 
-- Windows AstralAutoPatcher의 INT_ANDROID/ADB 로직은 두지 않음.
-- Google Play에서 `apkeep`으로 APK/split APK를 취득하고 APKEditor로 병합한 뒤 `assets/bin/Data/data.unity3d` legacy TTF를 빌드 시 교체.
-- 기존 게임 launcher 앞에 `com.astralpatch.runtime.BootstrapActivity`를 두고 runtime DEX를 APK에 주입.
+- Google Play에서 `apkeep`으로 APK/split APK를 취득하고 APKEditor로 병합하되 원본 Play signature metadata를 유지.
+- JingMatrix/LSPatch v0.8 sigbypass level 2를 먼저 적용해 원본 Play signature를 runtime config에 보존.
+- `assets/bin/Data/data.unity3d` legacy TTF 교체 후 `com.astralpatch.runtime.BootstrapActivity`와 runtime DEX를 주입.
+- Android APK는 Actions Secrets의 장기 signing key로 계속 서명하고 immutable GitHub Release + `android-apk-index.json`으로 배포.
+- Windows AstralAutoPatcher가 Google Platform-Tools를 자체 관리하고 실제 USB 기기 및 MuMu/BlueStacks/LDPlayer를 자동 탐색.
+- AutoPatcher는 APK size/SHA-256을 검증하고 `installerPackageName=com.android.vending`으로 설치한 뒤 installer를 재검증.
+- 공식판에서 최초 전환할 때 다른 signature 때문에 제거가 필요하면 앱 데이터 삭제 가능성을 경고하고 사용자 확인을 받은 뒤 진행.
 - Addressables patch release는 LANG/STR/TMP bundle만 포함하고 각 entry에 source SHA-256/size를 기록.
-- 최초 설치 또는 인게임 resource update 중에는 게임 자체 다운로드를 우선하고, 다운로드 완료 후 다음 실행에서 Unity 시작 전에 patch.
 - APK가 바뀌지 않는 catalog-only update는 APK 재배포 없이 새 INT_ANDROID patch release만 생성.
-- Android APK는 저장소에 보관한 고정 private key가 아니라 Actions Secrets/로컬 `.secrets`의 장기 signing key로 계속 서명.

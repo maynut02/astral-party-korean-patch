@@ -25,7 +25,8 @@ def test_patch_manifest_moves_launcher_to_bootstrap(tmp_path: Path) -> None:
     package="com.feimo.astralpartyjpn"
     android:versionName="3.2.0">
   <uses-permission android:name="android.permission.INTERNET" />
-  <application>
+  <application android:appComponentFactory="org.lsposed.lspatch.metaloader.LSPAppComponentFactory">
+    <meta-data android:name="lspatch" android:value="preserve-me" />
     <activity
         android:name="com.femoo.sdk.Femoo_UnityActivity"
         android:exported="true"
@@ -48,6 +49,12 @@ def test_patch_manifest_moves_launcher_to_bootstrap(tmp_path: Path) -> None:
     root = ET.parse(manifest).getroot()
     application = root.find("application")
     assert application is not None
+    assert (
+        application.get(A + "appComponentFactory")
+        == "org.lsposed.lspatch.metaloader.LSPAppComponentFactory"
+    )
+    metadata = {item.get(A + "name"): item for item in application.findall("meta-data")}
+    assert metadata["lspatch"].get(A + "value") == "preserve-me"
     activities = {item.get(A + "name"): item for item in application.findall("activity")}
     bootstrap = activities[MODULE.BOOTSTRAP_ACTIVITY]
     original = activities["com.femoo.sdk.Femoo_UnityActivity"]

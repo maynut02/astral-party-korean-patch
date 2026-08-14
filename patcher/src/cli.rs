@@ -12,7 +12,7 @@ use crate::service::ServiceError;
 use crate::settings::AppSettings;
 use crate::settings::SettingsError;
 #[cfg(windows)]
-use crate::tui;
+use crate::tui::{self, RemoteEndpoints};
 #[cfg(windows)]
 use crate::updater::{
     UpdateError, apply_update_and_restart, check_and_launch_update, parse_apply_update_request,
@@ -27,6 +27,11 @@ const FALLBACK_RELEASE_INDEX_URL: &str = "https://github.com/maynut02/astral-par
 const FALLBACK_PATCHER_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/patcher-index/patcher-index.json";
 #[cfg(windows)]
 const FALLBACK_PATCHER_RELEASE_BASE_URL: &str =
+    "https://github.com/maynut02/astral-party-korean-patch/releases/download";
+#[cfg(windows)]
+const FALLBACK_ANDROID_APK_INDEX_URL: &str = "https://github.com/maynut02/astral-party-korean-patch/releases/download/android-apk-index/android-apk-index.json";
+#[cfg(windows)]
+const FALLBACK_ANDROID_RELEASE_BASE_URL: &str =
     "https://github.com/maynut02/astral-party-korean-patch/releases/download";
 
 #[derive(Debug, Error)]
@@ -67,6 +72,20 @@ fn patcher_release_base_url() -> &'static str {
     option_env!("ASTRAL_PATCHER_RELEASE_BASE_URL")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(FALLBACK_PATCHER_RELEASE_BASE_URL)
+}
+
+#[cfg(windows)]
+fn android_apk_index_url() -> &'static str {
+    option_env!("ASTRAL_ANDROID_APK_INDEX_URL")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(FALLBACK_ANDROID_APK_INDEX_URL)
+}
+
+#[cfg(windows)]
+fn android_release_base_url() -> &'static str {
+    option_env!("ASTRAL_ANDROID_RELEASE_BASE_URL")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(FALLBACK_ANDROID_RELEASE_BASE_URL)
 }
 
 #[cfg(windows)]
@@ -130,7 +149,11 @@ pub fn run() -> Result<(), CliError> {
         installed_exe,
         initial_request,
         startup_notice,
-        release_index_url(),
+        RemoteEndpoints {
+            patch_release_index: release_index_url(),
+            android_apk_index: android_apk_index_url(),
+            android_release_base: android_release_base_url(),
+        },
     )?;
     Ok(())
 }

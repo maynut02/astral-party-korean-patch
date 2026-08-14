@@ -23,6 +23,8 @@ jobs:
       ASTRAL_PATCH_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patch-index/release-index.json
       ASTRAL_PATCHER_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/patcher-index/patcher-index.json
       ASTRAL_PATCHER_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
+      ASTRAL_ANDROID_APK_INDEX_URL: https://github.com/${{ github.repository }}/releases/download/android-apk-index/android-apk-index.json
+      ASTRAL_ANDROID_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -97,7 +99,7 @@ jobs:
             $env:EXE `
             --target $env:GITHUB_SHA `
             --title "AstralAutoPatcher $env:VERSION" `
-            --notes "Portable Windows x64 AstralAutoPatcher $env:VERSION. Includes automatic verified self-update, release-channel patch installation with download/apply progress, LocalAppData self-registration, and astral:// protocol integration."
+            --notes "Portable Windows x64 AstralAutoPatcher $env:VERSION. Includes Android USB/app-player auto-detection, managed ADB Platform-Tools, verified Android APK installation with Google Play installer attribution, Steam patching, automatic verified self-update, and astral:// protocol integration."
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to publish patcher release $env:TAG."
           }

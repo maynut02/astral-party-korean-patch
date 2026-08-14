@@ -2,9 +2,15 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the APK and update the AutoPatcher Android index
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -13,6 +19,7 @@ jobs:
       ANDROID_PACKAGE: com.feimo.astralpartyjpn
       APKEEP_IMAGE: ghcr.io/efforg/apkeep:stable
       PLAY_OPTIONS: locale=ja_JP,timezone=Asia/Tokyo,split_apk=1,include_additional_files=true
+      LSPATCH_VERSION: v0.8
     steps:
       - uses: actions/checkout@v6
 
@@ -25,7 +32,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Install Android build dependencies
         shell: bash
@@ -40,17 +47,23 @@ jobs:
           curl --fail --location --retry 3 \
             --output .work/android-tools/apktool.jar \
             https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
-          cat > .work/android-tools/apktool <<'EOF'
+          cat > .work/android-tools/apktool <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
           exec java -jar "$(dirname "$0")/apktool.jar" "$@"
-          EOF
+          SCRIPT
           chmod +x .work/android-tools/apktool
           echo "$PWD/.work/android-tools" >> "$GITHUB_PATH"
 
           curl --fail --location --retry 3 \
             --output .work/android-tools/APKEditor.jar \
             https://github.com/REAndroid/APKEditor/releases/download/V1.4.9/APKEditor-1.4.9.jar
+          curl --fail --location --retry 3 \
+            --output .work/android-tools/lspatch.jar \
+            "https://github.com/JingMatrix/LSPatch/releases/download/$LSPATCH_VERSION/lspatch.jar"
+          java -jar .work/android-tools/lspatch.jar --help > .work/android-tools/lspatch-help.txt
+          grep -Fq -- '--sigbypasslv' .work/android-tools/lspatch-help.txt
+          grep -Fq -- '--keystore' .work/android-tools/lspatch-help.txt
 
       - name: Validate secrets
         shell: bash
@@ -105,11 +118,10 @@ jobs:
             if grep -Fq "Invalid app response" .work/apkeep.log; then
               echo "Google Play returned an invalid app response for $ANDROID_PACKAGE." >&2
               echo "The PLAY_EMAIL account must already have access to this region-locked app." >&2
-              echo "Bind/install the app once with that Google account from a supported region, then retry." >&2
             elif grep -Fq "Permission denied" .work/apkeep.log; then
               echo "apkeep could not write the downloaded files to the mounted output directory." >&2
             elif grep -Fq "Skipping" .work/apkeep.log; then
-              echo "apkeep skipped the Google Play download; inspect the apkeep output above for the reason." >&2
+              echo "apkeep skipped the Google Play download; inspect the output above." >&2
             else
               echo "apkeep exited successfully but produced no APK files." >&2
             fi
@@ -148,11 +160,12 @@ jobs:
           if [ "${#APK_FILES[@]}" -eq 1 ]; then
             cp "${APK_FILES[0]}" .work/android-input/base-google-play.apk
           else
+            # Keep the original Google Play signature metadata. LSPatch lv2 reads it
+            # from this input before the APK is modified and re-signed.
             java -jar .work/android-tools/APKEditor.jar m \
               -i .work/google-play-apks \
               -o .work/android-input/base-google-play.apk \
               -f \
-              -clean-meta \
               -validate-modules
           fi
 
@@ -169,6 +182,39 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 --decode > .secrets/android-signing.keystore
           chmod 600 .secrets/android-signing.keystore
 
+      - name: Capture original Play signature with LSPatch
+        shell: bash
+        env:
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p .work/lspatch-base
+          java -jar .work/android-tools/lspatch.jar \
+            --verbose \
+            --force \
+            --sigbypasslv 2 \
+            --keystore \
+              .secrets/android-signing.keystore \
+              "$KEYSTORE_PASSWORD" \
+              "$KEY_ALIAS" \
+              "$KEY_PASSWORD" \
+            --output .work/lspatch-base \
+            .work/android-input/base-google-play.apk
+
+          mapfile -d '' PATCHED_APKS < <(find .work/lspatch-base -maxdepth 1 -type f -name '*.apk' -print0)
+          if [ "${#PATCHED_APKS[@]}" -ne 1 ]; then
+            echo "expected exactly one LSPatch output APK, found ${#PATCHED_APKS[@]}" >&2
+            find .work/lspatch-base -maxdepth 1 -type f -printf '%f\n' >&2 || true
+            exit 1
+          fi
+          cp "${PATCHED_APKS[0]}" .work/android-input/base-lspatched.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
+            --verbose \
+            --print-certs \
+            .work/android-input/base-lspatched.apk
+
       - name: Build self-patching Korean APK
         shell: bash
         env:
@@ -179,11 +225,35 @@ jobs:
         run: |
           set -euo pipefail
           python tools/android/build_game_apk.py \
-            --base-apk .work/android-input/base-google-play.apk \
+            --base-apk .work/android-input/base-lspatched.apk \
             --output output/android/AstralParty_INT_Korean.apk \
             --release-index-url "$RELEASE_INDEX_URL" \
             --keystore .secrets/android-signing.keystore \
             --key-alias "$KEY_ALIAS"
+
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
+            --verbose \
+            --print-certs \
+            output/android/AstralParty_INT_Korean.apk
+
+      - name: Read APK metadata
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=output/android/AstralParty_INT_Korean.apk
+          META="$APK.json"
+          GAME_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["baseVersionName"])' "$META")"
+          SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+          SIZE="$(stat -c '%s' "$APK")"
+          TAG="android-apk-v${GAME_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "game_version=$GAME_VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "APK game version: $GAME_VERSION"
+          echo "APK SHA-256: $SHA256"
+          echo "APK size: $SIZE"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
@@ -193,3 +263,68 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+      - name: Publish immutable Android APK release
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.apk.outputs.tag }}
+          GAME_VERSION: ${{ steps.apk.outputs.game_version }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            output/android/AstralParty_INT_Korean.apk \
+            output/android/AstralParty_INT_Korean.apk.json \
+            --target "$GITHUB_SHA" \
+            --title "Astral Party Android Korean $GAME_VERSION" \
+            --notes "Android Korean APK for Astral Party $GAME_VERSION. Install through AstralAutoPatcher so the installer source is recorded as com.android.vending."
+
+      - name: Update AutoPatcher Android APK index
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.apk.outputs.tag }}
+          GAME_VERSION: ${{ steps.apk.outputs.game_version }}
+          SHA256: ${{ steps.apk.outputs.sha256 }}
+          SIZE: ${{ steps.apk.outputs.size }}
+        run: |
+          set -euo pipefail
+          INDEX="$RUNNER_TEMP/android-apk-index.json"
+          DOWNLOAD_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/AstralParty_INT_Korean.apk"
+          python3 - "$INDEX" "$GAME_VERSION" "$DOWNLOAD_URL" "$SHA256" "$SIZE" <<'PY'
+          import json
+          import sys
+
+          path, version, url, sha256, size = sys.argv[1:]
+          payload = {
+              "schemaVersion": 1,
+              "packageName": "com.feimo.astralpartyjpn",
+              "gameVersion": version,
+              "downloadUrl": url,
+              "sha256": sha256,
+              "size": int(size),
+              "installerPackageName": "com.android.vending",
+          }
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, ensure_ascii=False, indent=2)
+              handle.write("\n")
+          PY
+
+          if ! gh release view android-apk-index >/dev/null 2>&1; then
+            if git ls-remote --exit-code --tags origin refs/tags/android-apk-index >/dev/null 2>&1; then
+              gh release create android-apk-index \
+                --verify-tag \
+                --title "Android APK Index" \
+                --notes "Machine-readable AstralAutoPatcher Android APK index" \
+                --prerelease
+            else
+              gh release create android-apk-index \
+                --target "$GITHUB_SHA" \
+                --title "Android APK Index" \
+                --notes "Machine-readable AstralAutoPatcher Android APK index" \
+                --prerelease
+            fi
+          fi
+          gh release upload android-apk-index "$INDEX" --clobber
