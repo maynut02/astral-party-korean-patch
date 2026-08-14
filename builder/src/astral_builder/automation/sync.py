@@ -282,22 +282,38 @@ def _canonicalize_units_from_fallback(
     with conn.cursor() as cur:
         cur.execute(
             """
+            SELECT id, revision
+            FROM game_revisions
+            WHERE route = %s
+              AND game_version = %s
+              AND processed_at IS NOT NULL
+            ORDER BY detected_at DESC, processed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (fallback_route, prepared.source.version),
+        )
+        fallback_revision = cur.fetchone()
+        if fallback_revision is None:
+            raise RuntimeError(
+                "canonical fallback has no processed source revision: "
+                f"{fallback_route}/{prepared.source.version}"
+            )
+
+        fallback_revision_id, _fallback_revision = fallback_revision
+        cur.execute(
+            """
             SELECT tu.kind, tu.namespace, tu.unit_key, st.cn_s, st.en, st.jp, st.cn_t
             FROM source_texts st
             JOIN translation_units tu ON tu.id = st.unit_id
-            JOIN game_revisions gr ON gr.id = st.revision_id
-            WHERE gr.route = %s
-              AND gr.game_version = %s
-              AND gr.revision = %s
-              AND gr.processed_at IS NOT NULL
+            WHERE st.revision_id = %s
             """,
-            (fallback_route, prepared.source.version, prepared.source.revision),
+            (fallback_revision_id,),
         )
         rows = cur.fetchall()
     if not rows:
         raise RuntimeError(
-            "canonical fallback source revision is not processed: "
-            f"{fallback_route}/{prepared.source.version}/{prepared.source.revision}"
+            "canonical fallback processed revision has no source texts: "
+            f"{fallback_route}/{prepared.source.version}/{_fallback_revision}"
         )
 
     fallback = {

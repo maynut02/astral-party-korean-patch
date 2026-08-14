@@ -159,8 +159,10 @@ fonts:
 
 
 class _FallbackCursor:
-    def __init__(self, rows):
-        self.rows = rows
+    def __init__(self, revision_row, source_rows):
+        self.revision_row = revision_row
+        self.source_rows = source_rows
+        self.query_index = 0
 
     def __enter__(self):
         return self
@@ -168,29 +170,43 @@ class _FallbackCursor:
     def __exit__(self, *_args):
         return False
 
-    def execute(self, _sql, params):
-        assert params == ("INT_STEAM", "3.2.0", "116")
+    def execute(self, sql, params):
+        self.query_index += 1
+        if self.query_index == 1:
+            assert "ORDER BY detected_at DESC, processed_at DESC" in sql
+            assert params == ("INT_STEAM", "3.2.0")
+        elif self.query_index == 2:
+            assert "WHERE st.revision_id = %s" in sql
+            assert params == ("fallback-revision-id",)
+        else:
+            raise AssertionError("unexpected fallback query")
+
+    def fetchone(self):
+        assert self.query_index == 1
+        return self.revision_row
 
     def fetchall(self):
-        return self.rows
+        assert self.query_index == 2
+        return self.source_rows
 
 
 class _FallbackConnection:
-    def __init__(self, rows):
-        self.rows = rows
+    def __init__(self, revision_row, source_rows):
+        self.revision_row = revision_row
+        self.source_rows = source_rows
 
     def cursor(self):
-        return _FallbackCursor(self.rows)
+        return _FallbackCursor(self.revision_row, self.source_rows)
 
 
-def test_canonical_fallback_only_fills_missing_source_fields(tmp_path: Path) -> None:
-    prepared = PreparedRevision(
+def _prepared_fallback_revision(tmp_path: Path, *, route: str, revision: str) -> PreparedRevision:
+    return PreparedRevision(
         source=GameSource(
-            route="CN_STEAM",
+            route=route,
             version="3.2.0",
-            revision="116",
-            source_url="https://example.test/CN_STEAM/116",
-            catalog_url="https://example.test/CN_STEAM/116/catalog.json",
+            revision=revision,
+            source_url=f"https://example.test/{route}/{revision}",
+            catalog_url=f"https://example.test/{route}/{revision}/catalog.json",
         ),
         catalog_hash="f" * 32,
         catalog=DownloadedCatalog(tmp_path / "catalog.json", "a" * 64, 10),
@@ -207,9 +223,30 @@ def test_canonical_fallback_only_fills_missing_source_fields(tmp_path: Path) -> 
         empty_str_assets=(),
         canonical_fallback_route="INT_STEAM",
     )
-    conn = _FallbackConnection([("str", "STRCard", "1", "国际简中", "English", "日本語", "繁體")])
+
+
+def test_canonical_fallback_uses_latest_processed_revision_even_when_revision_differs(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepared_fallback_revision(tmp_path, route="INT_ANDROID", revision="117")
+    conn = _FallbackConnection(
+        ("fallback-revision-id", "116"),
+        [("str", "STRCard", "1", "国际简中", "English", "日本語", "繁體")],
+    )
+
     units = _canonicalize_units_from_fallback(conn, prepared)
+
     assert units[0].source == SourceStrings(cn_s="中国值", en="English", jp="日本語", cn_t="繁體")
+
+
+def test_canonical_fallback_rejects_missing_processed_version(tmp_path: Path) -> None:
+    prepared = _prepared_fallback_revision(tmp_path, route="CN_STEAM", revision="118")
+    conn = _FallbackConnection(None, [])
+
+    with pytest.raises(
+        RuntimeError, match="canonical fallback has no processed source revision: INT_STEAM/3.2.0"
+    ):
+        _canonicalize_units_from_fallback(conn, prepared)
 
 
 def test_sync_output_contract(tmp_path: Path) -> None:
