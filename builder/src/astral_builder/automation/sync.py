@@ -151,21 +151,33 @@ def _bundle_locations(
     downloaded: tuple[DownloadedBundle, ...],
 ) -> tuple[AssetLocationInput, ...]:
     by_identity = {
-        (item.resolved.bundle_name, item.resolved.cache_hash): item
-        for item in downloaded
+        (item.resolved.bundle_name, item.resolved.cache_hash): item for item in downloaded
     }
-    rows: list[AssetLocationInput] = []
+    remote_bundles = []
+    seen: set[tuple[str, str]] = set()
     for bundle in target.bundles:
         if bundle.origin is not BundleOrigin.REMOTE:
             continue
+        identity = (bundle.bundle_name, bundle.cache_hash)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        remote_bundles.append(bundle)
+
+    rows: list[AssetLocationInput] = []
+    multiple_bundles = len(remote_bundles) > 1
+    for bundle in remote_bundles:
         item = by_identity[(bundle.bundle_name, bundle.cache_hash)]
+        asset_name = (
+            f"{bundle.bundle_name}/{bundle.cache_hash}" if multiple_bundles else target.catalog_key
+        )
         rows.append(
             AssetLocationInput(
                 logical_name=target.logical_name,
                 catalog_key=target.catalog_key,
                 origin="remote",
                 asset_type="AssetBundle",
-                asset_name=target.catalog_key,
+                asset_name=asset_name,
                 bundle_name=bundle.bundle_name,
                 bundle_hash=bundle.cache_hash,
                 cache_root=bundle.bundle_name,

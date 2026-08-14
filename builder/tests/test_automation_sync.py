@@ -2,13 +2,16 @@ from pathlib import Path
 
 import pytest
 
+from astral_builder.addressables.resolver import BundleOrigin, ResolvedBundle, ResolvedTarget
 from astral_builder.automation.sync import (
     PreparedRevision,
+    _bundle_locations,
     _canonicalize_units_from_fallback,
     load_route_sync_config,
 )
 from astral_builder.formats.model import SourceStrings, TranslationKind, TranslationUnit
 from astral_builder.game.source import DownloadedCatalog, GameSource
+from astral_builder.source.downloader import DownloadedBundle
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,6 +70,69 @@ resources:
     assert config.str_target_field == "cn_s"
     assert config.canonical_fallback_route == "INT_STEAM"
     assert config.legacy_font_name == "JingNanBoBoHei"
+
+
+def test_bundle_locations_disambiguate_multiple_remote_dependencies(tmp_path: Path) -> None:
+    bundles = tuple(
+        ResolvedBundle(
+            origin=BundleOrigin.REMOTE,
+            primary_key=f"font-dependency-{index}",
+            internal_id=f"{{App.WebServerConfig.Path}}/font-{index}.bundle",
+            bundle_name=f"font-bundle-{index}",
+            cache_hash=str(index) * 32,
+            expected_size=10 + index,
+            download_url=f"https://example.test/font-{index}.bundle",
+            cache_relative_path=f"font-bundle-{index}/{str(index) * 32}/__data",
+        )
+        for index in (1, 2)
+    )
+    target = ResolvedTarget(
+        logical_name="tmp-font",
+        catalog_key="MochiyPopOne-Regular_TMP",
+        bundles=bundles,
+    )
+    downloaded = tuple(
+        DownloadedBundle(
+            resolved=bundle,
+            path=tmp_path / f"{bundle.bundle_name}.bundle",
+            sha256=("a" if index == 1 else "b") * 64,
+            size=10 + index,
+        )
+        for index, bundle in enumerate(bundles, start=1)
+    )
+
+    locations = _bundle_locations(target, downloaded)
+
+    assert len(locations) == 2
+    assert len({location.identity for location in locations}) == 2
+    assert [location.catalog_key for location in locations] == [
+        "MochiyPopOne-Regular_TMP",
+        "MochiyPopOne-Regular_TMP",
+    ]
+    assert [location.asset_name for location in locations] == [
+        f"font-bundle-1/{'1' * 32}",
+        f"font-bundle-2/{'2' * 32}",
+    ]
+
+
+def test_bundle_locations_keep_legacy_identity_for_single_remote_dependency(tmp_path: Path) -> None:
+    bundle = ResolvedBundle(
+        origin=BundleOrigin.REMOTE,
+        primary_key="English",
+        internal_id="{App.WebServerConfig.Path}/english.bundle",
+        bundle_name="english-bundle",
+        cache_hash="a" * 32,
+        expected_size=4,
+        download_url="https://example.test/english.bundle",
+        cache_relative_path=f"english-bundle/{'a' * 32}/__data",
+    )
+    target = ResolvedTarget("lang:en", "English", (bundle,))
+    downloaded = (DownloadedBundle(bundle, tmp_path / "english.bundle", "b" * 64, 4),)
+
+    locations = _bundle_locations(target, downloaded)
+
+    assert len(locations) == 1
+    assert locations[0].asset_name == "English"
 
 
 def test_route_sync_config_rejects_unknown_language_code(tmp_path: Path) -> None:
