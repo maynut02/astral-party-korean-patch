@@ -590,11 +590,14 @@ fn app_player_providers() -> Vec<AdbProvider> {
 
 #[cfg(windows)]
 fn env_program_files_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
+    let mut roots: Vec<PathBuf> = Vec::new();
     for key in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
         if let Some(value) = std::env::var_os(key) {
             let path = PathBuf::from(value);
-            if !roots.iter().any(|item| paths_equal(item, &path)) {
+            if !roots
+                .iter()
+                .any(|item| paths_equal(item.as_path(), path.as_path()))
+            {
                 roots.push(path);
             }
         }
