@@ -140,6 +140,6 @@ workflow는 `output/android/AstralParty_INT_Korean.apk`를 만들고 결과를 `
 
 ## APK 업데이트와 Addressables 업데이트
 
-APK가 업데이트되면 `Build Android Korean Game APK` workflow가 Google Play에서 새 APK/split APK를 다시 취득하고 병합한 뒤 한국어 APK를 빌드합니다. 이때 legacy TTF와 runtime을 새 APK에 다시 삽입합니다.
+APK가 업데이트되면 `Build Android APK` workflow가 Google Play에서 새 APK/split APK를 다시 취득하고 병합한 뒤 한국어 APK를 빌드합니다. 이때 legacy TTF와 runtime을 새 APK에 다시 삽입합니다.
 
 APK 업데이트가 없고 Addressables만 바뀌면 APK를 다시 빌드할 필요가 없습니다. Builder가 새 INT_ANDROID revision/catalog용 patch release를 만들고, 이미 설치된 한국어 APK의 runtime이 새 catalog를 감지해 다음 실행에 새 Addressables 패치를 적용합니다.

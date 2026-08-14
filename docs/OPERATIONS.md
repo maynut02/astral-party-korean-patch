@@ -177,7 +177,7 @@ route가 없는 기존 URI는 현재 선택된 route를 사용합니다. route�
 
 Route revision은 서로 독립적으로 추적합니다. `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 revision 번호가 서로 달라도 정상이며, `canonicalFallbackRoute`는 같은 `game_version`에서 가장 최근에 처리된 fallback route revision의 원문을 보충용으로 사용합니다. fallback 대상 route와 현재 route의 revision 번호가 같을 필요는 없습니다.
 
-INT_ANDROID는 Windows AstralAutoPatcher나 ADB를 사용하지 않습니다. `Build Android Korean Game APK` workflow가 `apkeep`으로 Google Play의 현재 APK/split APK를 취득하고 APKEditor로 standalone APK를 만든 뒤, APK 내부 `MochiyPopOne-Regular` TTF를 교체하고 `AstralPatchRuntime`을 주입해 장기간 유지할 동일 signing key로 재서명합니다. `tools/android/build_game_apk.py`는 이미 병합된 standalone APK를 입력으로 받습니다.
+INT_ANDROID는 Windows AstralAutoPatcher나 ADB를 사용하지 않습니다. `Build Android APK` workflow가 `apkeep`으로 Google Play의 현재 APK/split APK를 취득하고 APKEditor로 standalone APK를 만든 뒤, APK 내부 `MochiyPopOne-Regular` TTF를 교체하고 `AstralPatchRuntime`을 주입해 장기간 유지할 동일 signing key로 재서명합니다. `tools/android/build_game_apk.py`는 이미 병합된 standalone APK를 입력으로 받습니다.
 
 Addressables 패치는 APK 내부 `BootstrapActivity`가 자기 app-specific storage의 `com.unity.addressables`를 직접 처리합니다. 최초 설치 또는 새 인게임 리소스가 아직 내려받아지는 중이면 Unity 게임을 먼저 실행합니다. 게임 실행 중 `UpdateWatcher`는 새 catalog와 원본 bundle 준비 상태를 관찰하되 파일을 수정하지 않습니다. manifest의 모든 `sourceSize`/`sourceSha256`이 일치하면 재실행 안내를 표시하고, 다음 실행에서 Unity 시작 전에 LANG/STR/TMP bundle을 검증/백업/교체합니다.
 
@@ -223,6 +223,6 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 5. 현재 revision에 새 `-pre`가 필요한데 이미 revision이 processed 상태라면 번역 상태를 확인한 뒤 `Release Patch` 버튼으로 현재 revision의 정식 release를 생성.
 6. `patch-index/release-index.json`에 `channel=release` entry가 생성됐는지 확인.
 7. `Build Patcher`로 `AstralAutoPatcher.exe`를 만들고 Steam install/update/remove 및 `astral://` URI를 실게임에서 검증.
-8. `Build Android Korean Game APK`가 Google Play에서 현재 APK를 자동 취득·병합·패치하는지 확인하고, 동일 signing key 유지 및 최초/인게임 Addressables 다운로드 후 재실행 패치를 실기기에서 검증.
+8. `Build Android APK`가 Google Play에서 현재 APK를 자동 취득·병합·패치하는지 확인하고, 동일 signing key 유지 및 최초/인게임 Addressables 다운로드 후 재실행 패치를 실기기에서 검증.
 9. 이후 게임 revision 변경은 GCP Scheduler -> `Check Game` -> `-pre` 자동 생성으로 운영.
 10. 번역 완료 시에만 `Release Patch` 버튼으로 정식 `-release`를 생성.

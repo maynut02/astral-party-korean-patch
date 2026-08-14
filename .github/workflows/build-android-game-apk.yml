@@ -1,4 +1,4 @@
-name: Build Android Korean Game APK
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-35" \
             "build-tools;35.0.0"
           python -m pip install -e './builder[dev]'
