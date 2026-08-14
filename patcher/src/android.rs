@@ -445,10 +445,14 @@ fn ensure_platform_tools(state_root: &Path) -> Result<PathBuf, AndroidError> {
         file.write_all(&buffer[..read])?;
     }
     file.sync_all()?;
+    // Close the downloaded ZIP before another Windows process tries to open it.
+    // Keeping the Rust file handle alive here can make Expand-Archive fail while
+    // still leaving an empty extraction directory behind.
+    drop(file);
     fs::create_dir_all(&extract_root)?;
 
     let script = format!(
-        "Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force",
+        "$ErrorActionPreference = 'Stop'; try {{ Expand-Archive -LiteralPath '{}' -DestinationPath '{}' -Force -ErrorAction Stop }} catch {{ [Console]::Error.WriteLine($_.Exception.Message); exit 1 }}",
         escape_powershell_literal(&archive),
         escape_powershell_literal(&extract_root)
     );
