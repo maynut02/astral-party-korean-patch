@@ -819,7 +819,11 @@ fn perform_android_install(
                 last_draw = Instant::now();
             }
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            let message = error.to_string();
+            app.android_progress.status = format!("실패: {message}");
+            message
+        })
 }
 
 fn perform_install(
@@ -903,8 +907,8 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(11),
-            Constraint::Min(9),
+            Constraint::Length(10),
+            Constraint::Min(10),
             Constraint::Length(3),
         ])
         .split(area);
@@ -935,29 +939,72 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .device
         .clone()
         .unwrap_or_else(|| "USB / MuMu / BlueStacks / LDPlayer 자동 감지".into());
-    let rows = [
-        status_row("Patcher 경로", app.installed_exe.display().to_string()),
-        status_row("Android 기기", android_device),
-        status_row("Android 상태", app.android_progress.status.clone()),
-        status_row("Android installer", PLAY_INSTALLER_PACKAGE.into()),
-        status_row("Steam route", route.as_str().to_string()),
-        status_row("Steam 실행 경로", display_steam_route_path(&app.settings)),
-        status_row("LocalLow 경로", display_path(app.settings.locallow_root())),
-        status_row("Steam 게임", format!("{game_version} · catalog {catalog}")),
-        status_row("Steam 패치", installed),
-    ];
+
     let title = format!(" AstralAutoPatcher v{} ", env!("CARGO_PKG_VERSION"));
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(18),
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(6),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new(status_text_line(
+            "Patcher 경로",
+            app.installed_exe.display().to_string(),
+        )),
+        rows[0],
+    );
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(48),
             Constraint::Length(2),
-            Constraint::Min(1),
-        ],
-    )
-    .column_spacing(0)
-    .block(Block::default().borders(Borders::ALL).title(title));
-    frame.render_widget(table, area);
+            Constraint::Percentage(52),
+        ])
+        .split(rows[2]);
+
+    let android = Text::from(vec![
+        Line::from(Span::styled(
+            "Android",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        status_text_line("기기", android_device),
+        status_text_line("상태", app.android_progress.status.clone()),
+        status_text_line("설치 소스", PLAY_INSTALLER_PACKAGE.into()),
+    ]);
+    frame.render_widget(Paragraph::new(android), columns[0]);
+
+    let steam = Text::from(vec![
+        Line::from(Span::styled(
+            "PC (Steam)",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        status_text_line("Route", route.as_str().to_string()),
+        status_text_line("실행 경로", display_steam_route_path(&app.settings)),
+        status_text_line("LocalLow", display_path(app.settings.locallow_root())),
+        status_text_line("게임", format!("{game_version} · catalog {catalog}")),
+        status_text_line("패치", installed),
+    ]);
+    frame.render_widget(Paragraph::new(steam), columns[2]);
+}
+
+fn status_text_line(label: &'static str, value: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(label, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" : "),
+        Span::raw(value),
+    ])
 }
 
 fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
@@ -1426,14 +1473,6 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .alignment(Alignment::Center),
         area,
     );
-}
-
-fn status_row(label: &'static str, value: String) -> Row<'static> {
-    Row::new(vec![
-        Cell::from(label).style(Style::default().add_modifier(Modifier::BOLD)),
-        Cell::from(":"),
-        Cell::from(value),
-    ])
 }
 
 fn format_bytes(bytes: u64) -> String {

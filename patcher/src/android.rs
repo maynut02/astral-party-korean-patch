@@ -229,9 +229,17 @@ impl AndroidService {
         F: FnMut(AndroidProgress),
     {
         progress(AndroidProgress::PreparingAdb);
-        let adb = ensure_platform_tools(&self.state_root)?;
+        let (primary_adb, platform_tools_error) = match ensure_platform_tools(&self.state_root) {
+            Ok(adb) => (Some(adb), None),
+            Err(error) => (None, Some(error)),
+        };
         progress(AndroidProgress::DiscoveringDevices);
-        let devices = discover_devices(&adb)?;
+        let devices = discover_devices(primary_adb.as_deref())?;
+        if devices.is_empty()
+            && let Some(error) = platform_tools_error
+        {
+            return Err(error);
+        }
         let device = select_target_device(&devices)?;
         progress(AndroidProgress::DeviceSelected {
             name: device.display_name(),
@@ -451,12 +459,16 @@ fn ensure_platform_tools(state_root: &Path) -> Result<PathBuf, AndroidError> {
     if !output.status.success() {
         return Err(AndroidError::PlatformTools(output_text(&output)));
     }
-    let extracted = extract_root.join("platform-tools");
-    if !extracted.join("adb.exe").is_file() {
-        return Err(AndroidError::PlatformTools(
-            "downloaded archive does not contain platform-tools/adb.exe".into(),
-        ));
-    }
+    let candidates = find_named_files(&extract_root, "adb.exe", 4)?;
+    let extracted = candidates
+        .into_iter()
+        .find(|candidate| adb_works(candidate))
+        .and_then(|candidate| candidate.parent().map(Path::to_path_buf))
+        .ok_or_else(|| {
+            AndroidError::PlatformTools(
+                "압축을 해제했지만 실행 가능한 adb.exe를 찾지 못했습니다".into(),
+            )
+        })?;
     let _ = fs::remove_dir_all(&tools_root);
     fs::rename(&extracted, &tools_root)?;
     let _ = fs::remove_dir_all(&extract_root);
@@ -472,6 +484,34 @@ fn ensure_platform_tools(state_root: &Path) -> Result<PathBuf, AndroidError> {
 #[cfg(not(windows))]
 fn ensure_platform_tools(_state_root: &Path) -> Result<PathBuf, AndroidError> {
     Err(AndroidError::UnsupportedPlatform)
+}
+
+#[cfg(any(windows, test))]
+fn find_named_files(
+    root: &Path,
+    file_name: &str,
+    max_depth: usize,
+) -> Result<Vec<PathBuf>, std::io::Error> {
+    let mut matches = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0_usize)];
+    while let Some((directory, depth)) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_file()
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(file_name)
+            {
+                matches.push(path);
+            } else if file_type.is_dir() && depth < max_depth {
+                pending.push((path, depth + 1));
+            }
+        }
+    }
+    Ok(matches)
 }
 
 #[cfg(windows)]
@@ -494,13 +534,16 @@ struct AdbProvider {
     mumu_probe: bool,
 }
 
-fn discover_devices(primary_adb: &Path) -> Result<Vec<AndroidDevice>, AndroidError> {
-    let mut providers = vec![AdbProvider {
-        name: "Android USB/ADB".into(),
-        adb_path: primary_adb.to_owned(),
-        emulator: false,
-        mumu_probe: false,
-    }];
+fn discover_devices(primary_adb: Option<&Path>) -> Result<Vec<AndroidDevice>, AndroidError> {
+    let mut providers = Vec::new();
+    if let Some(primary_adb) = primary_adb {
+        providers.push(AdbProvider {
+            name: "Android USB/ADB".into(),
+            adb_path: primary_adb.to_owned(),
+            emulator: false,
+            mumu_probe: false,
+        });
+    }
     providers.extend(app_player_providers());
 
     let mut unique = BTreeMap::<String, AndroidDevice>::new();
@@ -898,6 +941,20 @@ mod tests {
         assert_eq!(devices[0].kind, AndroidDeviceKind::Physical);
         assert_eq!(devices[1].kind, AndroidDeviceKind::Emulator);
         assert_eq!(devices[2].state, AndroidDeviceState::Unauthorized);
+    }
+
+    #[test]
+    fn finds_adb_inside_nested_platform_tools_layout() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let nested = temp
+            .path()
+            .join("platform-tools_r37.0.1-windows")
+            .join("platform-tools");
+        fs::create_dir_all(&nested).expect("create nested tools");
+        fs::write(nested.join("adb.exe"), b"adb").expect("write adb");
+
+        let matches = find_named_files(temp.path(), "adb.exe", 4).expect("search");
+        assert_eq!(matches, vec![nested.join("adb.exe")]);
     }
 
     #[test]
