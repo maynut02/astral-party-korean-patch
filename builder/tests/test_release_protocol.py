@@ -46,6 +46,38 @@ def test_manifest_is_valid_against_shared_schema(tmp_path: Path) -> None:
     jsonschema.Draft202012Validator(schema).validate(manifest.as_dict())
 
 
+def test_manifest_records_original_source_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.write_bytes(b"original-addressables")
+    payload = tmp_path / "payload"
+    payload.write_bytes(b"patched-addressables")
+    transport = gzip_payload(payload, tmp_path / "payload.gz")
+    item = ManifestFile.from_paths(
+        payload,
+        transport.path,
+        target="addressables",
+        path="root/hash/__data",
+        download_url="https://example.test/payload.gz",
+        source=source,
+    )
+    raw = item.as_dict()
+    assert raw["sourceSize"] == len(b"original-addressables")
+    assert len(str(raw["sourceSha256"])) == 64
+    schema = json.loads((ROOT / "schemas/patch-manifest.schema.json").read_text())
+    manifest = PatchManifest(
+        patch=PatchMetadata(
+            version="v-test",
+            channel="develop",
+            route="INT_ANDROID",
+            build_id="build-test",
+            translation_fingerprint="a" * 64,
+        ),
+        game=TargetGame(version="3.2.0", revision="1", catalog_hash="b" * 32),
+        files=(item,),
+    )
+    jsonschema.Draft202012Validator(schema).validate(manifest.as_dict())
+
+
 def test_manifest_rejects_path_traversal(tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     item = manifest.files[0]

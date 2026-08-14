@@ -75,6 +75,8 @@ class ManifestFile:
     compression: Compression
     sha256: str
     size: int
+    source_sha256: str | None = None
+    source_size: int | None = None
 
     @classmethod
     def from_paths(
@@ -87,9 +89,11 @@ class ManifestFile:
         download_url: str,
         operation: Operation = "replace",
         compression: Compression = "gzip",
+        source: str | Path | None = None,
     ) -> ManifestFile:
         payload_sha256, payload_size = _hash_and_size(payload)
         download_sha256, download_size = _hash_and_size(transport)
+        source_sha256, source_size = _hash_and_size(source) if source is not None else (None, None)
         return cls(
             target=target,
             path=path.replace("\\", "/"),
@@ -100,6 +104,8 @@ class ManifestFile:
             compression=compression,
             sha256=payload_sha256,
             size=payload_size,
+            source_sha256=source_sha256,
+            source_size=source_size,
         )
 
     def validate(self) -> None:
@@ -116,13 +122,19 @@ class ManifestFile:
             raise ValueError(f"unsupported transport compression: {self.compression}")
         _validate_sha256(self.download_sha256, "download sha256")
         _validate_sha256(self.sha256, "file sha256")
+        if (self.source_sha256 is None) != (self.source_size is None):
+            raise ValueError("manifest source sha256 and size must be provided together")
+        if self.source_sha256 is not None:
+            _validate_sha256(self.source_sha256, "source sha256")
+            if self.source_size is None or self.source_size <= 0:
+                raise ValueError("manifest source size must be positive")
         if self.download_size <= 0:
             raise ValueError("manifest download size must be positive")
         if self.size <= 0:
             raise ValueError("manifest file size must be positive")
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "target": self.target,
             "path": self.path,
             "operation": self.operation,
@@ -133,6 +145,10 @@ class ManifestFile:
             "sha256": self.sha256,
             "size": self.size,
         }
+        if self.source_sha256 is not None and self.source_size is not None:
+            result["sourceSha256"] = self.source_sha256
+            result["sourceSize"] = self.source_size
+        return result
 
 
 @dataclass(frozen=True, slots=True)

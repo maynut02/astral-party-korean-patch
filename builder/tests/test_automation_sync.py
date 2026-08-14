@@ -22,6 +22,20 @@ def test_loads_int_steam_sync_config() -> None:
     assert config.tmp_catalog_key == "Afacad-Regular_TMP"
 
 
+def test_loads_int_android_sync_config() -> None:
+    config = load_route_sync_config(ROOT / "routes/int_android.yaml")
+    assert config.route == "INT_ANDROID"
+    assert config.platform == "android"
+    assert config.canonical_fallback_route == "INT_STEAM"
+    assert config.lang_assets == {"jp": "Japanese"}
+    assert config.lang_target == "jp"
+    assert config.str_catalog_key == "GameData_INT"
+    assert config.str_target_field == "jp"
+    assert config.tmp_catalog_key == "MochiyPopOne-Regular_TMP"
+    assert config.tmp_asset_name == "MochiyPopOne-Regular_TMP"
+    assert config.legacy_font_name == "MochiyPopOne-Regular"
+
+
 def test_route_sync_config_allows_route_specific_language_assets(tmp_path: Path) -> None:
     path = tmp_path / "route.yaml"
     path.write_text(
@@ -127,13 +141,9 @@ def test_canonical_fallback_only_fills_missing_source_fields(tmp_path: Path) -> 
         empty_str_assets=(),
         canonical_fallback_route="INT_STEAM",
     )
-    conn = _FallbackConnection(
-        [("str", "STRCard", "1", "国际简中", "English", "日本語", "繁體")]
-    )
+    conn = _FallbackConnection([("str", "STRCard", "1", "国际简中", "English", "日本語", "繁體")])
     units = _canonicalize_units_from_fallback(conn, prepared)
-    assert units[0].source == SourceStrings(
-        cn_s="中国值", en="English", jp="日本語", cn_t="繁體"
-    )
+    assert units[0].source == SourceStrings(cn_s="中国值", en="English", jp="日本語", cn_t="繁體")
 
 
 def test_sync_output_contract(tmp_path: Path) -> None:

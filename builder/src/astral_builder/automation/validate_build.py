@@ -182,7 +182,7 @@ def validate_built_patch(
         ("str", saw_str),
         ("tmp-font", saw_tmp),
     ]
-    if config.legacy_font_name is not None:
+    if config.legacy_font_name is not None and config.platform != "android":
         required.append(("legacy-font", saw_legacy))
     missing = [name for name, present in required if not present]
     if missing:

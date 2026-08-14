@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       route:
-        description: Steam route to publish
+        description: Route to publish
         required: true
         default: INT_STEAM
         type: choice
         options:
           - INT_STEAM
           - CN_STEAM
+          - INT_ANDROID
 
 concurrency:
   group: release-${{ inputs.route }}
@@ -58,6 +59,10 @@ jobs:
             CN_STEAM)
               echo 'route_config=routes/cn_steam.yaml' >> "$GITHUB_OUTPUT"
               echo 'tag_suffix=-cn-steam' >> "$GITHUB_OUTPUT"
+              ;;
+            INT_ANDROID)
+              echo 'route_config=routes/int_android.yaml' >> "$GITHUB_OUTPUT"
+              echo 'tag_suffix=-int-android' >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unsupported release route: $ROUTE" >&2
@@ -156,6 +161,7 @@ jobs:
 
   legacy:
     needs: resolve
+    if: inputs.route != 'INT_ANDROID'
     uses: ./.github/workflows/fetch-legacy-data.yml
     with:
       route: ${{ inputs.route }}
@@ -163,6 +169,10 @@ jobs:
 
   build-release:
     needs: [resolve, legacy]
+    if: >-
+      always() &&
+      needs.resolve.result == 'success' &&
+      (inputs.route == 'INT_ANDROID' || needs.legacy.result == 'success')
     uses: ./.github/workflows/build-patch.yml
     with:
       revision_id: ${{ needs.resolve.outputs.revision_id }}

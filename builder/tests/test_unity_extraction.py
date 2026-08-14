@@ -2,7 +2,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from astral_builder.extract.unity import UnityExtractionError, extract_text_assets
+from astral_builder.extract.unity import (
+    UnityExtractionError,
+    extract_object_names,
+    extract_text_assets,
+)
 
 
 @dataclass
@@ -37,6 +41,12 @@ def _loader(_path: str) -> _Environment:
             _Object("TextAsset", _Asset("STRCard", b"str")),
             _Object("Texture2D", _Asset("ignored", b"texture")),
         ]
+    )
+
+
+def test_extracts_object_names_by_serialized_type() -> None:
+    assert extract_object_names("fixture.bundle", type_name="Texture2D", loader=_loader) == (
+        "ignored",
     )
 
 

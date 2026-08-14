@@ -240,3 +240,14 @@ revision changed
 - GitHub Actions pipeline
 
 대규모 작업 중에도 테스트 가능한 독립 단계가 완성되면 추가 commit을 허용한다.
+
+
+## INT_ANDROID Android 내장 패처
+
+- Windows AstralAutoPatcher의 INT_ANDROID/ADB 로직은 두지 않음.
+- Google Play에서 `apkeep`으로 APK/split APK를 취득하고 APKEditor로 병합한 뒤 `assets/bin/Data/data.unity3d` legacy TTF를 빌드 시 교체.
+- 기존 게임 launcher 앞에 `com.astralpatch.runtime.BootstrapActivity`를 두고 runtime DEX를 APK에 주입.
+- Addressables patch release는 LANG/STR/TMP bundle만 포함하고 각 entry에 source SHA-256/size를 기록.
+- 최초 설치 또는 인게임 resource update 중에는 게임 자체 다운로드를 우선하고, 다운로드 완료 후 다음 실행에서 Unity 시작 전에 patch.
+- APK가 바뀌지 않는 catalog-only update는 APK 재배포 없이 새 INT_ANDROID patch release만 생성.
+- Android APK는 저장소에 보관한 고정 private key가 아니라 Actions Secrets/로컬 `.secrets`의 장기 signing key로 계속 서명.

@@ -27,6 +27,28 @@ def _as_bytes(value: Any) -> bytes:
         raise UnityExtractionError(f"unsupported TextAsset script type: {type(value)!r}") from exc
 
 
+def extract_object_names(
+    bundle_path: str | Path,
+    *,
+    type_name: str,
+    loader: Loader = UnityPy.load,
+) -> tuple[str, ...]:
+    """Return non-empty Unity object names for one serialized type."""
+    environment = loader(str(bundle_path))
+    result: list[str] = []
+    for obj in environment.objects:
+        if getattr(getattr(obj, "type", None), "name", "") != type_name:
+            continue
+        try:
+            asset = obj.read()
+        except Exception:
+            continue
+        name = str(getattr(asset, "m_Name", "") or "").strip()
+        if name:
+            result.append(name)
+    return tuple(result)
+
+
 def extract_text_assets(
     bundle_path: str | Path,
     *,

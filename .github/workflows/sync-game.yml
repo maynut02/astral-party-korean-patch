@@ -35,6 +35,7 @@ on:
         options:
           - routes/int_steam.yaml
           - routes/cn_steam.yaml
+          - routes/int_android.yaml
 
 permissions:
   contents: read

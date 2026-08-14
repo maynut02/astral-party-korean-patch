@@ -16,7 +16,7 @@ from astral_builder.database.builds import (
     set_build_status,
 )
 from astral_builder.database.repository import load_translation_snapshot
-from astral_builder.extract.unity import extract_text_assets
+from astral_builder.extract.unity import extract_object_names, extract_text_assets
 from astral_builder.game.source import GameSource, GameSourceClient
 from astral_builder.patch.builder import patch_lang_bundle, patch_str_bundle
 from astral_builder.patch.fonts import patch_legacy_font, patch_tmp_font_bundle
@@ -234,6 +234,7 @@ def build_patch(
             target="addressables",
             path=lang_item.resolved.cache_relative_path,
             download_url=_download_url(asset_base_url, lang_transport.name),
+            source=lang_item.path,
         )
     )
 
@@ -267,15 +268,23 @@ def build_patch(
             target="addressables",
             path=str_item.resolved.cache_relative_path,
             download_url=_download_url(asset_base_url, str_transport.name),
+            source=str_item.path,
         )
     )
 
     tmp_items = _download_target(
         "tmp-font", catalog, source, config.tmp_catalog_key, stored, bundle_downloader, bundles_root
     )
-    if len(tmp_items) != 1:
-        raise RuntimeError("expected exactly one remote TMP font bundle")
-    tmp_item = tmp_items[0]
+    tmp_candidates = [
+        item
+        for item in tmp_items
+        if config.tmp_asset_name in extract_object_names(item.path, type_name="MonoBehaviour")
+        and f"{config.tmp_asset_name} Atlas"
+        in extract_object_names(item.path, type_name="Texture2D")
+    ]
+    if len(tmp_candidates) != 1:
+        raise RuntimeError("expected exactly one remote bundle containing the TMP font assets")
+    tmp_item = tmp_candidates[0]
     resource_root = Path(resources_root or config.resources_root)
     tmp_release_name = _release_name("tmp-font", tmp_item.resolved)
     tmp_out = payloads / tmp_release_name
@@ -296,10 +305,11 @@ def build_patch(
             target="addressables",
             path=tmp_item.resolved.cache_relative_path,
             download_url=_download_url(asset_base_url, tmp_transport.name),
+            source=tmp_item.path,
         )
     )
 
-    if config.legacy_font_name is not None:
+    if config.legacy_font_name is not None and config.platform != "android":
         if legacy_data_path is None:
             raise RuntimeError(
                 "legacy data.unity3d input is required for this route before a complete patch "
@@ -322,6 +332,7 @@ def build_patch(
                 target="game-data",
                 path="data.unity3d",
                 download_url=_download_url(asset_base_url, legacy_transport.name),
+                source=legacy_data_path,
             )
         )
 
