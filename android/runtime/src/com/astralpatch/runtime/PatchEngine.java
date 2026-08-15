@@ -229,12 +229,14 @@ final class PatchEngine {
     static final class WatchProbe {
         final WatchStatus status;
         final String catalogHash;
-        final String fingerprint;
+        final List<String> paths;
 
-        WatchProbe(WatchStatus status, String catalogHash, String fingerprint) {
+        WatchProbe(WatchStatus status, String catalogHash, List<String> paths) {
             this.status = status;
             this.catalogHash = catalogHash;
-            this.fingerprint = fingerprint;
+            this.paths = paths == null
+                    ? Collections.<String>emptyList()
+                    : Collections.unmodifiableList(new ArrayList<>(paths));
         }
     }
 
@@ -423,21 +425,17 @@ final class PatchEngine {
         }
 
         File bundleRoot = assetBundleCacheRoot(context, config);
-        StringBuilder fingerprint = new StringBuilder(catalog.hash);
         for (String path : paths) {
             File file = resolveBundleFile(bundleRoot, path);
             if (file == null || file.length() <= 0) {
-                return new WatchProbe(WatchStatus.WAITING, catalog.hash, null);
+                return new WatchProbe(WatchStatus.WAITING, catalog.hash, paths);
             }
-            fingerprint
-                    .append('\n')
-                    .append(path)
-                    .append(':')
-                    .append(file.length())
-                    .append(':')
-                    .append(file.lastModified());
         }
-        return new WatchProbe(WatchStatus.READY, catalog.hash, fingerprint.toString());
+        return new WatchProbe(WatchStatus.READY, catalog.hash, paths);
+    }
+
+    static File watchBundleRoot(Context context, RuntimeConfig config) {
+        return assetBundleCacheRoot(context, config);
     }
 
     static String currentCatalogHash(Context context, RuntimeConfig config) {

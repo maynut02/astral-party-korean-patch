@@ -254,10 +254,17 @@ def test_android_runtime_shows_restart_screen_when_patch_becomes_ready() -> None
     assert "httpGetBytes" not in watcher
     assert "HttpURLConnection" not in watcher
     assert "CATALOG_POLL_MS = 1000L" in watcher
-    assert "BUNDLE_POLL_MS = 250L" in watcher
-    assert "BUNDLE_STABLE_MS = 1000L" in watcher
-    assert "file.length()" in engine
-    assert "file.lastModified()" in engine
+    assert "FileObserver.CLOSE_WRITE" in watcher
+    assert "FileObserver.MOVED_TO" in watcher
+    assert "FileObserver.CREATE" in watcher
+    assert 'new File("/proc/self/fd")' in watcher
+    assert 'new File("/proc/self/fdinfo", descriptorName)' in watcher
+    assert "WriterState.UNKNOWN" in watcher
+    assert "eventCompletedLogicalPaths" in watcher
+    assert "BUNDLE_STABLE_MS" not in watcher
+    assert "BUNDLE_POLL_MS" not in watcher
+    assert "file.lastModified()" not in engine
+    assert "static File watchBundleRoot" in engine
     assert "new Intent(app, RestartRequiredActivity.class)" in watcher
     assert "Toast.makeText" not in watcher
     assert 'title.setText("한글패치 준비 완료")' in restart
