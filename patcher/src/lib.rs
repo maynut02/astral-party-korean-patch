@@ -2,6 +2,7 @@ pub mod android;
 pub mod cli;
 pub mod game;
 pub mod install;
+pub mod logging;
 pub mod network;
 pub mod protocol;
 pub mod registration;
@@ -24,8 +25,8 @@ pub use game::{
 };
 pub use install::{
     ApplyPhase, ApplyProgress, InstallError, InstallRoots, InstallSummary, OwnershipManifest,
-    RemoveReport, install_patch, install_patch_with_progress, installed_patch_change_count,
-    remove_patch,
+    RemoveIssue, RemoveIssueKind, RemoveIssueSummary, RemoveReport, install_patch,
+    install_patch_with_progress, installed_patch_change_count, remove_patch,
 };
 pub use network::{NetworkError, ReleaseClient, StageProgress};
 pub use protocol::{
@@ -33,8 +34,9 @@ pub use protocol::{
 };
 pub use service::{
     InstallOutcome, InstallProgress, InstalledPatchInfo, PatchFileInfo, PatchStateResetReport,
-    PatcherPaths, RELEASE_CHANNEL, RouteStatePaths, ServiceError, install_latest_compatible,
-    install_latest_compatible_with_progress, install_roots, installed_patch_info, load_ownership,
+    PatcherPaths, RELEASE_CHANNEL, RouteStatePaths, ServiceError, StateMigrationItem,
+    StateMigrationReport, install_latest_compatible, install_latest_compatible_with_progress,
+    install_roots, installed_patch_info, load_ownership, migrate_legacy_state,
     remove_installed_patch, reset_patch_state,
 };
 pub use settings::{AppSettings, SettingsError};

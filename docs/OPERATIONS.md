@@ -436,3 +436,11 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 기존 패치가 설치된 뒤 Steam 파일 무결성 검사, 게임 재다운로드/업데이트, 수동 파일 변경 등으로 관리 중인 파일의 SHA-256이 달라지면 AutoPatcher는 기존 backup을 강제로 복원하지 않습니다. 대신 Steam 패치 설치/업데이트 화면에서 `패치 상태 초기화 후 다시 설치`를 선택할 수 있습니다.
 
 이 초기화는 게임 디렉터리를 수정하지 않고 해당 route의 ownership manifest, backup, staging만 삭제합니다. 이후 현재 게임 파일을 새 기준으로 다시 백업하고 패치를 설치합니다. 다른 모드나 수동 수정이 남아 있는 상태에서 실행하면 그 파일이 원본으로 취급될 수 있으므로, 필요한 경우 먼저 Steam 파일 무결성 검사를 완료한 뒤 사용합니다.
+
+### AutoPatcher 로컬 상태와 진단 로그
+
+AutoPatcher 0.8.7부터 route별 상태를 `%LOCALAPPDATA%\AstralAutoPatcher\routes` 아래에 완전히 분리합니다. Steam 글로벌은 `routes\int-steam`, Steam 중국은 `routes\cn-steam`, Android APK 캐시와 관리형 ADB Platform-Tools는 `routes\int-android`를 사용합니다. 각 Steam route의 `installed.json`, `backup`, `staging`은 서로의 하위 경로가 아니므로 다른 route의 정리 작업에 의해 삭제되지 않습니다. 기존 루트의 `installed.json`/`backup`/`staging`, `installed-cn-steam.json` 및 `backup\cn-steam`/`staging\cn-steam`, `android` 및 Android용 `tools` 디렉터리는 새 버전 최초 실행 시 새 구조로 자동 이동합니다. Steam ownership/backup의 새 경로와 기존 경로가 동시에 존재하면 덮어쓰지 않고 충돌 오류로 중단합니다. Android APK/ADB 캐시는 재생성 가능한 데이터이므로 v0.8.6의 새 캐시가 이미 존재하면 더 오래된 루트 캐시는 폐기합니다.
+
+Steam 패치 제거 preflight는 `외부 변경`, `대상 파일 누락`, `백업 누락`, `백업 SHA-256 불일치`를 구분합니다. 안전한 원본 복원이 불가능하면 게임 파일은 변경하지 않고 복구 선택 화면을 표시합니다. `패치 기록만 초기화`는 route의 `installed.json`, `backup`, `staging`만 삭제하며 게임 파일은 복원하지 않으므로, 필요한 경우 먼저 Steam 파일 무결성 검사를 완료합니다.
+
+실행 로그는 `%LOCALAPPDATA%\AstralAutoPatcher\logs`에 세션별 `autopatcher-<UTC 시각>-<PID>.log`로 기록합니다. 시작/업데이트/상태 마이그레이션, Steam 및 Android 작업, 패치 제거 진단을 기록하며 최근 7일을 보관합니다. 한 세션 로그는 최대 4 MiB로 제한됩니다. 프로그램 설정의 `로그 폴더 열기`에서 해당 폴더를 바로 열 수 있습니다.

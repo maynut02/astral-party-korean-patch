@@ -14,6 +14,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::logging;
+
 pub const ANDROID_PACKAGE: &str = "com.feimo.astralpartyjpn";
 pub const PLAY_INSTALLER_PACKAGE: &str = "com.android.vending";
 const INDEX_SCHEMA_VERSION: u32 = 1;
@@ -235,6 +237,7 @@ impl AndroidService {
     where
         F: FnMut(AndroidProgress),
     {
+        logging::info("Android install started");
         progress(AndroidProgress::PreparingAdb);
         let (primary_adb, platform_tools_error) = match ensure_platform_tools(&self.state_root) {
             Ok(adb) => (Some(adb), None),
@@ -242,6 +245,10 @@ impl AndroidService {
         };
         progress(AndroidProgress::DiscoveringDevices);
         let devices = dedupe_same_devices(discover_devices(primary_adb.as_deref())?);
+        logging::info(format!(
+            "Android device discovery: {} candidate(s)",
+            devices.len()
+        ));
         if devices.is_empty()
             && let Some(error) = platform_tools_error
         {
@@ -253,6 +260,11 @@ impl AndroidService {
                 return Ok(AndroidInstallOutcome::NeedsDeviceSelection { devices });
             }
         };
+        logging::info(format!(
+            "Android device selected: name={} provider={}",
+            device.display_name(),
+            device.provider
+        ));
         progress(AndroidProgress::DeviceSelected {
             name: device.display_name(),
         });
@@ -261,11 +273,23 @@ impl AndroidService {
         let client = http_client()?;
         let index = fetch_android_index(&client, &self.index_url)?;
         index.validate(&self.release_base_url)?;
+        logging::info(format!(
+            "Android APK resolved: game_version={} size={}",
+            index.game_version, index.size
+        ));
         let apk = download_android_apk(&client, &self.state_root, &index, |current, total| {
             progress(AndroidProgress::DownloadingApk { current, total })
         })?;
 
         let installed = package_info(&device, ANDROID_PACKAGE)?;
+        logging::info(format!(
+            "Android existing package: installed={} version={}",
+            installed.is_some(),
+            installed
+                .as_ref()
+                .and_then(|info| info.version_name.as_deref())
+                .unwrap_or("<none>")
+        ));
         if force_reinstall && installed.is_some() {
             progress(AndroidProgress::RemovingOfficialInstall);
             uninstall_package(&device, ANDROID_PACKAGE)?;
@@ -289,6 +313,10 @@ impl AndroidService {
         progress(AndroidProgress::Verifying);
         let actual_version =
             verify_install(&device, &index.installer_package_name, &index.game_version)?;
+        logging::info(format!(
+            "Android install verified: device={} version={actual_version}",
+            device.display_name()
+        ));
         Ok(AndroidInstallOutcome::Installed {
             device,
             game_version: actual_version,
@@ -337,7 +365,7 @@ fn download_android_apk<F>(
 where
     F: FnMut(u64, u64),
 {
-    let root = state_root.join("android").join("apk");
+    let root = state_root.join("routes").join("int-android").join("apk");
     fs::create_dir_all(&root)?;
     let destination = root.join(format!(
         "AstralParty_INT_ANDROID-{}.apk",
@@ -420,13 +448,14 @@ fn sha256_file(path: &Path) -> Result<String, std::io::Error> {
 
 #[cfg(windows)]
 fn ensure_platform_tools(state_root: &Path) -> Result<PathBuf, AndroidError> {
-    let tools_root = state_root.join("tools").join("platform-tools");
+    let android_root = state_root.join("routes").join("int-android");
+    let tools_root = android_root.join("tools").join("platform-tools");
     let adb = tools_root.join("adb.exe");
     if adb.is_file() && adb_works(&adb) {
         return Ok(adb);
     }
 
-    let download_root = state_root.join("tools");
+    let download_root = android_root.join("tools");
     fs::create_dir_all(&download_root)?;
     let archive = download_root.join("platform-tools-windows.download.zip");
     let extract_root = download_root.join("platform-tools-extract");

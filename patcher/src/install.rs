@@ -94,10 +94,70 @@ pub struct ApplyProgress {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveIssueKind {
+    ModifiedExternally,
+    TargetMissing,
+    BackupMissing,
+    BackupHashMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveIssue {
+    pub target: InstallTarget,
+    pub path: String,
+    pub kind: RemoveIssueKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemoveIssueSummary {
+    pub modified_externally: usize,
+    pub target_missing: usize,
+    pub backup_missing: usize,
+    pub backup_hash_mismatch: usize,
+}
+
+impl RemoveIssueSummary {
+    pub fn total(self) -> usize {
+        self.modified_externally
+            + self.target_missing
+            + self.backup_missing
+            + self.backup_hash_mismatch
+    }
+}
+
+impl std::fmt::Display for RemoveIssueSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "외부 변경 {}, 파일 누락 {}, 백업 누락 {}, 백업 손상 {}",
+            self.modified_externally,
+            self.target_missing,
+            self.backup_missing,
+            self.backup_hash_mismatch
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoveReport {
     pub removed: usize,
     pub restored: usize,
-    pub skipped: usize,
+    pub issues: Vec<RemoveIssue>,
+}
+
+impl RemoveReport {
+    pub fn issue_summary(&self) -> RemoveIssueSummary {
+        let mut summary = RemoveIssueSummary::default();
+        for issue in &self.issues {
+            match issue.kind {
+                RemoveIssueKind::ModifiedExternally => summary.modified_externally += 1,
+                RemoveIssueKind::TargetMissing => summary.target_missing += 1,
+                RemoveIssueKind::BackupMissing => summary.backup_missing += 1,
+                RemoveIssueKind::BackupHashMismatch => summary.backup_hash_mismatch += 1,
+            }
+        }
+        summary
+    }
 }
 
 pub fn sha256_file(path: &Path) -> Result<String, io::Error> {
@@ -387,49 +447,72 @@ pub fn remove_patch(
         return Err(InstallError::OwnershipMismatch);
     }
 
-    // Preflight every owned path before mutating anything. If even one file changed outside the
-    // patcher, leave all remaining patch files untouched so uninstall/upgrade does not become
-    // partial.
-    let mut skipped = 0;
+    // Preflight every owned path before mutating anything. If any path is unsafe, leave all
+    // remaining patch files untouched so uninstall/upgrade never becomes partial.
+    let mut issues = Vec::new();
     for created in &ownership.created_files {
         let path = target_path(roots, created.target, &created.path)?;
         if path.exists() && sha256_file(&path)? != created.installed_sha256 {
-            skipped += 1;
+            issues.push(RemoveIssue {
+                target: created.target,
+                path: created.path.clone(),
+                kind: RemoveIssueKind::ModifiedExternally,
+            });
         }
     }
     for modified in &ownership.modified_files {
         let destination = target_path(roots, modified.target, &modified.path)?;
         if !destination.exists() {
-            skipped += 1;
+            issues.push(RemoveIssue {
+                target: modified.target,
+                path: modified.path.clone(),
+                kind: RemoveIssueKind::TargetMissing,
+            });
             continue;
         }
         let current_hash = sha256_file(&destination)?;
         if current_hash == modified.original_sha256 {
-            // Already restored, for example after an interrupted previous cleanup.
+            // Already restored, for example after Steam verification or an interrupted cleanup.
             continue;
         }
         if current_hash != modified.patched_sha256 {
-            skipped += 1;
+            issues.push(RemoveIssue {
+                target: modified.target,
+                path: modified.path.clone(),
+                kind: RemoveIssueKind::ModifiedExternally,
+            });
             continue;
         }
         validate_relative_path(&modified.backup_path)?;
         let backup = backup_root.join(&modified.backup_path);
-        if !backup.is_file() || sha256_file(&backup)? != modified.original_sha256 {
-            skipped += 1;
+        if !backup.is_file() {
+            issues.push(RemoveIssue {
+                target: modified.target,
+                path: modified.path.clone(),
+                kind: RemoveIssueKind::BackupMissing,
+            });
+            continue;
+        }
+        if sha256_file(&backup)? != modified.original_sha256 {
+            issues.push(RemoveIssue {
+                target: modified.target,
+                path: modified.path.clone(),
+                kind: RemoveIssueKind::BackupHashMismatch,
+            });
         }
     }
-    if skipped > 0 {
+    if !issues.is_empty() {
         return Ok(RemoveReport {
             removed: 0,
             restored: 0,
-            skipped,
+            issues,
         });
     }
 
     let mut report = RemoveReport {
         removed: 0,
         restored: 0,
-        skipped: 0,
+        issues: Vec::new(),
     };
     for created in &ownership.created_files {
         let path = target_path(roots, created.target, &created.path)?;
@@ -621,7 +704,7 @@ mod tests {
         let ownership: OwnershipManifest =
             serde_json::from_slice(&fs::read(&ownership_path).unwrap()).unwrap();
         let report = remove_patch(&ownership, &roots, &backup).unwrap();
-        assert_eq!(report.skipped, 1);
+        assert_eq!(report.issues.len(), 1);
         assert_eq!(fs::read(&destination).unwrap(), b"external-change");
     }
 
@@ -659,9 +742,78 @@ mod tests {
         let report = remove_patch(&ownership, &roots, &backup).unwrap();
         assert_eq!(report.removed, 0);
         assert_eq!(report.restored, 0);
-        assert_eq!(report.skipped, 1);
+        assert_eq!(report.issues.len(), 1);
         assert_eq!(fs::read(&safe).unwrap(), b"patched-safe");
         assert_eq!(fs::read(&changed).unwrap(), b"external-change");
+    }
+
+    #[test]
+    fn removal_diagnostics_distinguish_missing_target_backup_and_corrupt_backup() {
+        let temp = tempdir().unwrap();
+        let roots = roots(temp.path());
+        fs::create_dir_all(&roots.game_data).unwrap();
+        let backup_root = temp.path().join("backup");
+        fs::create_dir_all(backup_root.join("game-data")).unwrap();
+
+        let patched_hash = format!("{:x}", Sha256::digest(b"patched"));
+        let original_hash = format!("{:x}", Sha256::digest(b"original"));
+        fs::write(roots.game_data.join("backup-missing.bin"), b"patched").unwrap();
+        fs::write(roots.game_data.join("backup-corrupt.bin"), b"patched").unwrap();
+        fs::write(
+            backup_root.join("game-data/backup-corrupt.bin"),
+            b"not-original",
+        )
+        .unwrap();
+
+        let ownership = OwnershipManifest {
+            schema_version: 1,
+            patch_version: "v1".into(),
+            catalog_hash: "b".repeat(32),
+            created_files: vec![],
+            modified_files: vec![
+                OwnedModifiedFile {
+                    target: InstallTarget::GameData,
+                    path: "target-missing.bin".into(),
+                    original_sha256: original_hash.clone(),
+                    patched_sha256: patched_hash.clone(),
+                    backup_path: "game-data/target-missing.bin".into(),
+                },
+                OwnedModifiedFile {
+                    target: InstallTarget::GameData,
+                    path: "backup-missing.bin".into(),
+                    original_sha256: original_hash.clone(),
+                    patched_sha256: patched_hash.clone(),
+                    backup_path: "game-data/backup-missing.bin".into(),
+                },
+                OwnedModifiedFile {
+                    target: InstallTarget::GameData,
+                    path: "backup-corrupt.bin".into(),
+                    original_sha256: original_hash,
+                    patched_sha256: patched_hash,
+                    backup_path: "game-data/backup-corrupt.bin".into(),
+                },
+            ],
+        };
+
+        let report = remove_patch(&ownership, &roots, &backup_root).unwrap();
+        assert_eq!(
+            report.issue_summary(),
+            RemoveIssueSummary {
+                modified_externally: 0,
+                target_missing: 1,
+                backup_missing: 1,
+                backup_hash_mismatch: 1,
+            }
+        );
+        assert_eq!(report.issues.len(), 3);
+        assert_eq!(
+            fs::read(roots.game_data.join("backup-missing.bin")).unwrap(),
+            b"patched"
+        );
+        assert_eq!(
+            fs::read(roots.game_data.join("backup-corrupt.bin")).unwrap(),
+            b"patched"
+        );
     }
 
     #[test]
@@ -723,7 +875,7 @@ mod tests {
         let report = remove_patch(&ownership, &roots, &temp.path().join("backup")).unwrap();
         assert_eq!(report.removed, 0);
         assert_eq!(report.restored, 0);
-        assert_eq!(report.skipped, 0);
+        assert!(report.issues.is_empty());
         assert_eq!(fs::read(&destination).unwrap(), b"original");
     }
 }

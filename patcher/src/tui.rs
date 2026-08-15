@@ -1,5 +1,8 @@
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -20,7 +23,8 @@ use crate::android::{
     AndroidDevice, AndroidInstallOutcome, AndroidProgress, AndroidService, PLAY_INSTALLER_PACKAGE,
 };
 use crate::game::GameRoute;
-use crate::install::ApplyPhase;
+use crate::install::{ApplyPhase, RemoveIssueSummary};
+use crate::logging;
 use crate::service::{
     InstallOutcome, InstallProgress, PatchFileInfo, PatcherPaths, ServiceError,
     install_latest_compatible_with_progress, install_roots, installed_patch_info,
@@ -41,6 +45,8 @@ const MAIN_ITEMS: [&str; 5] = [
 const RESULT_ITEMS: [&str; 2] = ["메인 메뉴", "종료"];
 const REINSTALL_ITEMS: [&str; 2] = ["기존 앱 제거 후 계속", "취소하고 메인 메뉴"];
 const PATCH_STATE_RESET_ITEMS: [&str; 2] = ["패치 상태 초기화 후 다시 설치", "취소하고 메인 메뉴"];
+const REMOVE_STATE_RESET_ITEMS: [&str; 2] = ["패치 기록만 초기화", "취소하고 메인 메뉴"];
+const SETTINGS_ITEM_COUNT: usize = 6;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RemoteEndpoints {
@@ -83,6 +89,13 @@ impl OperationKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SteamInstallError {
     ExistingPatchChanged(usize),
+    ExistingPatchUnsafe(RemoveIssueSummary),
+    Other(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SteamRemoveError {
+    ExistingPatchUnsafe(RemoveIssueSummary),
     Other(String),
 }
 
@@ -92,7 +105,8 @@ enum OperationPhase {
     Running,
     NeedsDeviceSelection { devices: Vec<AndroidDevice> },
     NeedsReinstall { message: String },
-    NeedsPatchStateReset { changed_files: usize },
+    NeedsPatchStateReset { details: String },
+    NeedsRemoveStateReset { summary: RemoveIssueSummary },
     Finished { success: bool, message: String },
 }
 
@@ -157,6 +171,7 @@ enum HitTarget {
     Result(usize),
     Reinstall(usize),
     PatchStateReset(usize),
+    RemoveStateReset(usize),
     Device(usize),
 }
 
@@ -244,9 +259,14 @@ impl App {
             OperationKind::SteamInstall => self.install_progress = InstallUiProgress::default(),
             OperationKind::SteamRemove => {}
         }
+        let route = route_override.unwrap_or_else(|| self.settings.selected_route());
+        logging::info(format!(
+            "operation requested: kind={kind:?} route={}",
+            route.as_str()
+        ));
         self.operation = Some(OperationState {
             kind,
-            route: route_override.unwrap_or_else(|| self.settings.selected_route()),
+            route,
             protocol_request,
             force_reinstall: false,
             android_serial: None,
@@ -377,20 +397,22 @@ impl App {
         }
     }
 
-    fn perform_remove(&self, route: GameRoute) -> Result<String, String> {
+    fn perform_remove(&self, route: GameRoute) -> Result<String, SteamRemoveError> {
         let game = self
             .settings
             .installation_for(route)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| SteamRemoveError::Other(error.to_string()))?;
         let roots = install_roots(&game);
-        match remove_installed_patch(&self.paths, &roots, game.route)
-            .map_err(|error| error.to_string())?
-        {
-            None => Ok("설치된 패치 기록이 없습니다.".into()),
-            Some(report) => Ok(format!(
+        match remove_installed_patch(&self.paths, &roots, game.route) {
+            Ok(None) => Ok("설치된 패치 기록이 없습니다.".into()),
+            Ok(Some(report)) => Ok(format!(
                 "패치를 제거했습니다. 삭제 {}개, 복구 {}개",
                 report.removed, report.restored
             )),
+            Err(ServiceError::ExistingPatchUnsafe(summary)) => {
+                Err(SteamRemoveError::ExistingPatchUnsafe(summary))
+            }
+            Err(error) => Err(SteamRemoveError::Other(error.to_string())),
         }
     }
 
@@ -480,6 +502,36 @@ impl App {
         self.notice = Some("설치 경로와 리소스 경로를 다시 찾았습니다.".into());
     }
 
+    fn open_logs_folder(&mut self) {
+        if let Err(error) = fs::create_dir_all(&self.paths.logs_root) {
+            logging::error(format!("failed to create log directory: {error}"));
+            self.notice = Some(format!("로그 폴더를 만들지 못했습니다: {error}"));
+            return;
+        }
+        #[cfg(windows)]
+        let result = Command::new("explorer.exe")
+            .arg(&self.paths.logs_root)
+            .spawn();
+        #[cfg(not(windows))]
+        let result: io::Result<std::process::Child> = Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "로그 폴더 열기는 Windows에서만 지원됩니다",
+        ));
+        match result {
+            Ok(_) => {
+                logging::info(format!(
+                    "opened log directory: {}",
+                    self.paths.logs_root.display()
+                ));
+                self.notice = Some("로그 폴더를 열었습니다.".into());
+            }
+            Err(error) => {
+                logging::error(format!("failed to open log directory: {error}"));
+                self.notice = Some(format!("로그 폴더를 열지 못했습니다: {error}"));
+            }
+        }
+    }
+
     fn activate_main(&mut self) {
         match self.main_selected {
             0 => self.start_operation(OperationKind::AndroidInstall, false, None),
@@ -500,7 +552,8 @@ impl App {
             1 => self.begin_path_input(PathKind::Steam),
             2 => self.begin_path_input(PathKind::LocalLow),
             3 => self.redetect_paths(),
-            4 => {
+            4 => self.open_logs_folder(),
+            5 => {
                 self.screen = Screen::Main;
                 self.notice = None;
             }
@@ -545,6 +598,10 @@ impl App {
                 };
                 match reset_patch_state(&self.paths, route) {
                     Ok(_) => {
+                        logging::warn(format!(
+                            "Steam install state reset accepted: route={}",
+                            route.as_str()
+                        ));
                         self.install_progress = InstallUiProgress::default();
                         self.install_progress.status =
                             "기존 패치 상태를 초기화했습니다. 다시 설치를 시작합니다...".into();
@@ -553,10 +610,56 @@ impl App {
                         }
                     }
                     Err(error) => {
+                        logging::error(format!(
+                            "Steam install state reset failed: route={} error={error}",
+                            route.as_str()
+                        ));
                         if let Some(operation) = &mut self.operation {
                             operation.phase = OperationPhase::Finished {
                                 success: false,
                                 message: format!("패치 상태 초기화에 실패했습니다: {error}"),
+                            };
+                        }
+                    }
+                }
+            }
+            1 => {
+                self.operation = None;
+                self.screen = Screen::Main;
+                self.notice = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn activate_remove_state_reset_result(&mut self) {
+        match self.result_selected {
+            0 => {
+                let Some(route) = self.operation.as_ref().map(|operation| operation.route) else {
+                    return;
+                };
+                match reset_patch_state(&self.paths, route) {
+                    Ok(_) => {
+                        logging::warn(format!(
+                            "Steam remove state reset accepted: route={}",
+                            route.as_str()
+                        ));
+                        if let Some(operation) = &mut self.operation {
+                            operation.phase = OperationPhase::Finished {
+                                success: true,
+                                message: "패치 기록을 초기화했습니다. 게임 파일은 변경하지 않았습니다. 필요한 경우 Steam 파일 무결성 검사를 완료하세요.".into(),
+                            };
+                        }
+                    }
+                    Err(error) => {
+                        logging::error(format!(
+                            "Steam remove state reset failed: route={} error={error}",
+                            route.as_str()
+                        ));
+                        if let Some(operation) = &mut self.operation {
+                            operation.phase = OperationPhase::Finished {
+                                success: false,
+                                message: format!("패치 기록 초기화에 실패했습니다: {error}"),
                             };
                         }
                     }
@@ -618,8 +721,12 @@ impl App {
 
     fn handle_settings_key(&mut self, code: KeyCode) {
         match code {
-            KeyCode::Up => self.settings_selected = previous(self.settings_selected, 5),
-            KeyCode::Down => self.settings_selected = next(self.settings_selected, 5),
+            KeyCode::Up => {
+                self.settings_selected = previous(self.settings_selected, SETTINGS_ITEM_COUNT)
+            }
+            KeyCode::Down => {
+                self.settings_selected = next(self.settings_selected, SETTINGS_ITEM_COUNT)
+            }
             KeyCode::Enter => self.activate_settings(),
             KeyCode::Esc => {
                 self.screen = Screen::Main;
@@ -650,6 +757,7 @@ impl App {
             Some(OperationPhase::NeedsDeviceSelection { devices }) => devices.len(),
             Some(OperationPhase::NeedsReinstall { .. }) => REINSTALL_ITEMS.len(),
             Some(OperationPhase::NeedsPatchStateReset { .. }) => PATCH_STATE_RESET_ITEMS.len(),
+            Some(OperationPhase::NeedsRemoveStateReset { .. }) => REMOVE_STATE_RESET_ITEMS.len(),
             Some(OperationPhase::Finished { .. }) => RESULT_ITEMS.len(),
             _ => 0,
         }
@@ -694,6 +802,22 @@ impl App {
                     self.result_selected = next(self.result_selected, PATCH_STATE_RESET_ITEMS.len())
                 }
                 KeyCode::Enter => self.activate_patch_state_reset_result(),
+                KeyCode::Esc => {
+                    self.operation = None;
+                    self.screen = Screen::Main;
+                }
+                _ => {}
+            },
+            Some(OperationPhase::NeedsRemoveStateReset { .. }) => match code {
+                KeyCode::Up => {
+                    self.result_selected =
+                        previous(self.result_selected, REMOVE_STATE_RESET_ITEMS.len())
+                }
+                KeyCode::Down => {
+                    self.result_selected =
+                        next(self.result_selected, REMOVE_STATE_RESET_ITEMS.len())
+                }
+                KeyCode::Enter => self.activate_remove_state_reset_result(),
                 KeyCode::Esc => {
                     self.operation = None;
                     self.screen = Screen::Main;
@@ -748,6 +872,10 @@ impl App {
                         self.result_selected = index;
                         self.activate_patch_state_reset_result();
                     }
+                    Some(HitTarget::RemoveStateReset(index)) => {
+                        self.result_selected = index;
+                        self.activate_remove_state_reset_result();
+                    }
                     Some(HitTarget::Device(index)) => {
                         self.result_selected = index;
                         self.activate_device_selection();
@@ -757,7 +885,9 @@ impl App {
             }
             MouseEventKind::ScrollUp => match self.screen {
                 Screen::Main => self.main_selected = previous(self.main_selected, MAIN_ITEMS.len()),
-                Screen::Settings => self.settings_selected = previous(self.settings_selected, 5),
+                Screen::Settings => {
+                    self.settings_selected = previous(self.settings_selected, SETTINGS_ITEM_COUNT)
+                }
                 Screen::Operation => {
                     let length = self.operation_selection_len();
                     self.result_selected = previous(self.result_selected, length);
@@ -766,7 +896,9 @@ impl App {
             },
             MouseEventKind::ScrollDown => match self.screen {
                 Screen::Main => self.main_selected = next(self.main_selected, MAIN_ITEMS.len()),
-                Screen::Settings => self.settings_selected = next(self.settings_selected, 5),
+                Screen::Settings => {
+                    self.settings_selected = next(self.settings_selected, SETTINGS_ITEM_COUNT)
+                }
                 Screen::Operation => {
                     let length = self.operation_selection_len();
                     self.result_selected = next(self.result_selected, length);
@@ -909,7 +1041,15 @@ fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
             },
             Err(SteamInstallError::ExistingPatchChanged(changed_files)) => {
                 app.result_selected = 0;
-                OperationPhase::NeedsPatchStateReset { changed_files }
+                OperationPhase::NeedsPatchStateReset {
+                    details: format!("관리 중인 파일 {changed_files}개가 설치 기록과 다릅니다."),
+                }
+            }
+            Err(SteamInstallError::ExistingPatchUnsafe(summary)) => {
+                app.result_selected = 0;
+                OperationPhase::NeedsPatchStateReset {
+                    details: format!("기존 패치를 안전하게 정리할 수 없습니다. {summary}"),
+                }
             }
             Err(SteamInstallError::Other(message)) => OperationPhase::Finished {
                 success: false,
@@ -922,21 +1062,24 @@ fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
         return;
     }
 
-    let result = match kind {
-        OperationKind::SteamRemove => app.perform_remove(route),
-        OperationKind::AndroidInstall | OperationKind::SteamInstall => unreachable!(),
-    };
-    if let Some(operation) = &mut app.operation {
-        operation.phase = match result {
+    if kind == OperationKind::SteamRemove {
+        let phase = match app.perform_remove(route) {
             Ok(message) => OperationPhase::Finished {
                 success: true,
                 message,
             },
-            Err(message) => OperationPhase::Finished {
+            Err(SteamRemoveError::ExistingPatchUnsafe(summary)) => {
+                app.result_selected = 0;
+                OperationPhase::NeedsRemoveStateReset { summary }
+            }
+            Err(SteamRemoveError::Other(message)) => OperationPhase::Finished {
                 success: false,
                 message,
             },
         };
+        if let Some(operation) = &mut app.operation {
+            operation.phase = phase;
+        }
     }
 }
 
@@ -963,6 +1106,7 @@ fn perform_android_install(
         })
         .map_err(|error| {
             let message = error.to_string();
+            logging::error(format!("Android install failed: {message}"));
             app.android_progress.status = format!("실패: {message}");
             message
         })
@@ -992,6 +1136,9 @@ fn perform_install(
         .map_err(|error| match error {
             ServiceError::ExistingPatchChanged(changed_files) => {
                 SteamInstallError::ExistingPatchChanged(changed_files)
+            }
+            ServiceError::ExistingPatchUnsafe(summary) => {
+                SteamInstallError::ExistingPatchUnsafe(summary)
             }
             other => SteamInstallError::Other(other.to_string()),
         })?;
@@ -1182,6 +1329,7 @@ fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             Cell::from(format!("[{}]", display_path(app.settings.locallow_root()))),
         ]),
         Row::new(vec![Cell::from("게임 경로 자동 찾기"), Cell::from("")]),
+        Row::new(vec![Cell::from("로그 폴더 열기"), Cell::from("")]),
         Row::new(vec![Cell::from("메인 메뉴"), Cell::from("")]),
     ];
     let block = Block::default()
@@ -1196,7 +1344,12 @@ fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let mut state = TableState::default();
     state.select(Some(app.settings_selected));
     frame.render_stateful_widget(table, area, &mut state);
-    add_list_hits(&mut app.hit_regions, inner, 5, HitTarget::Settings);
+    add_list_hits(
+        &mut app.hit_regions,
+        inner,
+        SETTINGS_ITEM_COUNT,
+        HitTarget::Settings,
+    );
 }
 
 fn render_path_input(frame: &mut Frame<'_>, app: &App, area: Rect, kind: PathKind) {
@@ -1367,7 +1520,7 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 HitTarget::Reinstall,
             );
         }
-        OperationPhase::NeedsPatchStateReset { changed_files } => {
+        OperationPhase::NeedsPatchStateReset { details } => {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(12), Constraint::Length(4)])
@@ -1380,9 +1533,7 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(format!(
-                    "패치 설치 이후 {changed_files}개 파일이 외부에서 변경되었습니다."
-                )),
+                Line::from(details),
                 Line::from(
                     "Steam 파일 무결성 검사, 게임 재다운로드/업데이트 등으로 생길 수 있습니다.",
                 ),
@@ -1422,6 +1573,58 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 inner,
                 PATCH_STATE_RESET_ITEMS.len(),
                 HitTarget::PatchStateReset,
+            );
+        }
+        OperationPhase::NeedsRemoveStateReset { summary } => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(12), Constraint::Length(4)])
+                .split(area);
+            let text = Text::from(vec![
+                Line::from(Span::styled(
+                    "패치를 안전하게 제거할 수 없습니다.",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!("진단: {summary}")),
+                Line::from(""),
+                Line::from(
+                    "먼저 Steam 파일 무결성 검사를 실행하면 원본 파일이 복구되어 정상 제거가 가능할 수 있습니다.",
+                ),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "패치 기록 초기화는 게임 파일을 복원하거나 삭제하지 않습니다.",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from("초기화하면 AutoPatcher의 installed/backup/staging 기록만 삭제됩니다."),
+                Line::from(
+                    "게임 파일이 정상 상태임을 확인했거나 Steam 파일 무결성 검사를 완료한 경우에만 사용하세요.",
+                ),
+            ]);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::default().borders(Borders::ALL).title(title))
+                    .wrap(Wrap { trim: false }),
+                chunks[0],
+            );
+            let result_block = Block::default().borders(Borders::ALL).title(" 복구 선택 ");
+            let inner = result_block.inner(chunks[1]);
+            let list = List::new(REMOVE_STATE_RESET_ITEMS.map(ListItem::new))
+                .block(result_block)
+                .highlight_symbol("▶ ")
+                .highlight_style(
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                );
+            let mut state = ListState::default();
+            state.select(Some(app.result_selected));
+            frame.render_stateful_widget(list, chunks[1], &mut state);
+            add_list_hits(
+                &mut app.hit_regions,
+                inner,
+                REMOVE_STATE_RESET_ITEMS.len(),
+                HitTarget::RemoveStateReset,
             );
         }
         OperationPhase::Finished { success, message } => {
@@ -1882,8 +2085,9 @@ mod tests {
         fs::write(&state.ownership_path, b"stale ownership").unwrap();
         fs::write(state.backup_root.join("backup.dat"), b"backup").unwrap();
         fs::write(state.staging_root.join("stage.dat"), b"stage").unwrap();
-        app.operation.as_mut().unwrap().phase =
-            OperationPhase::NeedsPatchStateReset { changed_files: 4 };
+        app.operation.as_mut().unwrap().phase = OperationPhase::NeedsPatchStateReset {
+            details: "4 files changed".into(),
+        };
         app.result_selected = 0;
 
         app.activate_patch_state_reset_result();
@@ -1900,6 +2104,50 @@ mod tests {
                 .status
                 .contains("기존 패치 상태를 초기화했습니다")
         );
+    }
+
+    #[test]
+    fn remove_state_reset_confirmation_clears_metadata_without_touching_game_files() {
+        let mut app = app(UriAction::Menu);
+        app.start_operation(OperationKind::SteamRemove, false, Some(GameRoute::CnSteam));
+        let state = app.paths.route_state(GameRoute::CnSteam);
+        fs::create_dir_all(&state.backup_root).unwrap();
+        fs::create_dir_all(&state.staging_root).unwrap();
+        fs::create_dir_all(state.ownership_path.parent().unwrap()).unwrap();
+        fs::write(&state.ownership_path, b"stale ownership").unwrap();
+        fs::write(state.backup_root.join("backup.dat"), b"backup").unwrap();
+        fs::write(state.staging_root.join("stage.dat"), b"stage").unwrap();
+        let game_file = app.paths.state_root.join("outside-route-state/game.dat");
+        fs::create_dir_all(game_file.parent().unwrap()).unwrap();
+        fs::write(&game_file, b"patched-game-file").unwrap();
+        app.operation.as_mut().unwrap().phase = OperationPhase::NeedsRemoveStateReset {
+            summary: RemoveIssueSummary {
+                backup_missing: 4,
+                ..RemoveIssueSummary::default()
+            },
+        };
+        app.result_selected = 0;
+
+        app.activate_remove_state_reset_result();
+
+        assert!(!state.ownership_path.exists());
+        assert!(!state.backup_root.exists());
+        assert!(!state.staging_root.exists());
+        assert_eq!(fs::read(&game_file).unwrap(), b"patched-game-file");
+        assert!(matches!(
+            app.operation.as_ref().unwrap().phase,
+            OperationPhase::Finished { success: true, .. }
+        ));
+    }
+
+    #[test]
+    fn settings_include_log_folder_action() {
+        assert_eq!(SETTINGS_ITEM_COUNT, 6);
+        let mut app = app(UriAction::Menu);
+        app.screen = Screen::Settings;
+        app.settings_selected = 5;
+        app.activate_settings();
+        assert_eq!(app.screen, Screen::Main);
     }
 
     #[test]

@@ -7,8 +7,10 @@ use thiserror::Error;
 use crate::game::{GameInstallation, GameRoute};
 use crate::install::{
     ApplyPhase, ApplyProgress, InstallError, InstallRoots, InstallSummary, OwnershipManifest,
-    RemoveReport, install_patch_with_progress, installed_patch_change_count, remove_patch,
+    RemoveIssueSummary, RemoveReport, install_patch_with_progress, installed_patch_change_count,
+    remove_patch,
 };
+use crate::logging;
 use crate::network::{NetworkError, ReleaseClient, StageProgress};
 use crate::protocol::PatchManifest;
 
@@ -26,8 +28,15 @@ pub enum ServiceError {
     Io(#[from] std::io::Error),
     #[error("failed to parse ownership manifest: {0}")]
     OwnershipJson(#[from] serde_json::Error),
-    #[error("existing patch cannot be safely removed because {0} files changed externally")]
+    #[error("existing patch state changed externally: {0} file(s)")]
     ExistingPatchChanged(usize),
+    #[error("existing patch cannot be safely removed: {0}")]
+    ExistingPatchUnsafe(RemoveIssueSummary),
+    #[error("legacy patch state migration conflict: {legacy_path} -> {destination}")]
+    StateMigrationConflict {
+        legacy_path: PathBuf,
+        destination: PathBuf,
+    },
     #[error("manifest is not compatible with the detected game")]
     IncompatibleManifest,
 }
@@ -35,25 +44,36 @@ pub enum ServiceError {
 #[derive(Debug, Clone)]
 pub struct PatcherPaths {
     pub state_root: PathBuf,
-    pub staging_root: PathBuf,
-    pub backup_root: PathBuf,
-    pub ownership_path: PathBuf,
+    pub routes_root: PathBuf,
+    pub logs_root: PathBuf,
     pub settings_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteStatePaths {
+    pub root: PathBuf,
     pub staging_root: PathBuf,
     pub backup_root: PathBuf,
     pub ownership_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateMigrationItem {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StateMigrationReport {
+    pub moved: Vec<StateMigrationItem>,
+    pub discarded_legacy_cache: Vec<PathBuf>,
 }
 
 impl PatcherPaths {
     pub fn below(state_root: PathBuf) -> Self {
         Self {
-            staging_root: state_root.join("staging"),
-            backup_root: state_root.join("backup"),
-            ownership_path: state_root.join("installed.json"),
+            routes_root: state_root.join("routes"),
+            logs_root: state_root.join("logs"),
             settings_path: state_root.join("settings.json"),
             state_root,
         }
@@ -70,18 +90,20 @@ impl PatcherPaths {
     }
 
     pub fn route_state(&self, route: GameRoute) -> RouteStatePaths {
-        match route {
-            // Preserve all legacy INT paths so existing 0.6.x installations remain removable.
-            GameRoute::IntSteam => RouteStatePaths {
-                staging_root: self.staging_root.clone(),
-                backup_root: self.backup_root.clone(),
-                ownership_path: self.ownership_path.clone(),
-            },
-            GameRoute::CnSteam => RouteStatePaths {
-                staging_root: self.staging_root.join(route.slug()),
-                backup_root: self.backup_root.join(route.slug()),
-                ownership_path: self.state_root.join("installed-cn-steam.json"),
-            },
+        self.route_state_slug(route.slug())
+    }
+
+    pub fn android_state_root(&self) -> PathBuf {
+        self.routes_root.join("int-android")
+    }
+
+    fn route_state_slug(&self, slug: &str) -> RouteStatePaths {
+        let root = self.routes_root.join(slug);
+        RouteStatePaths {
+            staging_root: root.join("staging"),
+            backup_root: root.join("backup"),
+            ownership_path: root.join("installed.json"),
+            root,
         }
     }
 }
@@ -93,6 +115,111 @@ impl RouteStatePaths {
         }
         fs::create_dir_all(&self.staging_root)
     }
+}
+
+pub fn migrate_legacy_state(paths: &PatcherPaths) -> Result<StateMigrationReport, ServiceError> {
+    let int_state = paths.route_state(GameRoute::IntSteam);
+    let cn_state = paths.route_state(GameRoute::CnSteam);
+    let android_root = paths.android_state_root();
+
+    // CN legacy backup/staging lived below the INT legacy directories. Move those children first
+    // so the remaining parent directories contain only INT state when they are migrated.
+    // Steam state is persistent ownership data, so it is never overwritten automatically.
+    let steam_moves = [
+        (
+            paths.state_root.join("installed-cn-steam.json"),
+            cn_state.ownership_path.clone(),
+        ),
+        (
+            paths.state_root.join("backup").join("cn-steam"),
+            cn_state.backup_root.clone(),
+        ),
+        (
+            paths.state_root.join("staging").join("cn-steam"),
+            cn_state.staging_root.clone(),
+        ),
+        (
+            paths.state_root.join("installed.json"),
+            int_state.ownership_path.clone(),
+        ),
+        (
+            paths.state_root.join("backup"),
+            int_state.backup_root.clone(),
+        ),
+        (
+            paths.state_root.join("staging"),
+            int_state.staging_root.clone(),
+        ),
+    ];
+
+    for (source, destination) in &steam_moves {
+        if source.exists() && destination.exists() {
+            return Err(ServiceError::StateMigrationConflict {
+                legacy_path: source.clone(),
+                destination: destination.clone(),
+            });
+        }
+    }
+
+    let mut report = StateMigrationReport::default();
+    for (source, destination) in steam_moves {
+        move_legacy_path(&source, &destination, &mut report)?;
+    }
+
+    // Android APKs and managed Platform-Tools are disposable caches. v0.8.6 already wrote the
+    // APK to routes/int-android while older cache directories could still remain at the root.
+    // Prefer the new cache if both exist instead of blocking startup.
+    migrate_disposable_cache(
+        &paths.state_root.join("android"),
+        &android_root,
+        &mut report,
+    )?;
+    migrate_disposable_cache(
+        &paths.state_root.join("tools"),
+        &android_root.join("tools"),
+        &mut report,
+    )?;
+
+    Ok(report)
+}
+
+fn move_legacy_path(
+    source: &Path,
+    destination: &Path,
+    report: &mut StateMigrationReport,
+) -> Result<(), ServiceError> {
+    if !source.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(source, destination)?;
+    report.moved.push(StateMigrationItem {
+        source: source.to_owned(),
+        destination: destination.to_owned(),
+    });
+    Ok(())
+}
+
+fn migrate_disposable_cache(
+    source: &Path,
+    destination: &Path,
+    report: &mut StateMigrationReport,
+) -> Result<(), ServiceError> {
+    if !source.exists() {
+        return Ok(());
+    }
+    if destination.exists() {
+        if source.is_dir() {
+            fs::remove_dir_all(source)?;
+        } else {
+            fs::remove_file(source)?;
+        }
+        report.discarded_legacy_cache.push(source.to_owned());
+        return Ok(());
+    }
+    move_legacy_path(source, destination, report)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +313,11 @@ pub fn reset_patch_state(
     route: GameRoute,
 ) -> Result<PatchStateResetReport, ServiceError> {
     let state = paths.route_state(route);
+    logging::warn(format!(
+        "resetting patch state: route={} root={}",
+        route.as_str(),
+        state.root.display()
+    ));
     let ownership_removed = state.ownership_path.exists();
     let backup_removed = state.backup_root.exists();
     let staging_removed = state.staging_root.exists();
@@ -214,11 +346,37 @@ pub fn remove_installed_patch(
 ) -> Result<Option<RemoveReport>, ServiceError> {
     let state = paths.route_state(route);
     let Some(ownership) = load_ownership(&state.ownership_path)? else {
+        logging::info(format!(
+            "Steam remove: route={} no installed state",
+            route.as_str()
+        ));
         return Ok(None);
     };
+    logging::info(format!(
+        "Steam remove preflight: route={} patch={} created={} modified={} backup={}",
+        route.as_str(),
+        ownership.patch_version,
+        ownership.created_files.len(),
+        ownership.modified_files.len(),
+        state.backup_root.display()
+    ));
     let report = remove_patch(&ownership, roots, &state.backup_root)?;
-    if report.skipped > 0 {
-        return Err(ServiceError::ExistingPatchChanged(report.skipped));
+    let issues = report.issue_summary();
+    if issues.total() > 0 {
+        for issue in &report.issues {
+            logging::warn(format!(
+                "Steam remove issue: route={} target={:?} path={} kind={:?}",
+                route.as_str(),
+                issue.target,
+                issue.path,
+                issue.kind
+            ));
+        }
+        logging::warn(format!(
+            "Steam remove blocked: route={} summary={issues}",
+            route.as_str()
+        ));
+        return Err(ServiceError::ExistingPatchUnsafe(issues));
     }
     if state.ownership_path.exists() {
         fs::remove_file(&state.ownership_path)?;
@@ -226,6 +384,12 @@ pub fn remove_installed_patch(
     if state.backup_root.exists() {
         fs::remove_dir_all(&state.backup_root)?;
     }
+    logging::info(format!(
+        "Steam remove complete: route={} removed={} restored={}",
+        route.as_str(),
+        report.removed,
+        report.restored
+    ));
     Ok(Some(report))
 }
 
@@ -263,6 +427,13 @@ where
     let roots = install_roots(game);
     let state = paths.route_state(game.route);
     let route = game.route.as_str();
+    logging::info(format!(
+        "Steam install resolve: route={} game_version={} catalog={} state={}",
+        route,
+        game.catalog.version,
+        game.catalog.hash,
+        state.root.display()
+    ));
     let user_agent = format!("AstralAutoPatcher/{}", env!("CARGO_PKG_VERSION"));
     let client = ReleaseClient::new(&user_agent)?;
     progress(InstallProgress::Resolving);
@@ -275,6 +446,12 @@ where
         RELEASE_CHANNEL,
     )?;
     ensure_manifest_compatible(&manifest, game, route)?;
+    logging::info(format!(
+        "Steam manifest selected: route={} patch={} files={}",
+        route,
+        manifest.patch.version,
+        manifest.files.len()
+    ));
 
     let files = manifest
         .files
@@ -301,6 +478,10 @@ where
         {
             let changed_files = installed_patch_change_count(&existing, &roots)?;
             if changed_files > 0 {
+                logging::warn(format!(
+                    "Steam installed state differs from files: route={} changed={changed_files}",
+                    route
+                ));
                 return Err(ServiceError::ExistingPatchChanged(changed_files));
             }
             return Ok(InstallOutcome::AlreadyInstalled(InstalledPatchInfo {
@@ -372,6 +553,10 @@ where
         },
     )?;
     let _ = fs::remove_dir_all(&state.staging_root);
+    logging::info(format!(
+        "Steam install complete: route={} patch={} created={} modified={}",
+        route, manifest.patch.version, summary.created, summary.modified
+    ));
     Ok(InstallOutcome::Installed(summary))
 }
 
@@ -443,15 +628,16 @@ mod tests {
         let payload = b"patch01";
         let hash = format!("{:x}", Sha256::digest(payload));
         let first = manifest("v1", &hash);
-        let stage = paths.staging_root.join("game-data/data.unity3d");
+        let state = paths.route_state(GameRoute::IntSteam);
+        let stage = state.staging_root.join("game-data/data.unity3d");
         fs::create_dir_all(stage.parent().unwrap()).unwrap();
         fs::write(&stage, payload).unwrap();
         install_patch(
             &first,
-            &paths.staging_root,
+            &state.staging_root,
             &roots,
-            &paths.backup_root,
-            &paths.ownership_path,
+            &state.backup_root,
+            &state.ownership_path,
         )
         .unwrap();
 
@@ -463,24 +649,132 @@ mod tests {
             fs::read(roots.game_data.join("data.unity3d")).unwrap(),
             b"original"
         );
-        assert!(!paths.ownership_path.exists());
+        assert!(!state.ownership_path.exists());
     }
 
     #[test]
-    fn cn_route_uses_separate_patch_state_without_moving_legacy_int_state() {
+    fn route_state_is_fully_separated() {
         let temp = tempdir().unwrap();
         let paths = PatcherPaths::below(temp.path().join("state"));
         let int = paths.route_state(GameRoute::IntSteam);
         let cn = paths.route_state(GameRoute::CnSteam);
-        assert_eq!(int.ownership_path, paths.ownership_path);
-        assert_eq!(int.backup_root, paths.backup_root);
-        assert_eq!(int.staging_root, paths.staging_root);
+        assert_eq!(int.root, paths.routes_root.join("int-steam"));
+        assert_eq!(int.ownership_path, int.root.join("installed.json"));
+        assert_eq!(int.backup_root, int.root.join("backup"));
+        assert_eq!(int.staging_root, int.root.join("staging"));
+        assert_eq!(cn.root, paths.routes_root.join("cn-steam"));
+        assert_eq!(cn.ownership_path, cn.root.join("installed.json"));
+        assert_eq!(cn.backup_root, cn.root.join("backup"));
+        assert_eq!(cn.staging_root, cn.root.join("staging"));
         assert_eq!(
-            cn.ownership_path,
-            paths.state_root.join("installed-cn-steam.json")
+            paths.android_state_root(),
+            paths.routes_root.join("int-android")
         );
-        assert_eq!(cn.backup_root, paths.backup_root.join("cn-steam"));
-        assert_eq!(cn.staging_root, paths.staging_root.join("cn-steam"));
+        assert!(!int.root.starts_with(&cn.root));
+        assert!(!cn.root.starts_with(&int.root));
+    }
+
+    #[test]
+    fn migrates_legacy_route_and_android_state_without_cross_contamination() {
+        let temp = tempdir().unwrap();
+        let paths = PatcherPaths::below(temp.path().join("state"));
+        fs::create_dir_all(paths.state_root.join("backup/cn-steam")).unwrap();
+        fs::create_dir_all(paths.state_root.join("staging/cn-steam")).unwrap();
+        fs::create_dir_all(paths.state_root.join("android/apk")).unwrap();
+        fs::create_dir_all(paths.state_root.join("tools/platform-tools")).unwrap();
+        fs::write(paths.state_root.join("installed.json"), b"int").unwrap();
+        fs::write(paths.state_root.join("installed-cn-steam.json"), b"cn").unwrap();
+        fs::write(paths.state_root.join("backup/int.dat"), b"int-backup").unwrap();
+        fs::write(
+            paths.state_root.join("backup/cn-steam/cn.dat"),
+            b"cn-backup",
+        )
+        .unwrap();
+        fs::write(paths.state_root.join("staging/int.dat"), b"int-stage").unwrap();
+        fs::write(
+            paths.state_root.join("staging/cn-steam/cn.dat"),
+            b"cn-stage",
+        )
+        .unwrap();
+        fs::write(paths.state_root.join("android/apk/game.apk"), b"apk").unwrap();
+        fs::write(
+            paths.state_root.join("tools/platform-tools/adb.exe"),
+            b"adb",
+        )
+        .unwrap();
+
+        let report = migrate_legacy_state(&paths).unwrap();
+        assert_eq!(report.moved.len(), 8);
+        let int = paths.route_state(GameRoute::IntSteam);
+        let cn = paths.route_state(GameRoute::CnSteam);
+        assert_eq!(fs::read(&int.ownership_path).unwrap(), b"int");
+        assert_eq!(
+            fs::read(int.backup_root.join("int.dat")).unwrap(),
+            b"int-backup"
+        );
+        assert!(!int.backup_root.join("cn-steam").exists());
+        assert_eq!(fs::read(&cn.ownership_path).unwrap(), b"cn");
+        assert_eq!(
+            fs::read(cn.backup_root.join("cn.dat")).unwrap(),
+            b"cn-backup"
+        );
+        assert_eq!(
+            fs::read(cn.staging_root.join("cn.dat")).unwrap(),
+            b"cn-stage"
+        );
+        assert_eq!(
+            fs::read(paths.android_state_root().join("apk/game.apk")).unwrap(),
+            b"apk"
+        );
+        assert_eq!(
+            fs::read(
+                paths
+                    .android_state_root()
+                    .join("tools/platform-tools/adb.exe")
+            )
+            .unwrap(),
+            b"adb"
+        );
+    }
+
+    #[test]
+    fn migration_discards_old_android_cache_when_v086_cache_already_exists() {
+        let temp = tempdir().unwrap();
+        let paths = PatcherPaths::below(temp.path().join("state"));
+        fs::create_dir_all(paths.state_root.join("android/apk")).unwrap();
+        fs::write(paths.state_root.join("android/apk/old.apk"), b"old").unwrap();
+        fs::create_dir_all(paths.android_state_root().join("apk")).unwrap();
+        fs::write(paths.android_state_root().join("apk/new.apk"), b"new").unwrap();
+
+        let report = migrate_legacy_state(&paths).unwrap();
+        assert_eq!(
+            report.discarded_legacy_cache,
+            vec![paths.state_root.join("android")]
+        );
+        assert!(!paths.state_root.join("android").exists());
+        assert_eq!(
+            fs::read(paths.android_state_root().join("apk/new.apk")).unwrap(),
+            b"new"
+        );
+    }
+
+    #[test]
+    fn legacy_state_migration_refuses_to_overwrite_new_state() {
+        let temp = tempdir().unwrap();
+        let paths = PatcherPaths::below(temp.path().join("state"));
+        fs::create_dir_all(&paths.state_root).unwrap();
+        fs::write(paths.state_root.join("installed.json"), b"legacy").unwrap();
+        let int = paths.route_state(GameRoute::IntSteam);
+        fs::create_dir_all(int.ownership_path.parent().unwrap()).unwrap();
+        fs::write(&int.ownership_path, b"new").unwrap();
+
+        let error = migrate_legacy_state(&paths).unwrap_err();
+        assert!(matches!(error, ServiceError::StateMigrationConflict { .. }));
+        assert_eq!(fs::read(&int.ownership_path).unwrap(), b"new");
+        assert_eq!(
+            fs::read(paths.state_root.join("installed.json")).unwrap(),
+            b"legacy"
+        );
     }
 
     #[test]
@@ -497,20 +791,21 @@ mod tests {
         let payload = b"patch01";
         let hash = format!("{:x}", Sha256::digest(payload));
         let current = manifest("v1", &hash);
-        let stage = paths.staging_root.join("game-data/data.unity3d");
+        let state = paths.route_state(GameRoute::IntSteam);
+        let stage = state.staging_root.join("game-data/data.unity3d");
         fs::create_dir_all(stage.parent().unwrap()).unwrap();
         fs::write(&stage, payload).unwrap();
         install_patch(
             &current,
-            &paths.staging_root,
+            &state.staging_root,
             &roots,
-            &paths.backup_root,
-            &paths.ownership_path,
+            &state.backup_root,
+            &state.ownership_path,
         )
         .unwrap();
 
         fs::write(roots.game_data.join("data.unity3d"), b"original").unwrap();
-        let ownership = load_ownership(&paths.ownership_path).unwrap().unwrap();
+        let ownership = load_ownership(&state.ownership_path).unwrap().unwrap();
         let changed = installed_patch_change_count(&ownership, &roots).unwrap();
         assert_eq!(changed, 1);
     }
@@ -560,21 +855,28 @@ mod tests {
         let payload = b"patch01";
         let hash = format!("{:x}", Sha256::digest(payload));
         let first = manifest("v1", &hash);
-        let stage = paths.staging_root.join("game-data/data.unity3d");
+        let state = paths.route_state(GameRoute::IntSteam);
+        let stage = state.staging_root.join("game-data/data.unity3d");
         fs::create_dir_all(stage.parent().unwrap()).unwrap();
         fs::write(&stage, payload).unwrap();
         install_patch(
             &first,
-            &paths.staging_root,
+            &state.staging_root,
             &roots,
-            &paths.backup_root,
-            &paths.ownership_path,
+            &state.backup_root,
+            &state.ownership_path,
         )
         .unwrap();
         fs::write(roots.game_data.join("data.unity3d"), b"changed").unwrap();
 
         let err = remove_installed_patch(&paths, &roots, GameRoute::IntSteam).unwrap_err();
-        assert!(matches!(err, ServiceError::ExistingPatchChanged(1)));
-        assert!(paths.ownership_path.exists());
+        assert!(matches!(
+            err,
+            ServiceError::ExistingPatchUnsafe(RemoveIssueSummary {
+                modified_externally: 1,
+                ..
+            })
+        ));
+        assert!(state.ownership_path.exists());
     }
 }

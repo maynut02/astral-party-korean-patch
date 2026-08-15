@@ -2,12 +2,14 @@ use std::io;
 
 use thiserror::Error;
 
+#[cfg(windows)]
+use crate::logging;
 use crate::registration::RegistrationError;
 #[cfg(windows)]
 use crate::registration::ensure_self_installed_and_registered;
-#[cfg(windows)]
-use crate::service::PatcherPaths;
 use crate::service::ServiceError;
+#[cfg(windows)]
+use crate::service::{PatcherPaths, migrate_legacy_state};
 #[cfg(windows)]
 use crate::settings::AppSettings;
 use crate::settings::SettingsError;
@@ -100,29 +102,76 @@ fn load_initial_settings(paths: &PatcherPaths) -> Result<AppSettings, CliError> 
 #[cfg(windows)]
 pub fn run() -> Result<(), CliError> {
     let paths = PatcherPaths::windows_default()?;
-    let original_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let mut startup_notices = Vec::new();
+    match logging::init(&paths.logs_root) {
+        Ok(path) => {
+            logging::info(format!(
+                "AstralAutoPatcher v{} started; log={}",
+                env!("CARGO_PKG_VERSION"),
+                path.display()
+            ));
+            logging::info(format!("state root={}", paths.state_root.display()));
+        }
+        Err(error) => startup_notices.push(format!("로그 파일을 만들지 못했습니다: {error}")),
+    }
 
+    let original_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(request) = parse_apply_update_request(&original_args)? {
+        logging::info(format!(
+            "applying self update after process {}",
+            request.previous_pid
+        ));
         apply_update_and_restart(&paths.state_root, request)?;
         return Ok(());
     }
 
-    let mut startup_notices = Vec::new();
+    let migration = migrate_legacy_state(&paths)?;
+    if !migration.moved.is_empty() || !migration.discarded_legacy_cache.is_empty() {
+        for item in &migration.moved {
+            logging::info(format!(
+                "migrated legacy state: {} -> {}",
+                item.source.display(),
+                item.destination.display()
+            ));
+        }
+        for path in &migration.discarded_legacy_cache {
+            logging::info(format!(
+                "discarded superseded legacy Android cache: {}",
+                path.display()
+            ));
+        }
+        startup_notices.push(format!(
+            "기존 로컬 상태를 새 저장 구조로 정리했습니다. 이동 {}개, 이전 캐시 정리 {}개",
+            migration.moved.len(),
+            migration.discarded_legacy_cache.len()
+        ));
+    }
+
     match check_and_launch_update(
         patcher_index_url(),
         patcher_release_base_url(),
         &paths.state_root,
         &original_args,
     ) {
-        Ok(true) => return Ok(()),
-        Ok(false) => {}
-        Err(error) => startup_notices.push(format!(
-            "자동 업데이트 확인에 실패해 현재 버전으로 계속합니다: {error}"
-        )),
+        Ok(true) => {
+            logging::info("new AutoPatcher version downloaded; handing off to updater");
+            return Ok(());
+        }
+        Ok(false) => logging::info("self update check: current version is up to date"),
+        Err(error) => {
+            logging::warn(format!("self update check failed: {error}"));
+            startup_notices.push(format!(
+                "자동 업데이트 확인에 실패해 현재 버전으로 계속합니다: {error}"
+            ));
+        }
     }
 
     let installed_exe = ensure_self_installed_and_registered(&paths.state_root)?;
     let mut settings = load_initial_settings(&paths)?;
+    logging::info(format!(
+        "settings loaded; selected Steam region={}",
+        settings.selected_route().as_str()
+    ));
     let initial_request = match original_args.first() {
         Some(uri) => UriRequest::parse(&uri.to_string_lossy())?,
         None => UriRequest::menu(),
@@ -143,6 +192,7 @@ pub fn run() -> Result<(), CliError> {
     }
     let startup_notice = (!startup_notices.is_empty()).then(|| startup_notices.join(" · "));
 
+    logging::info("entering TUI");
     tui::run(
         paths,
         settings,
@@ -155,6 +205,7 @@ pub fn run() -> Result<(), CliError> {
             android_release_base: android_release_base_url(),
         },
     )?;
+    logging::info("AstralAutoPatcher exited normally");
     Ok(())
 }
 
