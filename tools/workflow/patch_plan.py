@@ -72,7 +72,6 @@ def build_plan(
     checks: tuple[RouteCheck, ...],
     *,
     mode: str,
-    scheduled: bool,
 ) -> dict[str, object]:
     if mode not in {"pre", "release"}:
         raise ValueError(f"unsupported patch mode: {mode}")
@@ -87,7 +86,7 @@ def build_plan(
         raise ValueError(f"route game versions differ: {sorted(versions)}")
     game_version = next(iter(versions))
     max_revision = max((item.revision for item in checks), key=revision_key)
-    should_run = (not scheduled) or any(item.changed for item in checks)
+    should_run = mode == "release" or any(item.changed for item in checks)
     if mode == "release":
         updated_routes = tuple(item.route for item in checks if item.release_changed)
     else:
@@ -127,12 +126,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Aggregate per-route patch checks into one run plan.")
     parser.add_argument("--checks-dir", required=True, type=Path)
     parser.add_argument("--mode", choices=("pre", "release"), required=True)
-    parser.add_argument("--scheduled", action="store_true")
     parser.add_argument("--github-output", required=True, type=Path)
     args = parser.parse_args(argv)
 
     checks = tuple(load_check(args.checks_dir / f"{SLUGS[route]}.env") for route in ROUTES)
-    plan = build_plan(checks, mode=args.mode, scheduled=args.scheduled)
+    plan = build_plan(checks, mode=args.mode)
     _write_output(args.github_output, plan)
     print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
     return 0

@@ -34,17 +34,17 @@ def test_plan_uses_highest_route_revision_and_detects_partial_pre_update() -> No
         _check(module, "CN_STEAM", "116"),
         _check(module, "INT_ANDROID", "117", changed=True, sync=True, release=True),
     )
-    plan = module.build_plan(checks, mode="pre", scheduled=True)
+    plan = module.build_plan(checks, mode="pre")
     assert plan["should_run"] is True
     assert plan["max_revision"] == "117"
     assert plan["updated_routes"] == ("INT_ANDROID",)
     assert plan["int_android_sync_required"] is True
 
 
-def test_scheduled_pre_skips_when_every_route_is_current() -> None:
+def test_pre_skips_when_every_route_is_current() -> None:
     module = _load_module()
     checks = tuple(_check(module, route, "116") for route in module.ROUTES)
-    plan = module.build_plan(checks, mode="pre", scheduled=True)
+    plan = module.build_plan(checks, mode="pre")
     assert plan["should_run"] is False
     assert plan["updated_routes"] == ()
 
@@ -56,7 +56,7 @@ def test_manual_release_runs_and_reports_routes_missing_stable_release() -> None
         _check(module, "CN_STEAM", "116"),
         _check(module, "INT_ANDROID", "118", release=True),
     )
-    plan = module.build_plan(checks, mode="release", scheduled=False)
+    plan = module.build_plan(checks, mode="release")
     assert plan["should_run"] is True
     assert plan["max_revision"] == "118"
     assert plan["updated_routes"] == ("INT_STEAM", "INT_ANDROID")

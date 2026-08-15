@@ -186,7 +186,7 @@ Actions 화면에는 사용자 관점의 네 workflow만 노출합니다.
 `Patch` 내부 동작은 다음과 같습니다.
 
 ```text
-scheduled pre
+GCP Scheduler -> workflow_dispatch mode=pre
   -> 세 route remote revision/catalog lightweight check 병렬 실행
   -> 하나라도 변경되면 실제 sync가 필요한 route만 병렬 sync
   -> INT_STEAM만 canonical source change 적용

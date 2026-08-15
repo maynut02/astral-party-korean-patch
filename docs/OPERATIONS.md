@@ -172,13 +172,9 @@ astral-builder translation-status \
 
 ## 6. 자동 Pre 배포
 
-`Patch` workflow는 다음 schedule을 자체적으로 갖습니다.
+GitHub Actions 자체 cron은 사용하지 않습니다. GCP Scheduler가 `Patch` workflow를 `mode=pre`로 dispatch합니다.
 
-```text
-17 */6 * * *
-```
-
-즉 6시간마다 세 route의 revision/catalog hash를 **병렬 lightweight check**합니다. 번역 원문은 여전히 `INT_STEAM`만 canonical source이지만, CN/Android 단독 업데이트도 자동으로 탐지합니다.
+`pre` 모드는 세 route의 revision/catalog hash를 **병렬 lightweight check**한 뒤 하나라도 변경되었을 때만 실제 pipeline을 진행합니다. 번역 원문은 여전히 `INT_STEAM`만 canonical source이지만, CN/Android 단독 업데이트도 자동으로 탐지합니다.
 
 하나 이상의 route가 새 published revision을 필요로 할 때만 다음 pipeline이 실행됩니다.
 
@@ -426,7 +422,7 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 
 1. `main` push 후 `CI` 통과 확인.
 2. `GAME_VERSION`, Neon/Steam/Google Play/Android signing secrets 확인.
-3. `Patch`의 자동 schedule이 활성화되어 있는지 확인.
+3. GCP Scheduler가 `Patch` workflow를 `mode=pre`로 정상 dispatch하는지 확인.
 4. 필요하면 `Patch`를 `mode=pre`로 수동 실행해 전체 세 route 호환판을 검증.
 5. 번역 정식 배포 시 `Patch`를 `mode=release`로 한 번만 실행.
 6. Release 이름이 `v<game>_r<세 route 중 최고 revision>` 형식이고 세 route manifest가 모두 존재하는지 확인. 같은 최고 revision 재배포라면 `_pN` suffix가 증가했는지 확인.

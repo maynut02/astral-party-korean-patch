@@ -1,12 +1,10 @@
 name: Patch
 
 on:
-  schedule:
-    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       mode:
-        description: Automatic pre build or manual stable release
+        description: Pre update build or stable release
         required: true
         default: release
         type: choice
@@ -100,17 +98,10 @@ jobs:
           REQUESTED_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            mode=pre
-            scheduled=--scheduled
-          else
-            mode="${REQUESTED_MODE:-release}"
-            scheduled=''
-          fi
+          mode="${REQUESTED_MODE:-release}"
           python tools/workflow/patch_plan.py \
             --checks-dir .work/check \
             --mode "$mode" \
-            $scheduled \
             --github-output "$GITHUB_OUTPUT"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
       - name: Define immutable release identity

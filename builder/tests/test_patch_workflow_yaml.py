@@ -50,3 +50,18 @@ def test_patch_workflow_keeps_only_pre_release_mutable() -> None:
     assert "tools/workflow/release_tag.py" in plan_script
     assert 'if [ "$MODE" = "pre" ]' in publish_script
     assert "immutable release tag already exists" in publish_script
+
+
+def test_patch_workflow_has_no_github_cron_and_pre_is_change_driven() -> None:
+    workflow = _workflow()
+    triggers = workflow[True] if True in workflow else workflow["on"]
+    assert "schedule" not in triggers
+    assert "workflow_dispatch" in triggers
+    jobs = workflow["jobs"]
+    aggregate_script = next(
+        step["run"]
+        for step in jobs["plan"]["steps"]
+        if step.get("name") == "Aggregate route checks"
+    )
+    assert "GITHUB_EVENT_NAME" not in aggregate_script
+    assert "--scheduled" not in aggregate_script
