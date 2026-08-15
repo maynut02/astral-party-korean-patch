@@ -380,18 +380,16 @@ current_source_texts (view)
 translation_workbench (view)
 ```
 
-기존 DB에는 과거 `0001_initial.sql` checksum이 기록되어 있기 때문에 새 코드를 기존 DB에 그대로 migration하는 것은 지원하지 않습니다. 승인 번역을 먼저 backup한 뒤 DB/Release/tag/index를 모두 초기화해서 새 baseline에서 다시 채웁니다.
+기존 DB에는 과거 `0001_initial.sql` checksum이 기록되어 있기 때문에 새 코드를 기존 DB에 그대로 migration하는 것은 지원하지 않습니다. DB/Release/tag/index를 초기화한 뒤 현재 INT_STEAM 원문을 다시 수집하고, 이전 `astral-control-site` DB의 승인된 `ko` 값을 새 승인 audit 구조로 재이관합니다.
 
 전체 명령과 복구 순서는 [`RESET.md`](RESET.md)를 따릅니다.
 
 ```text
-승인 번역 export
--> 새 코드 push
--> database/reset.py
--> database/migrate.py
+새 코드 push
+-> database/reset.py / migrate.py (.env 자동 사용)
 -> GitHub Release/tag/distribution 초기화
 -> Patch mode=pre로 원문 재수집
--> 승인 번역 import
+-> 이전 astral-control-site DB 승인 번역 재이관
 -> Patch mode=release
 -> INT_ANDROID APK
 -> AutoPatcher

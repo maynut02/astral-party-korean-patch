@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import os
 
-import psycopg
+try:
+    import psycopg
+except ImportError as exc:
+    raise SystemExit(
+        "psycopg is required. Run: python -m pip install -r database/requirements.txt"
+    ) from exc
+
+from local_env import resolve_target_database_url
 
 CONFIRMATION = "RESET_ASTRAL_DATABASE"
 
@@ -31,29 +37,25 @@ DROP_STATEMENTS = (
 
 
 def reset(database_url: str) -> None:
-    with (
-        psycopg.connect(database_url) as conn,
-        conn.transaction(),
-        conn.cursor() as cur,
-    ):
-        for statement in DROP_STATEMENTS:
-            cur.execute(statement)
+    with psycopg.connect(database_url) as conn:  # noqa: SIM117
+        with conn.transaction(), conn.cursor() as cur:
+            for statement in DROP_STATEMENTS:
+                cur.execute(statement)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Drop all Astral Party project tables/views.")
     parser.add_argument(
         "--database-url",
-        default=os.environ.get("DATABASE_URL_DIRECT", ""),
-        help="PostgreSQL connection string; defaults to DATABASE_URL_DIRECT",
+        default="",
+        help="Optional PostgreSQL connection string; otherwise repository .env is used",
     )
     parser.add_argument("--confirm", required=True)
     args = parser.parse_args()
     if args.confirm != CONFIRMATION:
         parser.error(f"--confirm must be exactly {CONFIRMATION}")
-    if not args.database_url:
-        parser.error("--database-url or DATABASE_URL_DIRECT is required")
-    reset(args.database_url)
+    database_url = resolve_target_database_url(direct=True, explicit=args.database_url)
+    reset(database_url)
     print("Astral Party database objects removed.")
     return 0
 

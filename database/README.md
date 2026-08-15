@@ -81,11 +81,11 @@ pending -> approved
 0001_initial.sql
 ```
 
-기존 DB에는 이전 `0001` checksum이 기록되어 있으므로 이 commit 적용 후 **기존 DB를 그대로 migration하면 의도적으로 실패합니다.** [`../docs/RESET.md`](../docs/RESET.md)의 backup/reset/repopulate 절차를 수행해야 합니다.
+기존 DB에는 이전 `0001` checksum이 기록되어 있으므로 이 commit 적용 후 **기존 DB를 그대로 migration하면 의도적으로 실패합니다.** [`../docs/RESET.md`](../docs/RESET.md)에 따라 reset 후 현재 원문을 다시 수집하고, 이전 `astral-control-site` DB의 승인 번역을 재이관합니다.
 
 ## 연결
 
 - Actions runtime: `NEON_DATABASE_URL` / `DATABASE_URL`
 - migration/reset: `NEON_DATABASE_URL_DIRECT` / `DATABASE_URL_DIRECT`
-
-승인 번역 backup 파일은 `tools/database/translation_backup.py`로 export/import할 수 있습니다.
+- 로컬 `database/reset.py`, `database/migrate.py`, legacy importer는 프로젝트 루트 `.env`를 자동으로 읽습니다.
+- 현재 작업공간에서는 legacy importer가 `../Project/Nuxt/astral-control-site/.env`의 `DATABASE_URL`도 자동 탐색합니다.

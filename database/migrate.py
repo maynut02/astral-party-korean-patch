@@ -3,10 +3,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
 
-import psycopg
+try:
+    import psycopg
+except ImportError as exc:
+    raise SystemExit(
+        "psycopg is required. Run: python -m pip install -r database/requirements.txt"
+    ) from exc
+
+from local_env import resolve_target_database_url
 
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 
@@ -71,13 +77,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Apply Astral Party PostgreSQL migrations")
     parser.add_argument(
         "--database-url",
-        default=os.environ.get("DATABASE_URL_DIRECT", ""),
-        help="PostgreSQL connection string; defaults to DATABASE_URL_DIRECT",
+        default="",
+        help="Optional PostgreSQL connection string; otherwise repository .env is used",
     )
     args = parser.parse_args()
-    if not args.database_url:
-        parser.error("--database-url or DATABASE_URL_DIRECT is required")
-    count = migrate(args.database_url)
+    database_url = resolve_target_database_url(direct=True, explicit=args.database_url)
+    count = migrate(database_url)
     print(f"applied migrations: {count}")
     return 0
 
