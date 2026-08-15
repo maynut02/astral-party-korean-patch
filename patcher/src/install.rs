@@ -354,6 +354,30 @@ where
     })
 }
 
+pub fn installed_patch_change_count(
+    ownership: &OwnershipManifest,
+    roots: &InstallRoots,
+) -> Result<usize, InstallError> {
+    if ownership.schema_version != 1 {
+        return Err(InstallError::OwnershipMismatch);
+    }
+
+    let mut changed = 0;
+    for created in &ownership.created_files {
+        let path = target_path(roots, created.target, &created.path)?;
+        if !path.is_file() || sha256_file(&path)? != created.installed_sha256 {
+            changed += 1;
+        }
+    }
+    for modified in &ownership.modified_files {
+        let path = target_path(roots, modified.target, &modified.path)?;
+        if !path.is_file() || sha256_file(&path)? != modified.patched_sha256 {
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 pub fn remove_patch(
     ownership: &OwnershipManifest,
     roots: &InstallRoots,
@@ -638,6 +662,41 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(fs::read(&safe).unwrap(), b"patched-safe");
         assert_eq!(fs::read(&changed).unwrap(), b"external-change");
+    }
+
+    #[test]
+    fn installed_patch_change_count_detects_missing_and_restored_files() {
+        let temp = tempdir().unwrap();
+        let roots = roots(temp.path());
+        fs::create_dir_all(&roots.addressables).unwrap();
+        fs::create_dir_all(&roots.game_data).unwrap();
+        let created = roots.addressables.join("created/__data");
+        fs::create_dir_all(created.parent().unwrap()).unwrap();
+        fs::write(&created, b"patched-created").unwrap();
+        let modified = roots.game_data.join("data.unity3d");
+        fs::write(&modified, b"patched-modified").unwrap();
+        let ownership = OwnershipManifest {
+            schema_version: 1,
+            patch_version: "v1".into(),
+            catalog_hash: "b".repeat(32),
+            created_files: vec![OwnedCreatedFile {
+                target: InstallTarget::Addressables,
+                path: "created/__data".into(),
+                installed_sha256: format!("{:x}", Sha256::digest(b"patched-created")),
+            }],
+            modified_files: vec![OwnedModifiedFile {
+                target: InstallTarget::GameData,
+                path: "data.unity3d".into(),
+                original_sha256: format!("{:x}", Sha256::digest(b"original")),
+                patched_sha256: format!("{:x}", Sha256::digest(b"patched-modified")),
+                backup_path: "game-data/data.unity3d".into(),
+            }],
+        };
+
+        assert_eq!(installed_patch_change_count(&ownership, &roots).unwrap(), 0);
+        fs::remove_file(&created).unwrap();
+        fs::write(&modified, b"original").unwrap();
+        assert_eq!(installed_patch_change_count(&ownership, &roots).unwrap(), 2);
     }
 
     #[test]

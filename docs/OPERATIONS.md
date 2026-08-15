@@ -430,3 +430,9 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 8. Android APK를 새로 배포해야 할 때 `INT_ANDROID APK`를 수동 실행하고 `INT_ANDROID v<game>` Release와 `AstralParty_INT_ANDROID.apk`를 확인.
 9. AutoPatcher 버전을 배포할 때 `AutoPatcher`를 수동 실행하고 `AutoPatcher v<version>` Release를 확인.
 10. 실기기/MuMu에서 Android installer attribution과 Steam install/update/remove를 검증.
+
+### 외부 파일 변경으로 기존 패치 제거가 막힌 경우
+
+기존 패치가 설치된 뒤 Steam 파일 무결성 검사, 게임 재다운로드/업데이트, 수동 파일 변경 등으로 관리 중인 파일의 SHA-256이 달라지면 AutoPatcher는 기존 backup을 강제로 복원하지 않습니다. 대신 Steam 패치 설치/업데이트 화면에서 `패치 상태 초기화 후 다시 설치`를 선택할 수 있습니다.
+
+이 초기화는 게임 디렉터리를 수정하지 않고 해당 route의 ownership manifest, backup, staging만 삭제합니다. 이후 현재 게임 파일을 새 기준으로 다시 백업하고 패치를 설치합니다. 다른 모드나 수동 수정이 남아 있는 상태에서 실행하면 그 파일이 원본으로 취급될 수 있으므로, 필요한 경우 먼저 Steam 파일 무결성 검사를 완료한 뒤 사용합니다.

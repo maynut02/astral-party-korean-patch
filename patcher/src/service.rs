@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::game::{GameInstallation, GameRoute};
 use crate::install::{
     ApplyPhase, ApplyProgress, InstallError, InstallRoots, InstallSummary, OwnershipManifest,
-    RemoveReport, install_patch_with_progress, remove_patch,
+    RemoveReport, install_patch_with_progress, installed_patch_change_count, remove_patch,
 };
 use crate::network::{NetworkError, ReleaseClient, StageProgress};
 use crate::protocol::PatchManifest;
@@ -102,6 +102,13 @@ pub struct InstalledPatchInfo {
     pub catalog_hash: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatchStateResetReport {
+    pub ownership_removed: bool,
+    pub backup_removed: bool,
+    pub staging_removed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallOutcome {
     AlreadyInstalled(InstalledPatchInfo),
@@ -172,6 +179,32 @@ pub fn installed_patch_info(path: &Path) -> Result<Option<InstalledPatchInfo>, S
         patch_version: ownership.patch_version,
         catalog_hash: ownership.catalog_hash,
     }))
+}
+
+pub fn reset_patch_state(
+    paths: &PatcherPaths,
+    route: GameRoute,
+) -> Result<PatchStateResetReport, ServiceError> {
+    let state = paths.route_state(route);
+    let ownership_removed = state.ownership_path.exists();
+    let backup_removed = state.backup_root.exists();
+    let staging_removed = state.staging_root.exists();
+
+    if staging_removed {
+        fs::remove_dir_all(&state.staging_root)?;
+    }
+    if backup_removed {
+        fs::remove_dir_all(&state.backup_root)?;
+    }
+    if ownership_removed {
+        fs::remove_file(&state.ownership_path)?;
+    }
+
+    Ok(PatchStateResetReport {
+        ownership_removed,
+        backup_removed,
+        staging_removed,
+    })
 }
 
 pub fn remove_installed_patch(
@@ -266,6 +299,10 @@ where
         if existing.patch_version == manifest.patch.version
             && existing.catalog_hash == manifest.game.catalog_hash
         {
+            let changed_files = installed_patch_change_count(&existing, &roots)?;
+            if changed_files > 0 {
+                return Err(ServiceError::ExistingPatchChanged(changed_files));
+            }
             return Ok(InstallOutcome::AlreadyInstalled(InstalledPatchInfo {
                 patch_version: existing.patch_version,
                 catalog_hash: existing.catalog_hash,
@@ -444,6 +481,69 @@ mod tests {
         );
         assert_eq!(cn.backup_root, paths.backup_root.join("cn-steam"));
         assert_eq!(cn.staging_root, paths.staging_root.join("cn-steam"));
+    }
+
+    #[test]
+    fn restored_game_file_is_detected_as_changed_patch_state() {
+        let temp = tempdir().unwrap();
+        let paths = PatcherPaths::below(temp.path().join("state"));
+        let roots = InstallRoots {
+            addressables: temp.path().join("addressables"),
+            game_data: temp.path().join("game-data"),
+        };
+        fs::create_dir_all(&roots.game_data).unwrap();
+        fs::write(roots.game_data.join("data.unity3d"), b"original").unwrap();
+
+        let payload = b"patch01";
+        let hash = format!("{:x}", Sha256::digest(payload));
+        let current = manifest("v1", &hash);
+        let stage = paths.staging_root.join("game-data/data.unity3d");
+        fs::create_dir_all(stage.parent().unwrap()).unwrap();
+        fs::write(&stage, payload).unwrap();
+        install_patch(
+            &current,
+            &paths.staging_root,
+            &roots,
+            &paths.backup_root,
+            &paths.ownership_path,
+        )
+        .unwrap();
+
+        fs::write(roots.game_data.join("data.unity3d"), b"original").unwrap();
+        let ownership = load_ownership(&paths.ownership_path).unwrap().unwrap();
+        let changed = installed_patch_change_count(&ownership, &roots).unwrap();
+        assert_eq!(changed, 1);
+    }
+
+    #[test]
+    fn reset_patch_state_removes_only_patcher_metadata() {
+        let temp = tempdir().unwrap();
+        let paths = PatcherPaths::below(temp.path().join("state"));
+        let state = paths.route_state(GameRoute::IntSteam);
+        let game_file = temp.path().join("game/data.unity3d");
+        fs::create_dir_all(game_file.parent().unwrap()).unwrap();
+        fs::write(&game_file, b"steam-restored-game-data").unwrap();
+        fs::create_dir_all(&state.backup_root).unwrap();
+        fs::create_dir_all(&state.staging_root).unwrap();
+        fs::create_dir_all(state.ownership_path.parent().unwrap()).unwrap();
+        fs::write(&state.ownership_path, b"stale ownership").unwrap();
+        fs::write(state.backup_root.join("backup.dat"), b"backup").unwrap();
+        fs::write(state.staging_root.join("stage.dat"), b"stage").unwrap();
+
+        let report = reset_patch_state(&paths, GameRoute::IntSteam).unwrap();
+
+        assert_eq!(
+            report,
+            PatchStateResetReport {
+                ownership_removed: true,
+                backup_removed: true,
+                staging_removed: true,
+            }
+        );
+        assert!(!state.ownership_path.exists());
+        assert!(!state.backup_root.exists());
+        assert!(!state.staging_root.exists());
+        assert_eq!(fs::read(&game_file).unwrap(), b"steam-restored-game-data");
     }
 
     #[test]

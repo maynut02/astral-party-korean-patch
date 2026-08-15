@@ -24,17 +24,18 @@ pub use game::{
 };
 pub use install::{
     ApplyPhase, ApplyProgress, InstallError, InstallRoots, InstallSummary, OwnershipManifest,
-    RemoveReport, install_patch, install_patch_with_progress, remove_patch,
+    RemoveReport, install_patch, install_patch_with_progress, installed_patch_change_count,
+    remove_patch,
 };
 pub use network::{NetworkError, ReleaseClient, StageProgress};
 pub use protocol::{
     InstallTarget, ManifestFile, PatchManifest, ProtocolError, ReleaseIndex, ReleaseIndexEntry,
 };
 pub use service::{
-    InstallOutcome, InstallProgress, InstalledPatchInfo, PatchFileInfo, PatcherPaths,
-    RELEASE_CHANNEL, RouteStatePaths, ServiceError, install_latest_compatible,
+    InstallOutcome, InstallProgress, InstalledPatchInfo, PatchFileInfo, PatchStateResetReport,
+    PatcherPaths, RELEASE_CHANNEL, RouteStatePaths, ServiceError, install_latest_compatible,
     install_latest_compatible_with_progress, install_roots, installed_patch_info, load_ownership,
-    remove_installed_patch,
+    remove_installed_patch, reset_patch_state,
 };
 pub use settings::{AppSettings, SettingsError};
 pub use uri::{URI_SCHEME, UriAction, UriError, UriRequest};

@@ -22,9 +22,9 @@ use crate::android::{
 use crate::game::GameRoute;
 use crate::install::ApplyPhase;
 use crate::service::{
-    InstallOutcome, InstallProgress, PatchFileInfo, PatcherPaths,
+    InstallOutcome, InstallProgress, PatchFileInfo, PatcherPaths, ServiceError,
     install_latest_compatible_with_progress, install_roots, installed_patch_info,
-    remove_installed_patch,
+    remove_installed_patch, reset_patch_state,
 };
 use crate::settings::AppSettings;
 use crate::uri::{UriAction, UriRequest};
@@ -40,6 +40,7 @@ const MAIN_ITEMS: [&str; 5] = [
 ];
 const RESULT_ITEMS: [&str; 2] = ["메인 메뉴", "종료"];
 const REINSTALL_ITEMS: [&str; 2] = ["기존 앱 제거 후 계속", "취소하고 메인 메뉴"];
+const PATCH_STATE_RESET_ITEMS: [&str; 2] = ["패치 상태 초기화 후 다시 설치", "취소하고 메인 메뉴"];
 
 #[derive(Debug, Clone, Copy)]
 pub struct RemoteEndpoints {
@@ -80,11 +81,18 @@ impl OperationKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum SteamInstallError {
+    ExistingPatchChanged(usize),
+    Other(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum OperationPhase {
     Pending,
     Running,
     NeedsDeviceSelection { devices: Vec<AndroidDevice> },
     NeedsReinstall { message: String },
+    NeedsPatchStateReset { changed_files: usize },
     Finished { success: bool, message: String },
 }
 
@@ -148,6 +156,7 @@ enum HitTarget {
     Settings(usize),
     Result(usize),
     Reinstall(usize),
+    PatchStateReset(usize),
     Device(usize),
 }
 
@@ -528,6 +537,40 @@ impl App {
         }
     }
 
+    fn activate_patch_state_reset_result(&mut self) {
+        match self.result_selected {
+            0 => {
+                let Some(route) = self.operation.as_ref().map(|operation| operation.route) else {
+                    return;
+                };
+                match reset_patch_state(&self.paths, route) {
+                    Ok(_) => {
+                        self.install_progress = InstallUiProgress::default();
+                        self.install_progress.status =
+                            "기존 패치 상태를 초기화했습니다. 다시 설치를 시작합니다...".into();
+                        if let Some(operation) = &mut self.operation {
+                            operation.phase = OperationPhase::Pending;
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(operation) = &mut self.operation {
+                            operation.phase = OperationPhase::Finished {
+                                success: false,
+                                message: format!("패치 상태 초기화에 실패했습니다: {error}"),
+                            };
+                        }
+                    }
+                }
+            }
+            1 => {
+                self.operation = None;
+                self.screen = Screen::Main;
+                self.notice = None;
+            }
+            _ => {}
+        }
+    }
+
     fn activate_device_selection(&mut self) {
         let selected = self.operation.as_ref().and_then(|operation| {
             if let OperationPhase::NeedsDeviceSelection { devices } = &operation.phase {
@@ -606,6 +649,7 @@ impl App {
         match self.operation.as_ref().map(|operation| &operation.phase) {
             Some(OperationPhase::NeedsDeviceSelection { devices }) => devices.len(),
             Some(OperationPhase::NeedsReinstall { .. }) => REINSTALL_ITEMS.len(),
+            Some(OperationPhase::NeedsPatchStateReset { .. }) => PATCH_STATE_RESET_ITEMS.len(),
             Some(OperationPhase::Finished { .. }) => RESULT_ITEMS.len(),
             _ => 0,
         }
@@ -635,6 +679,21 @@ impl App {
                     self.result_selected = next(self.result_selected, REINSTALL_ITEMS.len())
                 }
                 KeyCode::Enter => self.activate_reinstall_result(),
+                KeyCode::Esc => {
+                    self.operation = None;
+                    self.screen = Screen::Main;
+                }
+                _ => {}
+            },
+            Some(OperationPhase::NeedsPatchStateReset { .. }) => match code {
+                KeyCode::Up => {
+                    self.result_selected =
+                        previous(self.result_selected, PATCH_STATE_RESET_ITEMS.len())
+                }
+                KeyCode::Down => {
+                    self.result_selected = next(self.result_selected, PATCH_STATE_RESET_ITEMS.len())
+                }
+                KeyCode::Enter => self.activate_patch_state_reset_result(),
                 KeyCode::Esc => {
                     self.operation = None;
                     self.screen = Screen::Main;
@@ -684,6 +743,10 @@ impl App {
                     Some(HitTarget::Reinstall(index)) => {
                         self.result_selected = index;
                         self.activate_reinstall_result();
+                    }
+                    Some(HitTarget::PatchStateReset(index)) => {
+                        self.result_selected = index;
+                        self.activate_patch_state_reset_result();
                     }
                     Some(HitTarget::Device(index)) => {
                         self.result_selected = index;
@@ -838,10 +901,30 @@ fn execute_operation(terminal: &mut DefaultTerminal, app: &mut App) {
         return;
     }
 
+    if kind == OperationKind::SteamInstall {
+        let phase = match perform_install(terminal, app, route) {
+            Ok(message) => OperationPhase::Finished {
+                success: true,
+                message,
+            },
+            Err(SteamInstallError::ExistingPatchChanged(changed_files)) => {
+                app.result_selected = 0;
+                OperationPhase::NeedsPatchStateReset { changed_files }
+            }
+            Err(SteamInstallError::Other(message)) => OperationPhase::Finished {
+                success: false,
+                message,
+            },
+        };
+        if let Some(operation) = &mut app.operation {
+            operation.phase = phase;
+        }
+        return;
+    }
+
     let result = match kind {
-        OperationKind::SteamInstall => perform_install(terminal, app, route),
         OperationKind::SteamRemove => app.perform_remove(route),
-        OperationKind::AndroidInstall => unreachable!(),
+        OperationKind::AndroidInstall | OperationKind::SteamInstall => unreachable!(),
     };
     if let Some(operation) = &mut app.operation {
         operation.phase = match result {
@@ -889,13 +972,13 @@ fn perform_install(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     route: GameRoute,
-) -> Result<String, String> {
+) -> Result<String, SteamInstallError> {
     let paths = app.paths.clone();
     let settings = app.settings.clone();
     let release_index_url = app.endpoints.patch_release_index;
     let game = settings
         .installation_for(route)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| SteamInstallError::Other(error.to_string()))?;
     let mut last_draw = Instant::now();
     let outcome =
         install_latest_compatible_with_progress(release_index_url, &paths, &game, |event| {
@@ -906,7 +989,12 @@ fn perform_install(
                 last_draw = Instant::now();
             }
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| match error {
+            ServiceError::ExistingPatchChanged(changed_files) => {
+                SteamInstallError::ExistingPatchChanged(changed_files)
+            }
+            other => SteamInstallError::Other(other.to_string()),
+        })?;
     match outcome {
         InstallOutcome::AlreadyInstalled(info) => Ok(format!(
             "{} 패치가 이미 설치되어 있습니다.",
@@ -1280,6 +1368,63 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                 HitTarget::Reinstall,
             );
         }
+        OperationPhase::NeedsPatchStateReset { changed_files } => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(12), Constraint::Length(4)])
+                .split(area);
+            let text = Text::from(vec![
+                Line::from(Span::styled(
+                    "기존 패치 상태를 자동으로 복구할 수 없습니다.",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!(
+                    "패치 설치 이후 {changed_files}개 파일이 외부에서 변경되었습니다."
+                )),
+                Line::from(
+                    "Steam 파일 무결성 검사, 게임 재다운로드/업데이트 등으로 생길 수 있습니다.",
+                ),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "패치 상태 초기화는 게임 파일을 수정하거나 삭제하지 않습니다.",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(
+                    "AutoPatcher의 기존 installed/backup/staging 기록만 폐기한 뒤 현재 파일을 기준으로 다시 설치합니다.",
+                ),
+                Line::from(""),
+                Line::from(
+                    "다른 모드나 수동 수정이 남아 있다면 그 상태를 원본으로 백업할 수 있습니다.",
+                ),
+                Line::from("Steam 파일이 정상 상태인지 확인한 경우에만 초기화를 선택하세요."),
+            ]);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .block(Block::default().borders(Borders::ALL).title(title))
+                    .wrap(Wrap { trim: false }),
+                chunks[0],
+            );
+            let result_block = Block::default().borders(Borders::ALL).title(" 복구 선택 ");
+            let inner = result_block.inner(chunks[1]);
+            let list = List::new(PATCH_STATE_RESET_ITEMS.map(ListItem::new))
+                .block(result_block)
+                .highlight_symbol("▶ ")
+                .highlight_style(
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                );
+            let mut state = ListState::default();
+            state.select(Some(app.result_selected));
+            frame.render_stateful_widget(list, chunks[1], &mut state);
+            add_list_hits(
+                &mut app.hit_regions,
+                inner,
+                PATCH_STATE_RESET_ITEMS.len(),
+                HitTarget::PatchStateReset,
+            );
+        }
         OperationPhase::Finished { success, message } => {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -1639,6 +1784,7 @@ fn contains(rect: Rect, column: u16, row: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use tempfile::tempdir;
 
     use super::*;
@@ -1717,6 +1863,41 @@ mod tests {
         let operation = app.operation.as_ref().unwrap();
         assert!(operation.force_reinstall);
         assert!(matches!(operation.phase, OperationPhase::Pending));
+    }
+
+    #[test]
+    fn patch_state_reset_confirmation_clears_metadata_and_requeues_install() {
+        let mut app = app(UriAction::Menu);
+        app.start_operation(
+            OperationKind::SteamInstall,
+            false,
+            Some(GameRoute::IntSteam),
+        );
+        let state = app.paths.route_state(GameRoute::IntSteam);
+        fs::create_dir_all(&state.backup_root).unwrap();
+        fs::create_dir_all(&state.staging_root).unwrap();
+        fs::create_dir_all(state.ownership_path.parent().unwrap()).unwrap();
+        fs::write(&state.ownership_path, b"stale ownership").unwrap();
+        fs::write(state.backup_root.join("backup.dat"), b"backup").unwrap();
+        fs::write(state.staging_root.join("stage.dat"), b"stage").unwrap();
+        app.operation.as_mut().unwrap().phase =
+            OperationPhase::NeedsPatchStateReset { changed_files: 4 };
+        app.result_selected = 0;
+
+        app.activate_patch_state_reset_result();
+
+        assert!(!state.ownership_path.exists());
+        assert!(!state.backup_root.exists());
+        assert!(!state.staging_root.exists());
+        assert!(matches!(
+            app.operation.as_ref().unwrap().phase,
+            OperationPhase::Pending
+        ));
+        assert!(
+            app.install_progress
+                .status
+                .contains("기존 패치 상태를 초기화했습니다")
+        );
     }
 
     #[test]
