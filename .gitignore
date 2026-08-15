@@ -13,6 +13,7 @@ patcher/target/
 # Environment / secrets
 .env
 .env.*
+!.env.example
 .secrets/
 
 # IDE / OS
