@@ -17,7 +17,6 @@ final class RuntimeConfig {
     final String gameActivity;
     final String addressablesDir;
     final String assetBundleCacheDir;
-    final long watcherIntervalMs;
 
     private RuntimeConfig(
             String route,
@@ -25,15 +24,13 @@ final class RuntimeConfig {
             String releaseIndexUrl,
             String gameActivity,
             String addressablesDir,
-            String assetBundleCacheDir,
-            long watcherIntervalMs) {
+            String assetBundleCacheDir) {
         this.route = route;
         this.channel = channel;
         this.releaseIndexUrl = releaseIndexUrl;
         this.gameActivity = gameActivity;
         this.addressablesDir = addressablesDir;
         this.assetBundleCacheDir = assetBundleCacheDir;
-        this.watcherIntervalMs = watcherIntervalMs;
     }
 
     static RuntimeConfig load(Context context) throws Exception {
@@ -51,14 +48,12 @@ final class RuntimeConfig {
         if (json.optInt("schemaVersion", 0) != 1) {
             throw new IllegalStateException("unsupported Astral patch runtime config schema");
         }
-        long intervalSeconds = Math.max(10L, json.optLong("watcherIntervalSeconds", 30L));
         return new RuntimeConfig(
                 json.getString("route"),
                 json.optString("channel", "release"),
                 json.getString("releaseIndexUrl"),
                 json.getString("gameActivity"),
                 json.optString("addressablesDir", "com.unity.addressables"),
-                json.optString("assetBundleCacheDir", "com.unity.addressables/AssetBundles"),
-                intervalSeconds * 1000L);
+                json.optString("assetBundleCacheDir", "com.unity.addressables/AssetBundles"));
     }
 }

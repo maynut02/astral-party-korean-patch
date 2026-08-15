@@ -238,11 +238,26 @@ def test_android_runtime_shows_restart_screen_when_patch_becomes_ready() -> None
     watcher = (ROOT / "android/runtime/src/com/astralpatch/runtime/UpdateWatcher.java").read_text(
         encoding="utf-8"
     )
+    engine = (ROOT / "android/runtime/src/com/astralpatch/runtime/PatchEngine.java").read_text(
+        encoding="utf-8"
+    )
+    bootstrap = (
+        ROOT / "android/runtime/src/com/astralpatch/runtime/BootstrapActivity.java"
+    ).read_text(encoding="utf-8")
     restart = (
         ROOT / "android/runtime/src/com/astralpatch/runtime/RestartRequiredActivity.java"
     ).read_text(encoding="utf-8")
 
-    assert "PatchEngine.canApplyNow(app, config)" in watcher
+    assert "PatchEngine.loadReleaseSnapshot(config)" in bootstrap
+    assert "PatchEngine.primeWatchSnapshot(" in bootstrap
+    assert "PatchEngine.probeLocalWatch(" in watcher
+    assert "httpGetBytes" not in watcher
+    assert "HttpURLConnection" not in watcher
+    assert "CATALOG_POLL_MS = 1000L" in watcher
+    assert "BUNDLE_POLL_MS = 250L" in watcher
+    assert "BUNDLE_STABLE_MS = 1000L" in watcher
+    assert "file.length()" in engine
+    assert "file.lastModified()" in engine
     assert "new Intent(app, RestartRequiredActivity.class)" in watcher
     assert "Toast.makeText" not in watcher
     assert 'title.setText("한글패치 준비 완료")' in restart
@@ -250,3 +265,11 @@ def test_android_runtime_shows_restart_screen_when_patch_becomes_ready() -> None
     assert 'close.setText("게임 종료")' in restart
     assert "task.finishAndRemoveTask()" in restart
     assert "Process.killProcess(Process.myPid())" in restart
+
+
+def test_android_runtime_config_does_not_embed_network_polling_interval() -> None:
+    config = MODULE.build_runtime_config(
+        "https://raw.githubusercontent.com/example/repo/distribution/release-index.json",
+        "com.femoo.sdk.Femoo_UnityActivity",
+    )
+    assert "watcherIntervalSeconds" not in config

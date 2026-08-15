@@ -16,6 +16,7 @@ class ReleaseMetadata:
     game_version: str
     revision: str
     catalog_hash: str
+    addressables_paths: tuple[str, ...]
 
 
 def read_release_metadata(manifest_path: str | Path) -> ReleaseMetadata:
@@ -26,6 +27,18 @@ def read_release_metadata(manifest_path: str | Path) -> ReleaseMetadata:
     game = data.get("game")
     if not isinstance(patch, dict) or not isinstance(game, dict):
         raise ValueError("manifest is missing patch/game metadata")
+    files = data.get("files")
+    if not isinstance(files, list):
+        raise ValueError("manifest is missing files")
+    addressables_paths = tuple(
+        sorted(
+            {
+                str(item["path"]).replace("\\", "/")
+                for item in files
+                if isinstance(item, dict) and item.get("target") == "addressables"
+            }
+        )
+    )
     metadata = ReleaseMetadata(
         build_id=str(patch["buildId"]),
         patch_version=str(patch["version"]),
@@ -34,6 +47,7 @@ def read_release_metadata(manifest_path: str | Path) -> ReleaseMetadata:
         game_version=str(game["version"]),
         revision=str(game["revision"]),
         catalog_hash=str(game["catalogHash"]),
+        addressables_paths=addressables_paths,
     )
     if metadata.channel not in {"release", "develop"}:
         raise ValueError(f"unsupported release channel: {metadata.channel}")
@@ -62,6 +76,7 @@ def update_release_index(
         patch_version=metadata.patch_version,
         manifest_url=manifest_url,
         manifest_sha256=manifest_digest(manifest_path.read_bytes()),
+        addressables_paths=(metadata.addressables_paths if metadata.route == "INT_ANDROID" else ()),
     )
     updated = index.upsert(entry)
     index_file.parent.mkdir(parents=True, exist_ok=True)

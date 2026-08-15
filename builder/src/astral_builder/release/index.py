@@ -18,6 +18,7 @@ class ReleaseIndexEntry:
     patch_version: str
     manifest_url: str
     manifest_sha256: str
+    addressables_paths: tuple[str, ...] = ()
 
     @property
     def identity(self) -> tuple[str, str, str, str]:
@@ -44,10 +45,16 @@ class ReleaseIndexEntry:
             )
         ):
             raise ValueError("release index entry contains an empty required field")
+        if len(set(self.addressables_paths)) != len(self.addressables_paths):
+            raise ValueError("release index addressables paths must be unique")
+        for path in self.addressables_paths:
+            normalized = path.replace("\\", "/")
+            if not normalized or normalized.startswith("/") or ".." in normalized.split("/"):
+                raise ValueError(f"unsafe release index addressables path: {path!r}")
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict[str, object]:
         self.validate()
-        return {
+        result: dict[str, object] = {
             "route": self.route,
             "gameVersion": self.game_version,
             "revision": self.revision,
@@ -57,6 +64,9 @@ class ReleaseIndexEntry:
             "manifestUrl": self.manifest_url,
             "manifestSha256": self.manifest_sha256,
         }
+        if self.addressables_paths:
+            result["addressablesPaths"] = list(self.addressables_paths)
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +121,7 @@ class ReleaseIndex:
                 patch_version=item["patchVersion"],
                 manifest_url=item["manifestUrl"],
                 manifest_sha256=item["manifestSha256"],
+                addressables_paths=tuple(item.get("addressablesPaths", ())),
             )
             for item in data.get("releases", [])
             if item.get("channel") not in {"preview", "stable"}

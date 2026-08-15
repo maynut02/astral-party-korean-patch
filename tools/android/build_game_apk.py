@@ -208,7 +208,6 @@ def build_runtime_config(
         "gameActivity": game_activity,
         "addressablesDir": "com.unity.addressables",
         "assetBundleCacheDir": "com.unity.addressables/AssetBundles",
-        "watcherIntervalSeconds": 30,
     }
 
 

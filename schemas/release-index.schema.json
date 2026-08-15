@@ -60,6 +60,15 @@
           },
           "manifestSha256": {
             "$ref": "#/$defs/sha256"
+          },
+          "addressablesPaths": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+            }
           }
         }
       }

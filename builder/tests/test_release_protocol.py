@@ -125,6 +125,66 @@ def test_release_index_upserts_exact_route_revision_channel() -> None:
     jsonschema.Draft202012Validator(schema).validate(index.as_dict())
 
 
+def test_release_index_preserves_optional_addressables_paths() -> None:
+    entry = ReleaseIndexEntry(
+        route="INT_ANDROID",
+        game_version="3.2.0",
+        revision="1042",
+        catalog_hash="b" * 32,
+        channel="release",
+        patch_version="v3.2.0_r1042",
+        manifest_url="https://example.test/release/manifest.json",
+        manifest_sha256="c" * 64,
+        addressables_paths=("BundleA/hash/__data", "BundleB/hash/__data"),
+    )
+    index = ReleaseIndex((entry,))
+    raw = index.as_dict()
+    assert raw["releases"][0]["addressablesPaths"] == [
+        "BundleA/hash/__data",
+        "BundleB/hash/__data",
+    ]
+    assert ReleaseIndex.from_json(index.to_json()) == index
+
+    schema = json.loads((ROOT / "schemas/release-index.schema.json").read_text())
+    jsonschema.Draft202012Validator(schema).validate(raw)
+
+
+def test_release_index_rejects_unsafe_addressables_path() -> None:
+    entry = ReleaseIndexEntry(
+        route="INT_ANDROID",
+        game_version="3.2.0",
+        revision="1042",
+        catalog_hash="b" * 32,
+        channel="release",
+        patch_version="v3.2.0_r1042",
+        manifest_url="https://example.test/release/manifest.json",
+        manifest_sha256="c" * 64,
+        addressables_paths=("../escape",),
+    )
+    with pytest.raises(ValueError, match="unsafe"):
+        entry.validate()
+
+
+def test_release_index_accepts_entries_without_addressables_paths() -> None:
+    raw = {
+        "schemaVersion": 1,
+        "releases": [
+            {
+                "route": "INT_ANDROID",
+                "gameVersion": "3.2.0",
+                "revision": "1042",
+                "catalogHash": "b" * 32,
+                "channel": "release",
+                "patchVersion": "v3.2.0_r1042",
+                "manifestUrl": "https://example.test/release/manifest.json",
+                "manifestSha256": "c" * 64,
+            }
+        ],
+    }
+    index = ReleaseIndex.from_json(json.dumps(raw))
+    assert index.releases[0].addressables_paths == ()
+
+
 def test_release_index_drops_legacy_channels_on_read() -> None:
     raw = json.dumps(
         {

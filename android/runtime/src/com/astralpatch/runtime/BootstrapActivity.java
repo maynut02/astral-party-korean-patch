@@ -38,28 +38,33 @@ public final class BootstrapActivity extends Activity {
     }
 
     private void runBootstrap() {
+        String catalogVersion = null;
         String catalogHash = null;
-        boolean watchCurrentCatalog = true;
+        boolean watchBootCatalog = false;
+        PatchEngine.ReleaseSnapshot snapshot = null;
         try {
+            snapshot = PatchEngine.loadReleaseSnapshot(config);
             PatchEngine.Result result = PatchEngine.prepare(
                     getApplicationContext(),
                     config,
+                    snapshot,
                     new PatchEngine.Progress() {
                         @Override
                         public void update(final String message) {
                             updateStatus(message);
                         }
                     });
+            catalogVersion = result.catalogVersion;
             catalogHash = result.catalogHash;
             switch (result.status) {
                 case PATCHED:
                     updateStatus("한글패치 적용이 완료되었습니다.");
-                    watchCurrentCatalog = false;
+                    watchBootCatalog = false;
                     clearRestartMarker();
                     break;
                 case ALREADY_PATCHED:
                     updateStatus("한글패치가 최신 상태입니다.");
-                    watchCurrentCatalog = false;
+                    watchBootCatalog = false;
                     clearRestartMarker();
                     break;
                 case WAITING_FOR_GAME_DOWNLOAD: {
@@ -67,22 +72,22 @@ public final class BootstrapActivity extends Activity {
                             ? ""
                             : "\n대기 중인 리소스: " + result.missingBundlePath;
                     updateStatus("게임 리소스 다운로드가 필요합니다. 게임을 시작합니다." + missing);
-                    watchCurrentCatalog = true;
+                    watchBootCatalog = true;
                     break;
                 }
                 case NO_PATCH:
                     updateStatus("현재 리소스용 한글패치가 아직 없습니다. 게임을 시작합니다.");
-                    watchCurrentCatalog = true;
+                    watchBootCatalog = false;
                     break;
                 case NO_CATALOG:
                 default:
                     updateStatus("첫 리소스 다운로드를 위해 게임을 시작합니다.");
-                    watchCurrentCatalog = true;
+                    watchBootCatalog = false;
                     break;
             }
         } catch (final Exception error) {
             catalogHash = PatchEngine.currentCatalogHash(getApplicationContext(), config);
-            watchCurrentCatalog = true;
+            watchBootCatalog = false;
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override
                 public void run() {
@@ -96,8 +101,25 @@ public final class BootstrapActivity extends Activity {
             });
         }
 
+        if (snapshot != null) {
+            try {
+                PatchEngine.primeWatchSnapshot(
+                        config,
+                        snapshot,
+                        catalogVersion,
+                        catalogHash,
+                        watchBootCatalog);
+            } catch (Exception ignored) {
+                // Legacy indexes may require one manifest prefetch for local-only watching.
+            }
+        }
         UpdateWatcher.start(
-                getApplicationContext(), config, catalogHash, watchCurrentCatalog);
+                getApplicationContext(),
+                config,
+                snapshot,
+                catalogVersion,
+                catalogHash,
+                watchBootCatalog);
         final Handler main = new Handler(Looper.getMainLooper());
         main.postDelayed(new Runnable() {
             @Override

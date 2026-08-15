@@ -20,7 +20,9 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.zip.GZIPInputStream;
 
@@ -41,16 +43,23 @@ final class PatchEngine {
 
     static final class Result {
         final Status status;
+        final String catalogVersion;
         final String catalogHash;
         final String patchVersion;
         final String missingBundlePath;
 
-        Result(Status status, String catalogHash, String patchVersion) {
-            this(status, catalogHash, patchVersion, null);
+        Result(Status status, String catalogVersion, String catalogHash, String patchVersion) {
+            this(status, catalogVersion, catalogHash, patchVersion, null);
         }
 
-        Result(Status status, String catalogHash, String patchVersion, String missingBundlePath) {
+        Result(
+                Status status,
+                String catalogVersion,
+                String catalogHash,
+                String patchVersion,
+                String missingBundlePath) {
             this.status = status;
+            this.catalogVersion = catalogVersion;
             this.catalogHash = catalogHash;
             this.patchVersion = patchVersion;
             this.missingBundlePath = missingBundlePath;
@@ -82,6 +91,7 @@ final class PatchEngine {
         final String patchVersion;
         final String manifestUrl;
         final String manifestSha256;
+        final List<String> addressablesPaths;
 
         Release(JSONObject json) throws Exception {
             route = json.getString("route");
@@ -92,6 +102,139 @@ final class PatchEngine {
             patchVersion = json.getString("patchVersion");
             manifestUrl = json.getString("manifestUrl");
             manifestSha256 = json.getString("manifestSha256").toLowerCase(Locale.ROOT);
+            JSONArray rawPaths = json.optJSONArray("addressablesPaths");
+            List<String> paths = new ArrayList<>();
+            if (rawPaths != null) {
+                for (int i = 0; i < rawPaths.length(); i++) {
+                    paths.add(safeRelativePath(rawPaths.getString(i)));
+                }
+            }
+            addressablesPaths = Collections.unmodifiableList(paths);
+        }
+
+        String key() {
+            return gameVersion + "\n" + revision + "\n" + catalogHash;
+        }
+    }
+
+    static final class ReleaseSnapshot {
+        private final List<Release> releases;
+        private final Map<String, List<String>> manifestPaths = new HashMap<>();
+
+        ReleaseSnapshot(List<Release> releases) {
+            this.releases = Collections.unmodifiableList(new ArrayList<>(releases));
+        }
+
+        private Release resolve(Catalog catalog) {
+            Release selected = null;
+            for (Release release : releases) {
+                if (!catalog.version.equals(release.gameVersion)
+                        || !catalog.hash.equals(release.catalogHash)) {
+                    continue;
+                }
+                if (selected == null || compareReleaseOrder(release, selected) > 0) {
+                    selected = release;
+                }
+            }
+            return selected;
+        }
+
+        synchronized void rememberManifest(Release release, Manifest manifest) {
+            List<String> paths = new ArrayList<>();
+            for (ManifestFile file : manifest.files) {
+                paths.add(file.path);
+            }
+            manifestPaths.put(release.key(), Collections.unmodifiableList(paths));
+        }
+
+        synchronized List<String> watchPaths(Release release) {
+            if (!release.addressablesPaths.isEmpty()) {
+                return release.addressablesPaths;
+            }
+            List<String> paths = manifestPaths.get(release.key());
+            return paths == null ? Collections.<String>emptyList() : paths;
+        }
+
+        private Release findByIdentity(String catalogVersion, String catalogHash) {
+            if (catalogVersion == null || catalogHash == null) {
+                return null;
+            }
+            return resolve(new Catalog(catalogVersion, catalogHash, null));
+        }
+
+        private boolean isPotentialTarget(
+                Release release,
+                String bootCatalogVersion,
+                String bootCatalogHash,
+                boolean watchBootCatalog) {
+            if (bootCatalogHash == null) {
+                return true;
+            }
+            if (watchBootCatalog && bootCatalogHash.equals(release.catalogHash)) {
+                return true;
+            }
+            Release bootRelease = findByIdentity(bootCatalogVersion, bootCatalogHash);
+            if (bootRelease != null) {
+                return compareReleaseOrder(release, bootRelease) > 0;
+            }
+            if (bootCatalogVersion != null
+                    && compareVersions(release.gameVersion, bootCatalogVersion) < 0) {
+                return false;
+            }
+            return !bootCatalogHash.equals(release.catalogHash);
+        }
+
+        boolean hasWatchTarget(
+                String bootCatalogVersion,
+                String bootCatalogHash,
+                boolean watchBootCatalog) {
+            for (Release release : releases) {
+                if (!isPotentialTarget(
+                        release, bootCatalogVersion, bootCatalogHash, watchBootCatalog)) {
+                    continue;
+                }
+                if (!watchPaths(release).isEmpty()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private Release latestCandidate(
+                String bootCatalogVersion,
+                String bootCatalogHash,
+                boolean watchBootCatalog) {
+            Release selected = null;
+            for (Release release : releases) {
+                if (!isPotentialTarget(
+                        release, bootCatalogVersion, bootCatalogHash, watchBootCatalog)) {
+                    continue;
+                }
+                if (selected == null || compareReleaseOrder(release, selected) > 0) {
+                    selected = release;
+                }
+            }
+            return selected;
+        }
+    }
+
+    enum WatchStatus {
+        NO_CATALOG,
+        NO_RELEASE,
+        NO_PATHS,
+        WAITING,
+        READY
+    }
+
+    static final class WatchProbe {
+        final WatchStatus status;
+        final String catalogHash;
+        final String fingerprint;
+
+        WatchProbe(WatchStatus status, String catalogHash, String fingerprint) {
+            this.status = status;
+            this.catalogHash = catalogHash;
+            this.fingerprint = fingerprint;
         }
     }
 
@@ -162,17 +305,59 @@ final class PatchEngine {
 
     private PatchEngine() {}
 
-    static Result prepare(Context context, RuntimeConfig config, Progress progress) throws Exception {
+    static ReleaseSnapshot loadReleaseSnapshot(RuntimeConfig config) throws Exception {
+        byte[] raw = httpGetBytes(config.releaseIndexUrl, METADATA_LIMIT);
+        JSONObject root = new JSONObject(new String(raw, StandardCharsets.UTF_8));
+        if (root.optInt("schemaVersion", 0) != 1) {
+            throw new IllegalStateException("unsupported release index schema");
+        }
+        JSONArray rawReleases = root.optJSONArray("releases");
+        List<Release> releases = new ArrayList<>();
+        if (rawReleases != null) {
+            for (int i = 0; i < rawReleases.length(); i++) {
+                JSONObject item = rawReleases.getJSONObject(i);
+                if (!config.route.equals(item.optString("route"))
+                        || !config.channel.equals(item.optString("channel"))) {
+                    continue;
+                }
+                releases.add(new Release(item));
+            }
+        }
+        return new ReleaseSnapshot(releases);
+    }
+
+    static void primeWatchSnapshot(
+            RuntimeConfig config,
+            ReleaseSnapshot snapshot,
+            String bootCatalogVersion,
+            String bootCatalogHash,
+            boolean watchBootCatalog) throws Exception {
+        Release release = snapshot.latestCandidate(
+                bootCatalogVersion, bootCatalogHash, watchBootCatalog);
+        if (release == null || !snapshot.watchPaths(release).isEmpty()) {
+            return;
+        }
+        Catalog releaseCatalog = new Catalog(release.gameVersion, release.catalogHash, null);
+        Manifest manifest = fetchManifest(config, releaseCatalog, release);
+        snapshot.rememberManifest(release, manifest);
+    }
+
+    static Result prepare(
+            Context context,
+            RuntimeConfig config,
+            ReleaseSnapshot snapshot,
+            Progress progress) throws Exception {
         Catalog catalog = discoverCatalog(context, config);
         if (catalog == null) {
-            return new Result(Status.NO_CATALOG, null, null);
+            return new Result(Status.NO_CATALOG, null, null, null);
         }
         progress.update("현재 리소스 버전을 확인하는 중입니다...");
-        Release release = resolveRelease(config, catalog);
+        Release release = snapshot.resolve(catalog);
         if (release == null) {
-            return new Result(Status.NO_PATCH, catalog.hash, null);
+            return new Result(Status.NO_PATCH, catalog.version, catalog.hash, null);
         }
         Manifest manifest = fetchManifest(config, catalog, release);
+        snapshot.rememberManifest(release, manifest);
         File bundleRoot = assetBundleCacheRoot(context, config);
         Log.i(TAG, "catalog cache root=" + catalog.root + ", bundle cache root=" + bundleRoot);
         File stateRoot = stateRoot(context);
@@ -180,7 +365,11 @@ final class PatchEngine {
 
         if (allPatchedFilesMatch(bundleRoot, manifest.files)) {
             writeState(stateFile, catalog, manifest);
-            return new Result(Status.ALREADY_PATCHED, catalog.hash, manifest.patchVersion);
+            return new Result(
+                    Status.ALREADY_PATCHED,
+                    catalog.version,
+                    catalog.hash,
+                    manifest.patchVersion);
         }
         String missingBundle = firstMissingBundlePath(bundleRoot, manifest.files);
         if (missingBundle != null) {
@@ -188,6 +377,7 @@ final class PatchEngine {
             if (!restoreInterruptedTransaction(stateRoot, bundleRoot, catalog, manifest)) {
                 return new Result(
                         Status.WAITING_FOR_GAME_DOWNLOAD,
+                        catalog.version,
                         catalog.hash,
                         manifest.patchVersion,
                         missingBundle);
@@ -197,6 +387,7 @@ final class PatchEngine {
                 Log.i(TAG, "bundle cache entry still missing after recovery: " + missingBundle);
                 return new Result(
                         Status.WAITING_FOR_GAME_DOWNLOAD,
+                        catalog.version,
                         catalog.hash,
                         manifest.patchVersion,
                         missingBundle);
@@ -206,21 +397,47 @@ final class PatchEngine {
         progress.update("한글패치 파일을 준비하는 중입니다...");
         apply(bundleRoot, catalog, manifest, stateRoot, progress);
         writeState(stateFile, catalog, manifest);
-        return new Result(Status.PATCHED, catalog.hash, manifest.patchVersion);
+        return new Result(Status.PATCHED, catalog.version, catalog.hash, manifest.patchVersion);
     }
 
-    static boolean canApplyNow(Context context, RuntimeConfig config) throws Exception {
+    static WatchProbe probeLocalWatch(
+            Context context,
+            RuntimeConfig config,
+            ReleaseSnapshot snapshot,
+            String bootCatalogVersion,
+            String bootCatalogHash,
+            boolean watchBootCatalog) throws Exception {
         Catalog catalog = discoverCatalog(context, config);
         if (catalog == null) {
-            return false;
+            return new WatchProbe(WatchStatus.NO_CATALOG, null, null);
         }
-        Release release = resolveRelease(config, catalog);
-        if (release == null) {
-            return false;
+        Release release = snapshot.resolve(catalog);
+        if (release == null
+                || !snapshot.isPotentialTarget(
+                        release, bootCatalogVersion, bootCatalogHash, watchBootCatalog)) {
+            return new WatchProbe(WatchStatus.NO_RELEASE, catalog.hash, null);
         }
-        Manifest manifest = fetchManifest(config, catalog, release);
+        List<String> paths = snapshot.watchPaths(release);
+        if (paths.isEmpty()) {
+            return new WatchProbe(WatchStatus.NO_PATHS, catalog.hash, null);
+        }
+
         File bundleRoot = assetBundleCacheRoot(context, config);
-        return allBundleFilesPresent(bundleRoot, manifest.files);
+        StringBuilder fingerprint = new StringBuilder(catalog.hash);
+        for (String path : paths) {
+            File file = resolveBundleFile(bundleRoot, path);
+            if (file == null || file.length() <= 0) {
+                return new WatchProbe(WatchStatus.WAITING, catalog.hash, null);
+            }
+            fingerprint
+                    .append('\n')
+                    .append(path)
+                    .append(':')
+                    .append(file.length())
+                    .append(':')
+                    .append(file.lastModified());
+        }
+        return new WatchProbe(WatchStatus.READY, catalog.hash, fingerprint.toString());
     }
 
     static String currentCatalogHash(Context context, RuntimeConfig config) {
@@ -287,6 +504,24 @@ final class PatchEngine {
         return left.compareTo(right);
     }
 
+    private static int compareReleaseOrder(Release left, Release right) {
+        int version = compareVersions(left.gameVersion, right.gameVersion);
+        if (version != 0) {
+            return version;
+        }
+        return compareRevision(left.revision, right.revision);
+    }
+
+    private static int compareRevision(String left, String right) {
+        try {
+            long a = Long.parseLong(left);
+            long b = Long.parseLong(right);
+            return a < b ? -1 : (a == b ? 0 : 1);
+        } catch (NumberFormatException ignored) {
+            return left.compareTo(right);
+        }
+    }
+
     private static int parseVersionPart(String value) {
         int result = 0;
         for (int i = 0; i < value.length(); i++) {
@@ -297,28 +532,6 @@ final class PatchEngine {
             result = result * 10 + (c - '0');
         }
         return result;
-    }
-
-    private static Release resolveRelease(RuntimeConfig config, Catalog catalog) throws Exception {
-        byte[] raw = httpGetBytes(config.releaseIndexUrl, METADATA_LIMIT);
-        JSONObject root = new JSONObject(new String(raw, StandardCharsets.UTF_8));
-        if (root.optInt("schemaVersion", 0) != 1) {
-            throw new IllegalStateException("unsupported release index schema");
-        }
-        JSONArray releases = root.optJSONArray("releases");
-        if (releases == null) {
-            return null;
-        }
-        for (int i = 0; i < releases.length(); i++) {
-            Release release = new Release(releases.getJSONObject(i));
-            if (config.route.equals(release.route)
-                    && config.channel.equals(release.channel)
-                    && catalog.version.equals(release.gameVersion)
-                    && catalog.hash.equals(release.catalogHash)) {
-                return release;
-            }
-        }
-        return null;
     }
 
     private static Manifest fetchManifest(RuntimeConfig config, Catalog catalog, Release release)
@@ -443,11 +656,6 @@ final class PatchEngine {
             }
         }
         return true;
-    }
-
-    private static boolean allBundleFilesPresent(
-            File root, List<ManifestFile> files) throws Exception {
-        return firstMissingBundlePath(root, files) == null;
     }
 
     private static String firstMissingBundlePath(
