@@ -30,7 +30,7 @@ use crate::settings::AppSettings;
 use crate::uri::{UriAction, UriRequest};
 
 const MIN_WIDTH: u16 = 72;
-const MIN_HEIGHT: u16 = 27;
+const MIN_HEIGHT: u16 = 26;
 const MAIN_ITEMS: [&str; 5] = [
     "Android 패치 / 업데이트",
     "Steam 패치 설치 / 업데이트",
@@ -423,8 +423,8 @@ impl App {
         }
         self.settings_selected = 0;
         self.notice = Some(format!(
-            "게임 route를 {}로 변경했습니다.",
-            self.settings.selected_route().as_str()
+            "Steam 지역을 {}으로 변경했습니다.",
+            self.settings.selected_route().display_name()
         ));
     }
 
@@ -469,7 +469,7 @@ impl App {
         }
         let old = self.settings.clone();
         if let Err(error) = self.settings.redetect_all() {
-            self.notice = Some(format!("자동 감지에 실패했습니다: {error}"));
+            self.notice = Some(format!("자동 찾기에 실패했습니다: {error}"));
             return;
         }
         if let Err(error) = self.settings.save(&self.paths.settings_path) {
@@ -477,7 +477,7 @@ impl App {
             self.notice = Some(format!("설정을 저장하지 못했습니다: {error}"));
             return;
         }
-        self.notice = Some("Steam과 LocalLow 경로를 다시 감지했습니다.".into());
+        self.notice = Some("설치 경로와 리소스 경로를 다시 찾았습니다.".into());
     }
 
     fn activate_main(&mut self) {
@@ -1054,7 +1054,7 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(13),
+            Constraint::Length(12),
             Constraint::Min(8),
             Constraint::Length(3),
         ])
@@ -1070,9 +1070,9 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
 }
 
 fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let (game_version, catalog) = match app.settings.installation() {
-        Ok(game) => (game.catalog.version, game.catalog.hash),
-        Err(error) => (format!("감지 실패 ({error})"), "-".into()),
+    let game_version = match app.settings.installation() {
+        Ok(game) => game.catalog.version,
+        Err(error) => format!("감지 실패 ({error})"),
     };
     let route = app.settings.selected_route();
     let state = app.paths.route_state(route);
@@ -1085,7 +1085,7 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .android_progress
         .device
         .clone()
-        .unwrap_or_else(|| "USB / MuMu / BlueStacks / LDPlayer 자동 감지".into());
+        .unwrap_or_else(|| "-".into());
 
     let title = format!(" AstralAutoPatcher v{} ", env!("CARGO_PKG_VERSION"));
     let block = Block::default().borders(Borders::ALL).title(title);
@@ -1096,7 +1096,7 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
-            Constraint::Length(4),
+            Constraint::Length(3),
             Constraint::Length(6),
         ])
         .split(inner);
@@ -1118,7 +1118,6 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         )),
         status_text_line("기기", android_device),
         status_text_line("상태", app.android_progress.status.clone()),
-        status_text_line("설치 소스", PLAY_INSTALLER_PACKAGE.into()),
     ]);
     frame.render_widget(Paragraph::new(android), rows[1]);
 
@@ -1129,11 +1128,11 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
-        status_text_line("Route", route.as_str().to_string()),
-        status_text_line("실행 경로", display_steam_route_path(&app.settings)),
-        status_text_line("LocalLow", display_path(app.settings.locallow_root())),
-        status_text_line("게임", format!("{game_version} · catalog {catalog}")),
-        status_text_line("패치", installed),
+        status_text_line("지역", route.display_name().to_string()),
+        status_text_line("설치 경로", display_steam_route_path(&app.settings)),
+        status_text_line("리소스 경로", display_path(app.settings.locallow_root())),
+        status_text_line("현재 버전", game_version),
+        status_text_line("현재 패치", installed),
     ]);
     frame.render_widget(Paragraph::new(steam), rows[2]);
 }
@@ -1168,22 +1167,22 @@ fn render_main(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 fn render_settings(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let rows = [
         Row::new(vec![
-            Cell::from("게임 route"),
+            Cell::from("Steam 지역"),
             Cell::from(format!(
                 "[{}]",
                 app.settings.selected_route().display_name()
             )),
         ]),
         Row::new(vec![
-            Cell::from("Steam 실행 경로"),
+            Cell::from("설치 경로"),
             Cell::from(format!("[{}]", display_steam_route_path(&app.settings))),
         ]),
         Row::new(vec![
-            Cell::from("LocalLow 게임 경로"),
+            Cell::from("리소스 경로"),
             Cell::from(format!("[{}]", display_path(app.settings.locallow_root()))),
         ]),
-        Row::new(vec![Cell::from("게임 경로 자동 감지"), Cell::from("")]),
-        Row::new(vec![Cell::from("돌아가기"), Cell::from("")]),
+        Row::new(vec![Cell::from("게임 경로 자동 찾기"), Cell::from("")]),
+        Row::new(vec![Cell::from("메인 메뉴"), Cell::from("")]),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1204,7 +1203,7 @@ fn render_path_input(frame: &mut Frame<'_>, app: &App, area: Rect, kind: PathKin
     let route = app.settings.selected_route();
     let (title, help, current) = match kind {
         PathKind::Steam => (
-            " Steam 게임 경로 입력 ",
+            " 설치 경로 입력 ",
             format!(
                 "Steam의 'Astral Party', '{}', 또는 '{}' 경로를 입력하세요.",
                 route.executable_dir(),
@@ -1213,9 +1212,9 @@ fn render_path_input(frame: &mut Frame<'_>, app: &App, area: Rect, kind: PathKin
             display_steam_route_path(&app.settings),
         ),
         PathKind::LocalLow => (
-            " LocalLow 게임 경로 입력 ",
+            " 리소스 경로 입력 ",
             format!(
-                "LocalLow의 '{}' 폴더 경로를 입력하세요.",
+                "Astral Party 리소스 폴더 '{}'의 경로를 입력하세요.",
                 route.locallow_dir()
             ),
             display_path(app.settings.locallow_root()),
@@ -1268,10 +1267,10 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             let text = Text::from(vec![
                 Line::from(vec![
                     Span::styled(
-                        "대상 route: ",
+                        "Steam 지역: ",
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(operation.route.as_str()),
+                    Span::raw(operation.route.display_name()),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(status, Style::default().fg(Color::Yellow))),
@@ -1559,10 +1558,10 @@ fn render_install_running(
     let mut detail_lines = vec![
         Line::from(vec![
             Span::styled(
-                "대상 route: ",
+                "Steam 지역: ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(operation.route.as_str()),
+            Span::raw(operation.route.display_name()),
         ]),
         Line::from(vec![
             Span::styled("대상 패치: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -1693,10 +1692,13 @@ fn render_progress_gauge(
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let notice = app.notice.as_deref().unwrap_or("");
     let help = match app.screen {
-        Screen::Main => "↑↓ 이동 · Enter 선택 · 마우스 클릭 · Esc/Q 종료",
-        Screen::Settings => "↑↓ 이동 · Enter 선택 · 마우스 클릭 · Esc 뒤로가기",
+        Screen::Main => "↑↓ 이동 · Enter/클릭 선택 · Esc/Q 종료",
+        Screen::Settings => "↑↓ 이동 · Enter/클릭 선택 · Esc 메인 메뉴",
         Screen::PathInput(_) => "경로 입력 · Enter 저장 · Esc 취소",
-        Screen::Operation => "작업 완료 후 ↑↓/Enter 또는 마우스로 선택 · Esc 메인 메뉴",
+        Screen::Operation => match app.operation.as_ref().map(|operation| &operation.phase) {
+            Some(OperationPhase::Pending | OperationPhase::Running) => "작업 진행 중",
+            _ => "↑↓ 이동 · Enter/클릭 선택 · Esc 메인 메뉴",
+        },
     };
     frame.render_widget(
         Paragraph::new(Text::from(vec![

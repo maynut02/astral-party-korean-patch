@@ -34,8 +34,8 @@ impl GameRoute {
 
     pub const fn display_name(self) -> &'static str {
         match self {
-            Self::IntSteam => "INT_STEAM (글로벌 Steam)",
-            Self::CnSteam => "CN_STEAM (중국 Steam)",
+            Self::IntSteam => "Steam 글로벌",
+            Self::CnSteam => "Steam 중국",
         }
     }
 
@@ -77,7 +77,7 @@ impl GameRoute {
 
 impl std::fmt::Display for GameRoute {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.display_name())
     }
 }
 
@@ -89,11 +89,11 @@ pub enum GameDetectError {
     Manifest(String),
     #[error("Astral Party Steam manifest was not found")]
     ManifestNotFound,
-    #[error("Astral Party {0} installation directory was not found or is invalid")]
+    #[error("Astral Party {0} 설치 경로를 찾을 수 없거나 올바르지 않습니다")]
     InstallNotFound(GameRoute),
-    #[error("Astral Party {0} LocalLow directory was not found or is invalid")]
+    #[error("Astral Party {0} 리소스 경로를 찾을 수 없거나 올바르지 않습니다")]
     LocalLowNotFound(GameRoute),
-    #[error("Addressables catalog hash was not found")]
+    #[error("게임 리소스 버전 정보를 찾을 수 없습니다")]
     CatalogNotFound,
 }
 
@@ -388,6 +388,8 @@ mod tests {
         assert_eq!(GameRoute::CnSteam.executable_dir(), "8vJXn6CN");
         assert_eq!(GameRoute::CnSteam.data_dir(), "AstralParty_CN_Data");
         assert_eq!(GameRoute::CnSteam.locallow_dir(), "AstralParty_CN");
+        assert_eq!(GameRoute::IntSteam.display_name(), "Steam 글로벌");
+        assert_eq!(GameRoute::CnSteam.display_name(), "Steam 중국");
     }
 
     #[test]

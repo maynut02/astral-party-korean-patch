@@ -20,9 +20,9 @@ pub enum SettingsError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Game(#[from] GameDetectError),
-    #[error("Steam game path is not configured for {0}")]
+    #[error("{0} 설치 경로가 설정되어 있지 않습니다")]
     SteamPathMissing(GameRoute),
-    #[error("LocalLow path is not configured for {0}")]
+    #[error("{0} 리소스 경로가 설정되어 있지 않습니다")]
     LocalLowPathMissing(GameRoute),
     #[error("unsupported settings schema version: {0}")]
     UnsupportedSchema(u32),
