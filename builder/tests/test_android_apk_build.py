@@ -75,8 +75,12 @@ def test_patch_manifest_moves_launcher_to_bootstrap(tmp_path: Path) -> None:
     assert metadata["lspatch"].get(A + "value") == "preserve-me"
     activities = {item.get(A + "name"): item for item in application.findall("activity")}
     bootstrap = activities[MODULE.BOOTSTRAP_ACTIVITY]
+    restart = activities[MODULE.RESTART_REQUIRED_ACTIVITY]
     original = activities["com.femoo.sdk.Femoo_UnityActivity"]
     assert bootstrap.get(A + "screenOrientation") == "11"
+    assert restart.get(A + "exported") == "false"
+    assert restart.get(A + "screenOrientation") == "11"
+    assert not restart.findall("intent-filter")
     assert not any(MODULE.intent_is_launcher(item) for item in original.findall("intent-filter"))
     assert any(MODULE.intent_is_launcher(item) for item in bootstrap.findall("intent-filter"))
 
@@ -116,7 +120,6 @@ def test_assemble_unsigned_apk_replaces_only_owned_entries(tmp_path: Path) -> No
         assert json.loads(archive.read("assets/astralpatch/config.json")) == config
         assert "META-INF/MANIFEST.MF" not in names
         assert "META-INF/CERT.RSA" not in names
-
 
 
 def _fake_signing_block(payload: bytes = b"test-signature-payload") -> bytes:
@@ -229,3 +232,21 @@ def test_android_runtime_does_not_compare_cached_bundle_to_cdn_source_bytes() ->
         ROOT / "android/runtime/src/com/astralpatch/runtime/BootstrapActivity.java"
     ).read_text(encoding="utf-8")
     assert "대기 중인 리소스: " in bootstrap
+
+
+def test_android_runtime_shows_restart_screen_when_patch_becomes_ready() -> None:
+    watcher = (ROOT / "android/runtime/src/com/astralpatch/runtime/UpdateWatcher.java").read_text(
+        encoding="utf-8"
+    )
+    restart = (
+        ROOT / "android/runtime/src/com/astralpatch/runtime/RestartRequiredActivity.java"
+    ).read_text(encoding="utf-8")
+
+    assert "PatchEngine.canApplyNow(app, config)" in watcher
+    assert "new Intent(app, RestartRequiredActivity.class)" in watcher
+    assert "Toast.makeText" not in watcher
+    assert 'title.setText("한글패치 준비 완료")' in restart
+    assert 'message.setText("게임을 다시 실행하면 한글패치가 적용됩니다.")' in restart
+    assert 'close.setText("게임 종료")' in restart
+    assert "task.finishAndRemoveTask()" in restart
+    assert "Process.killProcess(Process.myPid())" in restart

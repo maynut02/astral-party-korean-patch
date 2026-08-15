@@ -23,6 +23,7 @@ from astral_builder.patch.fonts import patch_legacy_font
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 A = f"{{{ANDROID_NS}}}"
 BOOTSTRAP_ACTIVITY = "com.astralpatch.runtime.BootstrapActivity"
+RESTART_REQUIRED_ACTIVITY = "com.astralpatch.runtime.RestartRequiredActivity"
 DEFAULT_GAME_ACTIVITY = "com.femoo.sdk.Femoo_UnityActivity"
 DATA_UNITY_PATH = "assets/bin/Data/data.unity3d"
 APK_SIG_BLOCK_MAGIC = b"APK Sig Block 42"
@@ -128,13 +129,14 @@ def patch_manifest(path: Path) -> tuple[str, str]:
     application = root.find("application")
     if application is None:
         raise RuntimeError("decoded AndroidManifest.xml has no application")
-    if any(
-        activity.get(A + "name") == BOOTSTRAP_ACTIVITY
-        for activity in application.findall("activity")
+    runtime_activities = {
+        activity.get(A + "name") for activity in application.findall("activity")
+    }
+    if (
+        BOOTSTRAP_ACTIVITY in runtime_activities
+        or RESTART_REQUIRED_ACTIVITY in runtime_activities
     ):
-        raise RuntimeError(
-            "base APK already contains AstralPatchRuntime bootstrap Activity"
-        )
+        raise RuntimeError("base APK already contains AstralPatchRuntime Activity")
 
     launchers: list[tuple[ET.Element, ET.Element]] = []
     for activity in application.findall("activity"):
@@ -167,6 +169,22 @@ def patch_manifest(path: Path) -> tuple[str, str]:
     intent = ET.SubElement(bootstrap, "intent-filter")
     ET.SubElement(intent, "action", {A + "name": "android.intent.action.MAIN"})
     ET.SubElement(intent, "category", {A + "name": "android.intent.category.LAUNCHER"})
+
+    restart_attrs = {
+        A + "name": RESTART_REQUIRED_ACTIVITY,
+        A + "exported": "false",
+    }
+    for key in (
+        "theme",
+        "screenOrientation",
+        "configChanges",
+        "hardwareAccelerated",
+        "resizeableActivity",
+    ):
+        value = original_activity.get(A + key)
+        if value is not None:
+            restart_attrs[A + key] = value
+    ET.SubElement(application, "activity", restart_attrs)
 
     permissions = {item.get(A + "name") for item in root.findall("uses-permission")}
     if "android.permission.INTERNET" not in permissions:
@@ -266,9 +284,13 @@ def _find_eocd(apk: Path) -> tuple[int, int]:
             comment_length = struct.unpack_from("<H", tail, position + 20)[0]
             if position + ZIP_EOCD_MIN_SIZE + comment_length == len(tail):
                 eocd_offset = size - tail_size + position
-                central_directory_offset = struct.unpack_from("<I", tail, position + 16)[0]
+                central_directory_offset = struct.unpack_from(
+                    "<I", tail, position + 16
+                )[0]
                 if central_directory_offset == 0xFFFFFFFF:
-                    raise RuntimeError("ZIP64 APKs are not supported by the signing-block bridge")
+                    raise RuntimeError(
+                        "ZIP64 APKs are not supported by the signing-block bridge"
+                    )
                 return eocd_offset, central_directory_offset
         search_end = position
 
@@ -300,7 +322,9 @@ def extract_apk_signing_block(apk: Path) -> bytes:
 def inject_apk_signing_block(source: Path, output: Path, signing_block: bytes) -> None:
     eocd_offset, central_directory_offset = _find_eocd(source)
     if central_directory_offset + len(signing_block) >= 0xFFFFFFFF:
-        raise RuntimeError("APK central directory offset exceeds ZIP32 after signing-block insertion")
+        raise RuntimeError(
+            "APK central directory offset exceeds ZIP32 after signing-block insertion"
+        )
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with source.open("rb") as input_handle, output.open("wb") as output_handle:
@@ -342,6 +366,7 @@ def prepare_lspatch_input(
     signing_block = extract_apk_signing_block(original_play_apk)
     inject_apk_signing_block(aligned, output, signing_block)
     aligned.unlink(missing_ok=True)
+
 
 def extract_apk_member(apk: Path, member: str, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -445,7 +470,6 @@ def assemble_unsigned_apk(
             json.dumps(config, ensure_ascii=False, indent=2).encode("utf-8"),
             compress_type=zipfile.ZIP_DEFLATED,
         )
-
 
 
 def sign_apk(

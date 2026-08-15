@@ -1,9 +1,7 @@
 package com.astralpatch.runtime;
 
 import android.content.Context;
-import android.os.Handler;
-import android.os.Looper;
-import android.widget.Toast;
+import android.content.Intent;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -44,17 +42,12 @@ final class UpdateWatcher {
                                 .putBoolean("restartRequired", true)
                                 .putString("restartCatalogHash", current)
                                 .apply();
-                        Handler main = new Handler(Looper.getMainLooper());
-                        main.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                Toast.makeText(
-                                        app,
-                                        "한국어 패치를 적용할 준비가 되었습니다. 게임을 완전히 종료한 뒤 다시 실행해 주세요.",
-                                        Toast.LENGTH_LONG)
-                                        .show();
-                            }
-                        });
+                        Intent restart = new Intent(app, RestartRequiredActivity.class);
+                        restart.addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK
+                                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                        | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        app.startActivity(restart);
                         return;
                     } catch (InterruptedException ignored) {
                         Thread.currentThread().interrupt();
