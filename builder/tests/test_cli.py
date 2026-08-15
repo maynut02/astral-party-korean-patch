@@ -102,3 +102,13 @@ def test_parser_exposes_translation_status_command() -> None:
     )
     assert args.command == "translation-status"
     assert args.strict is False
+
+
+def test_database_url_prefers_direct_connection_for_bulk_sync(monkeypatch) -> None:
+    from astral_builder.cli import _database_url
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://pooled")
+    monkeypatch.setenv("DATABASE_URL_DIRECT", "postgresql://direct")
+
+    assert _database_url() == "postgresql://pooled"
+    assert _database_url(direct=True) == "postgresql://direct"

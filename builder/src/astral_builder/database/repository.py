@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
 import psycopg
 
-from astral_builder.database.sync import ExistingSourceState, SourceSyncPlan, plan_source_sync
+from astral_builder.database.sync import (
+    ExistingSourceState,
+    SourceDisposition,
+    SourceSyncPlan,
+    plan_source_sync,
+)
 from astral_builder.formats.model import TranslationUnit
 
 Identity = tuple[str, str, str]
@@ -86,73 +92,282 @@ def _ensure_revision(conn: psycopg.Connection, revision: RevisionInput) -> tuple
         return revision_id, False
 
 
-def _active_source_states(conn: psycopg.Connection) -> dict[Identity, ExistingSourceState]:
+def _source_state_maps(
+    conn: psycopg.Connection,
+) -> tuple[dict[Identity, UUID], dict[Identity, ExistingSourceState]]:
+    """Load all stable unit IDs and the active source state in one round trip."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT
-                tu.kind, tu.namespace, tu.unit_key,
-                tu.id, sv.id, sv.source_fingerprint
-            FROM translation_units tu
-            JOIN source_versions sv ON sv.id = tu.current_source_version_id
+                tu.kind, tu.namespace, tu.unit_key, tu.id,
+                sv.id, sv.source_fingerprint
+            FROM translation_units AS tu
+            LEFT JOIN source_versions AS sv ON sv.id = tu.current_source_version_id
             """
         )
-        return {
-            (row[0], row[1], row[2]): ExistingSourceState(
-                unit_id=row[3],
-                source_version_id=row[4],
-                source_fingerprint=row[5],
+        unit_ids: dict[Identity, UUID] = {}
+        active: dict[Identity, ExistingSourceState] = {}
+        for row in cur.fetchall():
+            identity = (row[0], row[1], row[2])
+            unit_ids[identity] = row[3]
+            if row[4] is not None:
+                active[identity] = ExistingSourceState(
+                    unit_id=row[3],
+                    source_version_id=row[4],
+                    source_fingerprint=row[5],
+                )
+        return unit_ids, active
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceStageRow:
+    unit_id: UUID
+    kind: str
+    namespace: str
+    unit_key: str
+    is_new_unit: bool
+    proposed_source_version_id: UUID
+    cn_s: str
+    en: str
+    jp: str
+    cn_t: str
+    source_fingerprint: str
+    old_source_version_id: UUID | None
+    change_type: str
+
+    def as_copy_row(self) -> tuple[object, ...]:
+        return (
+            self.unit_id,
+            self.kind,
+            self.namespace,
+            self.unit_key,
+            self.is_new_unit,
+            self.proposed_source_version_id,
+            self.cn_s,
+            self.en,
+            self.jp,
+            self.cn_t,
+            self.source_fingerprint,
+            self.old_source_version_id,
+            self.change_type,
+        )
+
+
+def _prepare_source_stage_rows(
+    plan: SourceSyncPlan,
+    unit_ids: dict[Identity, UUID],
+) -> tuple[_SourceStageRow, ...]:
+    rows: list[_SourceStageRow] = []
+    for item in plan.sources:
+        if item.disposition is SourceDisposition.UNCHANGED:
+            continue
+        unit_id = unit_ids.get(item.unit.identity)
+        is_new_unit = unit_id is None
+        if unit_id is None:
+            unit_id = uuid4()
+        source = item.unit.source.normalized()
+        rows.append(
+            _SourceStageRow(
+                unit_id=unit_id,
+                kind=item.unit.kind.value,
+                namespace=item.unit.namespace,
+                unit_key=item.unit.key,
+                is_new_unit=is_new_unit,
+                proposed_source_version_id=uuid4(),
+                cn_s=source.cn_s,
+                en=source.en,
+                jp=source.jp,
+                cn_t=source.cn_t,
+                source_fingerprint=source.fingerprint,
+                old_source_version_id=(
+                    None if item.state is None else item.state.source_version_id
+                ),
+                change_type=(
+                    "added" if item.disposition is SourceDisposition.NEW else "modified"
+                ),
             )
-            for row in cur.fetchall()
-        }
+        )
+    return tuple(rows)
 
 
-def _all_unit_ids(conn: psycopg.Connection) -> dict[Identity, UUID]:
-    with conn.cursor() as cur:
-        cur.execute("SELECT kind, namespace, unit_key, id FROM translation_units")
-        return {(row[0], row[1], row[2]): row[3] for row in cur.fetchall()}
-
-
-def _ensure_source_version(
-    conn: psycopg.Connection,
+def _bulk_persist_source_stage(
+    cur: psycopg.Cursor,
     *,
-    unit_id: UUID,
     revision_id: UUID,
-    unit: TranslationUnit,
-) -> UUID:
-    source = unit.source.normalized()
-    with conn.cursor() as cur:
+    rows: tuple[_SourceStageRow, ...],
+    progress: Callable[[str], None],
+) -> None:
+    if not rows:
+        return
+
+    progress(f"database: stage {len(rows)} added/modified source row(s)")
+    cur.execute(
+        """
+        CREATE TEMP TABLE source_sync_stage (
+            unit_id uuid NOT NULL,
+            kind text NOT NULL,
+            namespace text NOT NULL,
+            unit_key text NOT NULL,
+            is_new_unit boolean NOT NULL,
+            proposed_source_version_id uuid NOT NULL,
+            cn_s text NOT NULL,
+            en text NOT NULL,
+            jp text NOT NULL,
+            cn_t text NOT NULL,
+            source_fingerprint text NOT NULL,
+            old_source_version_id uuid,
+            change_type text NOT NULL
+        ) ON COMMIT DROP
+        """
+    )
+    with cur.copy(
+        """
+        COPY source_sync_stage(
+            unit_id, kind, namespace, unit_key, is_new_unit,
+            proposed_source_version_id, cn_s, en, jp, cn_t,
+            source_fingerprint, old_source_version_id, change_type
+        ) FROM STDIN
+        """
+    ) as copy:
+        for row in rows:
+            copy.write_row(row.as_copy_row())
+
+    new_unit_count = sum(row.is_new_unit for row in rows)
+    if new_unit_count:
+        progress(f"database: insert {new_unit_count} new translation unit(s)")
         cur.execute(
             """
-            SELECT id
-            FROM source_versions
-            WHERE unit_id = %s AND source_fingerprint = %s
-            """,
-            (unit_id, source.fingerprint),
+            INSERT INTO translation_units(id, kind, namespace, unit_key)
+            SELECT unit_id, kind, namespace, unit_key
+            FROM source_sync_stage
+            WHERE is_new_unit
+            """
         )
-        row = cur.fetchone()
-        if row is not None:
-            return row[0]
-        source_version_id = uuid4()
-        cur.execute(
-            """
-            INSERT INTO source_versions(
-                id, unit_id, cn_s, en, jp, cn_t, source_fingerprint, first_seen_revision_id
+        if cur.rowcount != new_unit_count:
+            raise RuntimeError(
+                "bulk translation unit insert count mismatch: "
+                f"expected={new_unit_count} actual={cur.rowcount}"
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                source_version_id,
-                unit_id,
-                source.cn_s,
-                source.en,
-                source.jp,
-                source.cn_t,
-                source.fingerprint,
-                revision_id,
-            ),
+
+    progress(f"database: ensure {len(rows)} source version(s)")
+    cur.execute(
+        """
+        INSERT INTO source_versions(
+            id, unit_id, cn_s, en, jp, cn_t,
+            source_fingerprint, first_seen_revision_id
         )
-    return source_version_id
+        SELECT
+            proposed_source_version_id, unit_id, cn_s, en, jp, cn_t,
+            source_fingerprint, %s
+        FROM source_sync_stage
+        WHERE true
+        ON CONFLICT (unit_id, source_fingerprint) DO NOTHING
+        """,
+        (revision_id,),
+    )
+
+    progress(f"database: record {len(rows)} applied source change(s)")
+    cur.execute(
+        """
+        INSERT INTO source_changes(
+            revision_id, unit_id, change_type,
+            old_source_version_id, new_source_version_id
+        )
+        SELECT
+            %s, stage.unit_id, stage.change_type,
+            stage.old_source_version_id, versions.id
+        FROM source_sync_stage AS stage
+        JOIN source_versions AS versions
+          ON versions.unit_id = stage.unit_id
+         AND versions.source_fingerprint = stage.source_fingerprint
+        """,
+        (revision_id,),
+    )
+    if cur.rowcount != len(rows):
+        raise RuntimeError(
+            "bulk source change insert count mismatch: "
+            f"expected={len(rows)} actual={cur.rowcount}"
+        )
+
+    progress(f"database: update {len(rows)} current source pointer(s)")
+    cur.execute(
+        """
+        UPDATE translation_units AS units
+        SET current_source_version_id = versions.id
+        FROM source_sync_stage AS stage
+        JOIN source_versions AS versions
+          ON versions.unit_id = stage.unit_id
+         AND versions.source_fingerprint = stage.source_fingerprint
+        WHERE units.id = stage.unit_id
+        """
+    )
+    if cur.rowcount != len(rows):
+        raise RuntimeError(
+            "bulk current source update count mismatch: "
+            f"expected={len(rows)} actual={cur.rowcount}"
+        )
+    cur.execute("DROP TABLE source_sync_stage")
+
+
+def _bulk_persist_removed_sources(
+    cur: psycopg.Cursor,
+    *,
+    revision_id: UUID,
+    removed: tuple[ExistingSourceState, ...],
+    progress: Callable[[str], None],
+) -> None:
+    if not removed:
+        return
+
+    progress(f"database: stage {len(removed)} removed source row(s)")
+    cur.execute(
+        """
+        CREATE TEMP TABLE source_remove_stage (
+            unit_id uuid PRIMARY KEY,
+            old_source_version_id uuid NOT NULL
+        ) ON COMMIT DROP
+        """
+    )
+    with cur.copy(
+        "COPY source_remove_stage(unit_id, old_source_version_id) FROM STDIN"
+    ) as copy:
+        for state in removed:
+            copy.write_row((state.unit_id, state.source_version_id))
+
+    cur.execute(
+        """
+        INSERT INTO source_changes(
+            revision_id, unit_id, change_type,
+            old_source_version_id, new_source_version_id
+        )
+        SELECT %s, unit_id, 'removed', old_source_version_id, NULL
+        FROM source_remove_stage
+        """,
+        (revision_id,),
+    )
+    if cur.rowcount != len(removed):
+        raise RuntimeError(
+            "bulk removed source change count mismatch: "
+            f"expected={len(removed)} actual={cur.rowcount}"
+        )
+
+    progress(f"database: clear {len(removed)} removed source pointer(s)")
+    cur.execute(
+        """
+        UPDATE translation_units AS units
+        SET current_source_version_id = NULL
+        FROM source_remove_stage AS removed
+        WHERE units.id = removed.unit_id
+          AND units.current_source_version_id = removed.old_source_version_id
+        """
+    )
+    if cur.rowcount != len(removed):
+        raise RuntimeError(
+            "bulk removed source pointer count mismatch: "
+            f"expected={len(removed)} actual={cur.rowcount}"
+        )
+    cur.execute("DROP TABLE source_remove_stage")
 
 
 def sync_revision_metadata(
@@ -169,87 +384,48 @@ def sync_revision_sources(
     conn: psycopg.Connection,
     revision: RevisionInput,
     units: tuple[TranslationUnit, ...],
+    *,
+    progress: Callable[[str], None] | None = None,
 ) -> SourceSyncResult:
-    """Apply an INT_STEAM source scan and persist only actual source changes.
+    """Apply one canonical source scan using set-based PostgreSQL writes.
 
-    The game revision is the change group. New source text versions are inserted only for
-    added/modified units; unchanged text is represented by the existing current pointer.
-    Removed units clear their current source pointer but keep all historical versions.
+    One game revision is the source-change group. Added/modified/removed units are staged with
+    PostgreSQL COPY and applied with a fixed number of set-based statements, avoiding one network
+    round trip per translation unit. Historical source versions are reused by the
+    ``(unit_id, source_fingerprint)`` uniqueness constraint.
     """
+    if progress is None:
+        def no_progress(_message: str) -> None:
+            return None
+
+        progress = no_progress
+
     with conn.transaction():
         revision_id, existed = _ensure_revision(conn, revision)
-        existing = _active_source_states(conn)
+        unit_ids, existing = _source_state_maps(conn)
         plan = plan_source_sync(units, existing)
+        progress(
+            "database: source plan "
+            f"+{plan.new_count} ~{plan.changed_count} "
+            f"={plan.unchanged_count} -{plan.removed_count}"
+        )
 
-        unit_ids = _all_unit_ids(conn)
-        missing_units = [item.unit for item in plan.sources if item.unit.identity not in unit_ids]
-        if missing_units:
-            with conn.cursor() as cur:
-                cur.executemany(
-                    """
-                    INSERT INTO translation_units(id, kind, namespace, unit_key)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (kind, namespace, unit_key) DO NOTHING
-                    """,
-                    [
-                        (uuid4(), unit.kind.value, unit.namespace, unit.key)
-                        for unit in missing_units
-                    ],
-                )
-            unit_ids = _all_unit_ids(conn)
-
+        staged = _prepare_source_stage_rows(plan, unit_ids)
         with conn.cursor() as cur:
-            for item in plan.sources:
-                if item.disposition.value == "unchanged":
-                    continue
-                unit_id = unit_ids[item.unit.identity]
-                new_source_version_id = _ensure_source_version(
-                    conn,
-                    unit_id=unit_id,
-                    revision_id=revision_id,
-                    unit=item.unit,
-                )
-                old_source_version_id = (
-                    None if item.state is None else item.state.source_version_id
-                )
-                change_type = "added" if item.state is None else "modified"
-                cur.execute(
-                    """
-                    INSERT INTO source_changes(
-                        revision_id, unit_id, change_type,
-                        old_source_version_id, new_source_version_id
-                    )
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        revision_id,
-                        unit_id,
-                        change_type,
-                        old_source_version_id,
-                        new_source_version_id,
-                    ),
-                )
-                cur.execute(
-                    "UPDATE translation_units SET current_source_version_id = %s WHERE id = %s",
-                    (new_source_version_id, unit_id),
-                )
+            _bulk_persist_source_stage(
+                cur,
+                revision_id=revision_id,
+                rows=staged,
+                progress=progress,
+            )
+            _bulk_persist_removed_sources(
+                cur,
+                revision_id=revision_id,
+                removed=plan.removed,
+                progress=progress,
+            )
 
-            for state in plan.removed:
-                cur.execute(
-                    """
-                    INSERT INTO source_changes(
-                        revision_id, unit_id, change_type,
-                        old_source_version_id, new_source_version_id
-                    )
-                    VALUES (%s, %s, 'removed', %s, NULL)
-                    """,
-                    (revision_id, state.unit_id, state.source_version_id),
-                )
-                cur.execute(
-                    "UPDATE translation_units SET current_source_version_id = NULL WHERE id = %s",
-                    (state.unit_id,),
-                )
-
+        progress("database: canonical source persistence complete")
         return SourceSyncResult(
             revision_id=revision_id,
             plan=plan,

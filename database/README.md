@@ -86,6 +86,6 @@ pending -> approved
 ## 연결
 
 - Actions runtime: `NEON_DATABASE_URL` / `DATABASE_URL`
-- migration/reset: `NEON_DATABASE_URL_DIRECT` / `DATABASE_URL_DIRECT`
+- migration/reset 및 canonical source bulk sync: `NEON_DATABASE_URL_DIRECT` / `DATABASE_URL_DIRECT`
 - 로컬 `database/reset.py`, `database/migrate.py`, legacy importer는 프로젝트 루트 `.env`를 자동으로 읽습니다.
 - 현재 작업공간에서는 legacy importer가 `../Project/Nuxt/astral-control-site/.env`의 `DATABASE_URL`도 자동 탐색합니다.

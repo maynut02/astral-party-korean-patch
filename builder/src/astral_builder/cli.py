@@ -100,7 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _database_url() -> str:
+def _database_url(*, direct: bool = False) -> str:
+    if direct:
+        value = os.environ.get("DATABASE_URL_DIRECT") or os.environ.get("DATABASE_URL")
+        if not value:
+            raise SystemExit("DATABASE_URL_DIRECT or DATABASE_URL is required")
+        return value
     value = os.environ.get("DATABASE_URL")
     if not value:
         raise SystemExit("DATABASE_URL is required")
@@ -139,15 +144,20 @@ def _run_check(args: argparse.Namespace) -> int:
 
 def _run_sync(args: argparse.Namespace) -> int:
     config = load_route_sync_config(args.route_config)
-    print(f"[sync:{config.route}] start", flush=True)
+
+    def progress(message: str) -> None:
+        print(f"[sync:{config.route}] {message}", flush=True)
+
+    progress("start")
     prepared = prepare_revision(
         config=config,
         game_version=args.game_version,
         work_dir=args.work_dir,
+        progress=progress,
     )
-    print(f"[sync:{config.route}] persist prepared revision to database", flush=True)
-    with psycopg.connect(_database_url()) as conn:
-        result = persist_prepared_revision(conn, prepared)
+    progress("persist prepared revision to database")
+    with psycopg.connect(_database_url(direct=True)) as conn:
+        result = persist_prepared_revision(conn, prepared, progress=progress)
     print(
         f"[sync:{config.route}] database sync complete: "
         f"+{result.source_added_count} ~{result.source_modified_count} "

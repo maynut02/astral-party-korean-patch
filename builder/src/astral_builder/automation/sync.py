@@ -384,6 +384,8 @@ def prepare_revision(
 def persist_prepared_revision(
     conn: psycopg.Connection,
     prepared: PreparedRevision,
+    *,
+    progress: Callable[[str], None] | None = None,
 ) -> SyncRevisionResult:
     revision = RevisionInput(
         route=prepared.source.route,
@@ -394,8 +396,16 @@ def persist_prepared_revision(
         catalog_sha256=prepared.catalog.sha256,
         catalog_build_hash=prepared.catalog_hash,
     )
+    if progress is None:
+        def no_progress(_message: str) -> None:
+            return None
+
+        progress = no_progress
+
     if prepared.translation_source_route == prepared.source.route:
-        source_result: SourceSyncResult = sync_revision_sources(conn, revision, prepared.units)
+        source_result: SourceSyncResult = sync_revision_sources(
+            conn, revision, prepared.units, progress=progress
+        )
         revision_id = source_result.revision_id
         source_idempotent = source_result.idempotent
         source_added_count = source_result.plan.new_count
@@ -405,11 +415,13 @@ def persist_prepared_revision(
         revision_id, source_idempotent = sync_revision_metadata(conn, revision)
         source_added_count = source_modified_count = source_removed_count = 0
 
+    progress(f"database: persist {len(prepared.asset_locations)} asset location(s)")
     locations_idempotent = sync_asset_locations(
         conn,
         revision_id,
         prepared.asset_locations,
     )
+    progress("database: mark revision processed")
     mark_revision_processed(conn, revision_id)
     return SyncRevisionResult(
         revision_id=str(revision_id),

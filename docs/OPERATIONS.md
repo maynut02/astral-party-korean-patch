@@ -224,6 +224,8 @@ Pre용 내부 tag는 `patch-pre` 하나를 rolling 방식으로 사용하므로 
 
 세 route는 각각 lightweight check를 병렬 수행합니다. 하나라도 현재 published revision과 달라지면 자동 pre가 실행됩니다. 실제 bundle sync는 `sync_required=true`인 route만 수행하고, 이미 sync까지 완료된 retry에서는 기존 DB revision state를 재사용합니다.
 
+INT_STEAM canonical source의 DB 반영은 `COPY` staging + set-based `INSERT/UPDATE`로 처리합니다. 최초 수천 개 unit 동기화도 unit별 SQL 왕복을 하지 않으며, 이 bulk transaction은 `DATABASE_URL_DIRECT`를 우선 사용합니다.
+
 ## 7. 수동 정식 Patch Release
 
 번역 작업이 완료됐다고 판단한 시점에 Actions의 `Patch`를 실행하고 `mode=release`를 선택합니다. route 선택 입력은 없습니다.
