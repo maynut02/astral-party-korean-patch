@@ -10,11 +10,7 @@ import psycopg
 from astral_builder import __version__
 from astral_builder.automation.build import build_patch, write_build_github_output
 from astral_builder.automation.check import check_revision, write_github_output
-from astral_builder.automation.release import (
-    read_release_metadata,
-    update_release_index,
-    write_release_github_output,
-)
+from astral_builder.automation.release import update_release_index
 from astral_builder.automation.sync import (
     load_route_sync_config,
     persist_prepared_revision,
@@ -69,12 +65,6 @@ def build_parser() -> argparse.ArgumentParser:
     validate_build.add_argument("--manifest", required=True)
     validate_build.add_argument("--assets-dir", required=True)
     validate_build.add_argument("--route-config", required=True)
-
-    release_info = subparsers.add_parser(
-        "release-info", help="Read release metadata from manifest."
-    )
-    release_info.add_argument("--manifest", required=True)
-    release_info.add_argument("--github-output")
 
     update_index = subparsers.add_parser(
         "update-index", help="Upsert a manifest into release index."
@@ -243,22 +233,6 @@ def _run_validate_build(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_release_info(args: argparse.Namespace) -> int:
-    metadata = read_release_metadata(args.manifest)
-    if args.github_output:
-        write_release_github_output(metadata, args.github_output)
-    print(json.dumps(metadata.__dict__ if hasattr(metadata, "__dict__") else {
-        "buildId": metadata.build_id,
-        "patchVersion": metadata.patch_version,
-        "channel": metadata.channel,
-        "route": metadata.route,
-        "gameVersion": metadata.game_version,
-        "revision": metadata.revision,
-        "catalogHash": metadata.catalog_hash,
-    }, ensure_ascii=False, sort_keys=True))
-    return 0
-
-
 def _run_update_index(args: argparse.Namespace) -> int:
     index = update_release_index(
         manifest_path=args.manifest,
@@ -333,8 +307,6 @@ def main(argv: list[str] | None = None) -> int:
         return _run_build(args)
     if args.command == "validate-build":
         return _run_validate_build(args)
-    if args.command == "release-info":
-        return _run_release_info(args)
     if args.command == "update-index":
         return _run_update_index(args)
     if args.command == "translation-status":

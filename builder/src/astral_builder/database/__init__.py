@@ -18,14 +18,6 @@ from astral_builder.database.sync import (
     SourceSyncPlan,
     plan_source_sync,
 )
-from astral_builder.database.translations import (
-    TranslationChangeGroupWrite,
-    TranslationProposal,
-    approve_translation_change,
-    create_translation_change_group,
-    propose_translation,
-    reject_translation_change,
-)
 
 __all__ = [
     "AssetLocationInput",
@@ -37,18 +29,12 @@ __all__ = [
     "SourceDisposition",
     "SourceSyncPlan",
     "SourceSyncResult",
-    "TranslationChangeGroupWrite",
-    "TranslationProposal",
     "TranslationSnapshot",
-    "approve_translation_change",
-    "create_translation_change_group",
     "load_latest_translation_snapshot",
     "load_translation_snapshot",
     "make_snapshot",
     "mark_revision_processed",
     "plan_source_sync",
-    "propose_translation",
-    "reject_translation_change",
     "sync_asset_locations",
     "sync_revision_metadata",
     "sync_revision_sources",

@@ -71,8 +71,6 @@ def test_parser_exposes_validate_build_command() -> None:
 
 def test_parser_exposes_release_commands() -> None:
     parser = build_parser()
-    info = parser.parse_args(["release-info", "--manifest", "manifest.json"])
-    assert info.command == "release-info"
     update = parser.parse_args(
         [
             "update-index",

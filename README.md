@@ -1,14 +1,51 @@
 # Astral Party Korean Patch
 
-Astral Party 한국어 패치를 자동으로 생성하고 안전하게 설치하는 monorepo입니다.
+Astral Party 비공식 한국어 패치 프로젝트입니다. 게임 업데이트를 감지해 route별 패치 파일을 생성하고, `AstralAutoPatcher`로 설치·업데이트합니다.
 
-- `builder/`: GitHub Actions에서 실행되는 게임 리소스 탐색, 추출, DB 동기화, 패치 생성 및 검증 도구
-- `patcher/`: Android USB/앱플레이어 원클릭 설치, Steam 패치 설치/제거, 자동 업데이트와 `astral://` 웹 연동을 제공하는 단일 Rust TUI `AstralAutoPatcher.exe`
-- `database/`: Neon PostgreSQL 스키마와 migration
-- `schemas/`: Builder와 Patcher가 공유하는 manifest 및 설정 스키마
-- `routes/`: 게임 배포 경로별 선언적 설정
-- `.github/workflows/`: `CI`, `Patch`, `AutoPatcher`, `INT_ANDROID APK` 네 운영 workflow
+## 지원 환경
 
-운영 빌드는 로컬 게임 파일을 입력으로 사용하지 않습니다. 번역 원문은 INT_STEAM 하나를 canonical source로 관리하고, CN_STEAM/INT_ANDROID는 route별 호환 대상만 추적합니다. 게임 에셋 수집부터 패치 생성까지 GitHub Actions에서 수행합니다.
+| Route | 플랫폼 | 설치 방식 |
+| --- | --- | --- |
+| `INT_STEAM` | Windows / Steam | AstralAutoPatcher |
+| `CN_STEAM` | Windows / Steam | AstralAutoPatcher |
+| `INT_ANDROID` | Android | AstralAutoPatcher + ADB |
 
-자세한 구현 계획은 [`docs/PLAN.md`](docs/PLAN.md)를 참조하세요. 실제 GitHub/Neon/Steam 운영 설정은 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)에 정리되어 있습니다. DB/Release/tag 전체 초기화는 [`docs/RESET.md`](docs/RESET.md)를 참조하세요.
+릴리즈 파일은 GitHub의 [Releases](https://github.com/maynut02/astral-party-korean-patch/releases)에서 배포합니다. 일반 사용자는 저장소를 직접 빌드할 필요가 없습니다.
+
+### Android
+
+Android판은 `AstralAutoPatcher`를 통해 설치하는 것을 전제로 합니다. 최초 실행이나 게임 리소스 업데이트 후 한국어 패치를 적용할 준비가 되면 게임 안에 종료 안내가 표시되며, 게임을 종료한 뒤 다시 실행하면 패치가 자동으로 적용됩니다.
+
+## 저장소 구성
+
+- `builder/` — 게임 리소스 확인, DB 동기화, 패치 생성·검증
+- `patcher/` — Windows용 `AstralAutoPatcher`
+- `android/runtime/` — Android APK에 포함되는 런타임 패처
+- `database/` — PostgreSQL migration
+- `routes/` — route별 게임/번역/리소스 설정
+- `resources/` — 패치 생성에 필요한 route별 리소스
+- `schemas/` — release/manifest 설정 스키마
+- `.github/workflows/` — CI 및 릴리즈 자동화
+
+## 개발
+
+Builder는 Python 3.12+, AutoPatcher는 stable Rust toolchain을 사용합니다.
+
+```bash
+python -m pip install -e './builder[dev]'
+python -m ruff check builder tools database
+python -m pytest builder/tests
+
+cd patcher
+cargo fmt --all -- --check
+cargo test --locked --all-targets --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
+```
+
+## 라이선스
+
+직접 작성한 소스 코드는 [MIT License](LICENSE)로 배포합니다.
+
+`resources/`의 폰트·아틀라스 등 제3자 자산과 Astral Party 자체의 게임 데이터·상표·저작물은 MIT License 적용 대상이 아니며 각 권리자의 조건을 따릅니다. 자세한 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인하세요.
+
+이 프로젝트는 Astral Party의 개발사·배급사와 공식적으로 제휴된 프로젝트가 아닙니다.

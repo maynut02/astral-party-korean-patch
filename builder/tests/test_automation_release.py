@@ -33,7 +33,6 @@ def _manifest(path: Path) -> Path:
 def test_reads_release_metadata(tmp_path: Path) -> None:
     metadata = read_release_metadata(_manifest(tmp_path / "manifest.json"))
     assert metadata.patch_version == "v1"
-    assert metadata.build_id.endswith("0001")
     assert metadata.addressables_paths == (
         "BundleA/hash/__data",
         "BundleB/hash/__data",

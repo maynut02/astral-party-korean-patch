@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "astral-party-builder"
 version = "0.1.0"
 description = "GitHub Actions builder for the Astral Party Korean patch"
-readme = "README.md"
+readme = { text = "Build automation for the Astral Party Korean patch.", content-type = "text/plain" }
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "MayNut" }]

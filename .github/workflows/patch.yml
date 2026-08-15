@@ -477,23 +477,18 @@ jobs:
           done
       - name: Write release notes
         shell: bash
-        env:
-          UPDATED_ROUTES: ${{ needs.plan.outputs.updated_routes_csv }}
         run: |
           set -euo pipefail
-          mkdir -p .work
-          {
-            echo '## Updated routes'
-            echo
-            if [ -z "$UPDATED_ROUTES" ]; then
-              echo '- None'
-            else
-              IFS=',' read -ra routes <<< "$UPDATED_ROUTES"
-              for route in "${routes[@]}"; do
-                echo "- $route"
-              done
-            fi
-          } > .work/patch-release-notes.md
+          python tools/workflow/release_notes.py patch \
+            --output .work/patch-release-notes.md \
+            --updated-routes '${{ needs.plan.outputs.updated_routes_csv }}' \
+            --game-version '${{ needs.plan.outputs.game_version }}' \
+            --int-steam-revision '${{ needs.state.outputs.int_steam_revision }}' \
+            --cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}' \
+            --int-android-revision '${{ needs.state.outputs.int_android_revision }}' \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-number "$GITHUB_RUN_NUMBER"
       - name: Publish release
         shell: bash
         env:

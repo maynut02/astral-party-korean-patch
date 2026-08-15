@@ -9,7 +9,6 @@ from astral_builder.release.index import ReleaseIndex, ReleaseIndexEntry, manife
 
 @dataclass(frozen=True, slots=True)
 class ReleaseMetadata:
-    build_id: str
     patch_version: str
     channel: str
     route: str
@@ -40,7 +39,6 @@ def read_release_metadata(manifest_path: str | Path) -> ReleaseMetadata:
         )
     )
     metadata = ReleaseMetadata(
-        build_id=str(patch["buildId"]),
         patch_version=str(patch["version"]),
         channel=str(patch["channel"]),
         route=str(patch["route"]),
@@ -82,16 +80,3 @@ def update_release_index(
     index_file.parent.mkdir(parents=True, exist_ok=True)
     index_file.write_text(updated.to_json(), encoding="utf-8")
     return updated
-
-
-def write_release_github_output(metadata: ReleaseMetadata, destination: str | Path) -> None:
-    path = Path(destination)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as file:
-        file.write(f"build_id={metadata.build_id}\n")
-        file.write(f"patch_version={metadata.patch_version}\n")
-        file.write(f"channel={metadata.channel}\n")
-        file.write(f"route={metadata.route}\n")
-        file.write(f"game_version={metadata.game_version}\n")
-        file.write(f"revision={metadata.revision}\n")
-        file.write(f"catalog_hash={metadata.catalog_hash}\n")
