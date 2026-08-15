@@ -25,6 +25,7 @@ const PLATFORM_TOOLS_URL: &str =
     "https://dl.google.com/android/repository/platform-tools-latest-windows.zip";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+const MAX_ERROR_STREAM_CHARS: usize = 2048;
 
 #[derive(Debug, Error)]
 pub enum AndroidError {
@@ -851,12 +852,13 @@ fn package_info(
     device: &AndroidDevice,
     package: &str,
 ) -> Result<Option<AndroidPackageInfo>, AndroidError> {
-    let command = format!(
-        "dumpsys package {package} | grep -E 'Package \\[|versionName=|installerPackageName='"
-    );
+    // Avoid `adb shell sh -c ...` here. adb does not preserve argv quoting like a local
+    // process launcher, so the remote shell can interpret only `dumpsys` as the `-c` command
+    // and dump every Android service. Query PackageManager directly and parse the requested
+    // package block locally instead.
     let output = run_adb(
         &device.adb_path,
-        &["-s", &device.serial, "shell", "sh", "-c", &command],
+        &["-s", &device.serial, "shell", "dumpsys", "package", package],
         COMMAND_TIMEOUT,
     )?;
     if !output.status.success() {
@@ -1012,21 +1014,66 @@ fn run_command(command: &mut Command, timeout: Duration) -> Result<Output, std::
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("failed to capture command stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("failed to capture command stderr"))?;
+    let stdout_reader = spawn_output_reader(stdout);
+    let stderr_reader = spawn_output_reader(stderr);
+
     let deadline = Instant::now() + timeout;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait()? {
+            break (status, false);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            let output = child.wait_with_output()?;
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("command timed out: {}", output_text(&output)),
-            ));
+            break (child.wait()?, true);
         }
         thread::sleep(Duration::from_millis(50));
+    };
+
+    let stdout = join_output_reader(stdout_reader)?;
+    let stderr = join_output_reader(stderr_reader)?;
+    let output = Output {
+        status,
+        stdout,
+        stderr,
+    };
+    if timed_out {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "command timed out after {:.1}s: {}",
+                timeout.as_secs_f64(),
+                output_text(&output)
+            ),
+        ));
     }
+    Ok(output)
+}
+
+fn spawn_output_reader<R>(mut reader: R) -> thread::JoinHandle<Result<Vec<u8>, std::io::Error>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output)?;
+        Ok(output)
+    })
+}
+
+fn join_output_reader(
+    handle: thread::JoinHandle<Result<Vec<u8>, std::io::Error>>,
+) -> Result<Vec<u8>, std::io::Error> {
+    handle
+        .join()
+        .map_err(|_| std::io::Error::other("command output reader panicked"))?
 }
 
 fn ensure_success(output: Output, action: &str) -> Result<(), AndroidError> {
@@ -1040,8 +1087,8 @@ fn ensure_success(output: Output, action: &str) -> Result<(), AndroidError> {
 }
 
 fn output_text(output: &Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = clipped_output_text(&output.stdout);
+    let stderr = clipped_output_text(&output.stderr);
     match (stdout.is_empty(), stderr.is_empty()) {
         (false, false) => format!("{stdout} · {stderr}"),
         (false, true) => stdout,
@@ -1050,9 +1097,65 @@ fn output_text(output: &Output) -> String {
     }
 }
 
+fn clipped_output_text(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    let text = text.trim();
+    let count = text.chars().count();
+    if count <= MAX_ERROR_STREAM_CHARS {
+        return text.to_owned();
+    }
+
+    let edge = MAX_ERROR_STREAM_CHARS / 2;
+    let head = text.chars().take(edge).collect::<String>();
+    let tail = text
+        .chars()
+        .skip(count.saturating_sub(edge))
+        .collect::<String>();
+    format!(
+        "{head}\n… 중간 출력 {}자 생략 …\n{tail}",
+        count.saturating_sub(edge * 2)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_output_fixture() {
+        if std::env::var_os("ASTRAL_COMMAND_OUTPUT_FIXTURE").is_none() {
+            return;
+        }
+        let payload = vec![b'x'; 1024 * 1024];
+        std::io::stdout().write_all(&payload).unwrap();
+    }
+
+    #[test]
+    fn command_runner_drains_large_output_while_process_is_running() {
+        let executable = std::env::current_exe().unwrap();
+        let mut command = Command::new(executable);
+        command
+            .args([
+                "--exact",
+                "android::tests::command_output_fixture",
+                "--nocapture",
+            ])
+            .env("ASTRAL_COMMAND_OUTPUT_FIXTURE", "1");
+
+        let output = run_command(&mut command, Duration::from_secs(10)).unwrap();
+        assert!(output.status.success());
+        assert!(output.stdout.len() >= 1024 * 1024);
+    }
+
+    #[test]
+    fn long_command_output_is_clipped_for_user_facing_errors() {
+        let raw = format!("HEAD{}TAIL", "x".repeat(MAX_ERROR_STREAM_CHARS * 2));
+        let clipped = clipped_output_text(raw.as_bytes());
+        assert!(clipped.starts_with("HEAD"));
+        assert!(clipped.ends_with("TAIL"));
+        assert!(clipped.contains("중간 출력"));
+        assert!(clipped.chars().count() < raw.chars().count());
+    }
 
     #[test]
     fn parses_adb_devices_and_classifies_emulators() {
