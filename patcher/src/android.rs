@@ -851,8 +851,9 @@ fn package_info(
     device: &AndroidDevice,
     package: &str,
 ) -> Result<Option<AndroidPackageInfo>, AndroidError> {
-    let command =
-        format!("dumpsys package {package} | grep -E 'Package \\[|versionName=|installerPackageName='");
+    let command = format!(
+        "dumpsys package {package} | grep -E 'Package \\[|versionName=|installerPackageName='"
+    );
     let output = run_adb(
         &device.adb_path,
         &["-s", &device.serial, "shell", "sh", "-c", &command],
