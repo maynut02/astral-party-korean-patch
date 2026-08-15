@@ -852,7 +852,7 @@ fn package_info(
     package: &str,
 ) -> Result<Option<AndroidPackageInfo>, AndroidError> {
     let command =
-        format!("dumpsys package {package} | grep -E 'versionName=|installerPackageName='");
+        format!("dumpsys package {package} | grep -E 'Package \\[|versionName=|installerPackageName='");
     let output = run_adb(
         &device.adb_path,
         &["-s", &device.serial, "shell", "sh", "-c", &command],
@@ -862,40 +862,66 @@ fn package_info(
         return Ok(None);
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let info = parse_package_info(&text);
+    let info = parse_package_info(&text, package);
     if info.version_name.is_none() && info.installer_package_name.is_none() {
         return Ok(None);
     }
     Ok(Some(info))
 }
 
-fn parse_package_info(text: &str) -> AndroidPackageInfo {
-    let mut version_names = Vec::new();
-    let mut installer_package_name = None;
+fn parse_package_info(text: &str, package: &str) -> AndroidPackageInfo {
+    let package_marker = format!("Package [{package}]");
+    let mut target_package_seen = false;
+    let mut in_target_package = false;
+    let mut target_version_name = None;
+    let mut target_installer_package_name = None;
+    let mut fallback_version_names = Vec::new();
+    let mut fallback_installer_package_name = None;
+
     for line in text.lines().map(str::trim) {
+        if line.starts_with("Package [") {
+            in_target_package = line.starts_with(&package_marker);
+            target_package_seen |= in_target_package;
+        }
+
         if let Some(value) = line.strip_prefix("versionName=") {
             let value = value.trim();
             if !value.is_empty() && value != "null" {
-                version_names.push(value.to_string());
+                if in_target_package && target_version_name.is_none() {
+                    target_version_name = Some(value.to_string());
+                }
+                fallback_version_names.push(value.to_string());
             }
         }
-        if installer_package_name.is_none()
-            && let Some(value) = line.strip_prefix("installerPackageName=")
-        {
+
+        if let Some(value) = line.strip_prefix("installerPackageName=") {
             let value = value.trim();
             if !value.is_empty() && value != "null" {
-                installer_package_name = Some(value.to_string());
+                if in_target_package && target_installer_package_name.is_none() {
+                    target_installer_package_name = Some(value.to_string());
+                }
+                if fallback_installer_package_name.is_none() {
+                    fallback_installer_package_name = Some(value.to_string());
+                }
             }
         }
     }
-    let version_name = version_names
+
+    if target_package_seen {
+        return AndroidPackageInfo {
+            version_name: target_version_name,
+            installer_package_name: target_installer_package_name,
+        };
+    }
+
+    let version_name = fallback_version_names
         .iter()
         .find(|value| looks_like_game_version(value))
         .cloned()
-        .or_else(|| version_names.into_iter().next());
+        .or_else(|| fallback_version_names.into_iter().next());
     AndroidPackageInfo {
         version_name,
-        installer_package_name,
+        installer_package_name: fallback_installer_package_name,
     }
 }
 
@@ -1079,7 +1105,21 @@ mod tests {
     #[test]
     fn parses_package_version_and_installer() {
         let info = parse_package_info(
-            "Packages:\n  versionName=11\n  Package [com.feimo.astralpartyjpn]\n    versionName=3.2.0\n    installerPackageName=com.android.vending\n",
+            "Packages:\n  versionName=1.0\n  Package [com.feimo.astralpartyjpn] (abc):\n    versionName=3.2.0\n    installerPackageName=com.android.vending\n",
+            ANDROID_PACKAGE,
+        );
+        assert_eq!(info.version_name.as_deref(), Some("3.2.0"));
+        assert_eq!(
+            info.installer_package_name.as_deref(),
+            Some("com.android.vending")
+        );
+    }
+
+    #[test]
+    fn package_parser_ignores_other_version_names_before_target_package() {
+        let info = parse_package_info(
+            "Verifier:\n  versionName=1.0\nPackages:\n  Package [other.package] (111):\n    versionName=9.9.9\n  Package [com.feimo.astralpartyjpn] (222):\n    versionCode=302000\n    versionName=3.2.0\n    installerPackageName=com.android.vending\n",
+            ANDROID_PACKAGE,
         );
         assert_eq!(info.version_name.as_deref(), Some("3.2.0"));
         assert_eq!(

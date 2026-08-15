@@ -58,7 +58,7 @@ final class RuntimeConfig {
                 json.getString("releaseIndexUrl"),
                 json.getString("gameActivity"),
                 json.optString("addressablesDir", "com.unity.addressables"),
-                json.optString("assetBundleCacheDir", "UnityCache/Shared"),
+                json.optString("assetBundleCacheDir", "com.unity.addressables/AssetBundles"),
                 intervalSeconds * 1000L);
     }
 }

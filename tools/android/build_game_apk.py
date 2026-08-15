@@ -189,7 +189,7 @@ def build_runtime_config(
         "releaseIndexUrl": release_index_url,
         "gameActivity": game_activity,
         "addressablesDir": "com.unity.addressables",
-        "assetBundleCacheDir": "UnityCache/Shared",
+        "assetBundleCacheDir": "com.unity.addressables/AssetBundles",
         "watcherIntervalSeconds": 30,
     }
 

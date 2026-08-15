@@ -70,7 +70,7 @@ https://raw.githubusercontent.com/<owner>/<repo>/distribution/release-index.json
 
 게임 실행 중에는 Addressables를 수정하지 않습니다. `UpdateWatcher`가 새 catalog 또는 다운로드 완료 상태를 감지하면 완전 종료 후 재실행을 안내하고, 다음 실행의 `BootstrapActivity`가 patch를 적용합니다.
 
-Android에서는 catalog와 AssetBundle cache를 구분합니다. catalog/hash는 `files/com.unity.addressables`에서 읽고 실제 원격 AssetBundle은 Unity cache인 `files/UnityCache/Shared/<BundleName>/<Hash>/__data`에서 찾습니다. Unity가 다운로드한 AssetBundle을 cache에 LZ4로 재압축할 수 있으므로 runtime은 CDN 원본 `sourceSha256/sourceSize`와 cache 파일의 바이트 일치를 다운로드 완료 조건으로 사용하지 않습니다. 대신 현재 catalog가 지정한 BundleName/Hash cache entry가 존재하는지 확인하고, 패치 직전 기기상의 실제 cache 파일을 별도로 백업합니다.
+Android에서는 catalog 파일과 AssetBundle cache 저장 위치를 구분합니다. catalog/hash는 `files/com.unity.addressables`에서 읽고 실제 원격 AssetBundle은 `files/com.unity.addressables/AssetBundles/<BundleName>/<Hash>/__data`에서 찾습니다. Unity가 다운로드한 AssetBundle을 cache에 LZ4로 재압축할 수 있으므로 runtime은 CDN 원본 `sourceSha256/sourceSize`와 cache 파일의 바이트 일치를 다운로드 완료 조건으로 사용하지 않습니다. 대신 현재 catalog가 지정한 BundleName/Hash cache entry가 존재하는지 확인하고, 패치 직전 기기상의 실제 cache 파일을 별도로 백업합니다.
 
 호환성 기준은 `gameVersion + catalogHash + route + channel`입니다. 일반 APK runtime은 `release` channel을 사용합니다.
 

@@ -209,7 +209,7 @@ def test_runtime_config_separates_catalog_and_assetbundle_caches() -> None:
         "com.femoo.sdk.Femoo_UnityActivity",
     )
     assert config["addressablesDir"] == "com.unity.addressables"
-    assert config["assetBundleCacheDir"] == "UnityCache/Shared"
+    assert config["assetBundleCacheDir"] == "com.unity.addressables/AssetBundles"
 
 
 def test_android_runtime_does_not_compare_cached_bundle_to_cdn_source_bytes() -> None:
@@ -220,7 +220,7 @@ def test_android_runtime_does_not_compare_cached_bundle_to_cdn_source_bytes() ->
         ROOT / "android/runtime/src/com/astralpatch/runtime/RuntimeConfig.java"
     ).read_text(encoding="utf-8")
 
-    assert '"UnityCache/Shared"' in runtime_config
+    assert '"com.unity.addressables/AssetBundles"' in runtime_config
     assert "assetBundleCacheRoot(context, config)" in engine
     assert "firstMissingBundlePath(bundleRoot, manifest.files)" in engine
     assert 'verifyFile(source, item.sourceSize, item.sourceSha256, "source")' not in engine
