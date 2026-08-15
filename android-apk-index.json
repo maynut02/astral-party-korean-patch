@@ -3,7 +3,7 @@
   "packageName": "com.feimo.astralpartyjpn",
   "gameVersion": "3.2.0",
   "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/int-android-v3.2.0/AstralParty_INT_ANDROID.apk",
-  "sha256": "30a408e2b41d78b803675b35534f4e2592287f78db0c550ed20f2e2c2f046869",
-  "size": 123393784,
+  "sha256": "0ea65da0cf94d9cfd1dbc244f0689087c2a83de5abc9b5f177203b4ef26458b3",
+  "size": 123397880,
   "installerPackageName": "com.android.vending"
 }
