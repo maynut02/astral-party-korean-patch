@@ -16,6 +16,7 @@ final class RuntimeConfig {
     final String releaseIndexUrl;
     final String gameActivity;
     final String addressablesDir;
+    final String assetBundleCacheDir;
     final long watcherIntervalMs;
 
     private RuntimeConfig(
@@ -24,12 +25,14 @@ final class RuntimeConfig {
             String releaseIndexUrl,
             String gameActivity,
             String addressablesDir,
+            String assetBundleCacheDir,
             long watcherIntervalMs) {
         this.route = route;
         this.channel = channel;
         this.releaseIndexUrl = releaseIndexUrl;
         this.gameActivity = gameActivity;
         this.addressablesDir = addressablesDir;
+        this.assetBundleCacheDir = assetBundleCacheDir;
         this.watcherIntervalMs = watcherIntervalMs;
     }
 
@@ -55,6 +58,7 @@ final class RuntimeConfig {
                 json.getString("releaseIndexUrl"),
                 json.getString("gameActivity"),
                 json.optString("addressablesDir", "com.unity.addressables"),
+                json.optString("assetBundleCacheDir", "UnityCache/Shared"),
                 intervalSeconds * 1000L);
     }
 }

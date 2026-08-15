@@ -179,6 +179,21 @@ def patch_manifest(path: Path) -> tuple[str, str]:
     return game_activity, version_name
 
 
+def build_runtime_config(
+    release_index_url: str, game_activity: str
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "route": "INT_ANDROID",
+        "channel": "release",
+        "releaseIndexUrl": release_index_url,
+        "gameActivity": game_activity,
+        "addressablesDir": "com.unity.addressables",
+        "assetBundleCacheDir": "UnityCache/Shared",
+        "watcherIntervalSeconds": 30,
+    }
+
+
 def compile_runtime(runtime_src: Path, work: Path, sdk: Path) -> Path:
     android_jar, d8, _, _ = android_tools(sdk)
     classes = work / "runtime-classes"
@@ -560,15 +575,7 @@ def main() -> int:
         )
 
         runtime_dex = compile_runtime(ROOT / "android" / "runtime" / "src", work, sdk)
-        config = {
-            "schemaVersion": 1,
-            "route": "INT_ANDROID",
-            "channel": "release",
-            "releaseIndexUrl": args.release_index_url,
-            "gameActivity": game_activity,
-            "addressablesDir": "com.unity.addressables",
-            "watcherIntervalSeconds": 30,
-        }
+        config = build_runtime_config(args.release_index_url, game_activity)
         injected = work / "runtime-injected.apk"
         assemble_unsigned_apk(
             base_apk,

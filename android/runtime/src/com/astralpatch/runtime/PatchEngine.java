@@ -1,6 +1,7 @@
 package com.astralpatch.runtime;
 
 import android.content.Context;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -24,6 +25,7 @@ import java.util.Locale;
 import java.util.zip.GZIPInputStream;
 
 final class PatchEngine {
+    private static final String TAG = "AstralPatchRuntime";
     private static final int BUFFER_SIZE = 128 * 1024;
     private static final int METADATA_LIMIT = 4 * 1024 * 1024;
     private static final int CONNECT_TIMEOUT_MS = 15000;
@@ -41,11 +43,17 @@ final class PatchEngine {
         final Status status;
         final String catalogHash;
         final String patchVersion;
+        final String missingBundlePath;
 
         Result(Status status, String catalogHash, String patchVersion) {
+            this(status, catalogHash, patchVersion, null);
+        }
+
+        Result(Status status, String catalogHash, String patchVersion, String missingBundlePath) {
             this.status = status;
             this.catalogHash = catalogHash;
             this.patchVersion = patchVersion;
+            this.missingBundlePath = missingBundlePath;
         }
     }
 
@@ -165,24 +173,38 @@ final class PatchEngine {
             return new Result(Status.NO_PATCH, catalog.hash, null);
         }
         Manifest manifest = fetchManifest(config, catalog, release);
+        File bundleRoot = assetBundleCacheRoot(context, config);
+        Log.i(TAG, "catalog cache root=" + catalog.root + ", bundle cache root=" + bundleRoot);
         File stateRoot = stateRoot(context);
         File stateFile = new File(stateRoot, "state.json");
 
-        if (allFilesMatch(catalog.root, manifest.files, false)) {
+        if (allPatchedFilesMatch(bundleRoot, manifest.files)) {
             writeState(stateFile, catalog, manifest);
             return new Result(Status.ALREADY_PATCHED, catalog.hash, manifest.patchVersion);
         }
-        if (!allFilesMatch(catalog.root, manifest.files, true)) {
-            if (!restoreInterruptedTransaction(stateRoot, catalog, manifest)) {
-                return new Result(Status.WAITING_FOR_GAME_DOWNLOAD, catalog.hash, manifest.patchVersion);
+        String missingBundle = firstMissingBundlePath(bundleRoot, manifest.files);
+        if (missingBundle != null) {
+            Log.i(TAG, "waiting for game bundle cache entry: " + missingBundle);
+            if (!restoreInterruptedTransaction(stateRoot, bundleRoot, catalog, manifest)) {
+                return new Result(
+                        Status.WAITING_FOR_GAME_DOWNLOAD,
+                        catalog.hash,
+                        manifest.patchVersion,
+                        missingBundle);
             }
-            if (!allFilesMatch(catalog.root, manifest.files, true)) {
-                return new Result(Status.WAITING_FOR_GAME_DOWNLOAD, catalog.hash, manifest.patchVersion);
+            missingBundle = firstMissingBundlePath(bundleRoot, manifest.files);
+            if (missingBundle != null) {
+                Log.i(TAG, "bundle cache entry still missing after recovery: " + missingBundle);
+                return new Result(
+                        Status.WAITING_FOR_GAME_DOWNLOAD,
+                        catalog.hash,
+                        manifest.patchVersion,
+                        missingBundle);
             }
         }
 
         progress.update("한글패치 파일을 준비하는 중입니다...");
-        apply(context, catalog, manifest, stateRoot, progress);
+        apply(bundleRoot, catalog, manifest, stateRoot, progress);
         writeState(stateFile, catalog, manifest);
         return new Result(Status.PATCHED, catalog.hash, manifest.patchVersion);
     }
@@ -197,7 +219,8 @@ final class PatchEngine {
             return false;
         }
         Manifest manifest = fetchManifest(config, catalog, release);
-        return allFilesMatch(catalog.root, manifest.files, true);
+        File bundleRoot = assetBundleCacheRoot(context, config);
+        return allBundleFilesPresent(bundleRoot, manifest.files);
     }
 
     static String currentCatalogHash(Context context, RuntimeConfig config) {
@@ -317,7 +340,7 @@ final class PatchEngine {
     }
 
     private static void apply(
-            Context context,
+            File bundleRoot,
             Catalog catalog,
             Manifest manifest,
             File stateRoot,
@@ -346,29 +369,37 @@ final class PatchEngine {
             staged.add(payload);
         }
 
-        List<ManifestFile> backedUp = new ArrayList<>();
+        List<File> targets = new ArrayList<>();
+        List<File> backups = new ArrayList<>();
         for (ManifestFile item : manifest.files) {
-            File source = new File(catalog.root, item.path);
-            verifyFile(source, item.sourceSize, item.sourceSha256, "source");
+            File source = resolveBundleFile(bundleRoot, item.path);
+            if (source == null) {
+                throw new IllegalStateException("game resource is not cached yet: " + item.path);
+            }
             File backup = new File(backupRoot, item.path);
             ensureParent(backup);
-            copyFile(source, backup);
-            verifyFile(backup, item.sourceSize, item.sourceSha256, "backup");
-            backedUp.add(item);
+            if (!backup.isFile()) {
+                long sourceSize = source.length();
+                String sourceHash = sha256(source);
+                copyFile(source, backup);
+                verifyFile(backup, sourceSize, sourceHash, "backup");
+            }
+            targets.add(source);
+            backups.add(backup);
         }
 
         try {
             for (int i = 0; i < manifest.files.size(); i++) {
                 ManifestFile item = manifest.files.get(i);
                 progress.update("한글패치 적용 중... " + (i + 1) + "/" + manifest.files.size());
-                File target = new File(catalog.root, item.path);
+                File target = targets.get(i);
                 replaceFile(staged.get(i), target);
                 verifyFile(target, item.size, item.sha256, "installed");
             }
         } catch (Exception error) {
-            for (ManifestFile item : backedUp) {
-                File backup = new File(backupRoot, item.path);
-                File target = new File(catalog.root, item.path);
+            for (int i = 0; i < backups.size(); i++) {
+                File backup = backups.get(i);
+                File target = targets.get(i);
                 if (backup.isFile()) {
                     try {
                         replaceFile(backup, target);
@@ -384,39 +415,89 @@ final class PatchEngine {
     }
 
     private static boolean restoreInterruptedTransaction(
-            File stateRoot, Catalog catalog, Manifest manifest) throws Exception {
+            File stateRoot, File bundleRoot, Catalog catalog, Manifest manifest) throws Exception {
         File backupRoot = new File(stateRoot, "backups/" + catalog.hash);
-        boolean found = false;
         for (ManifestFile item : manifest.files) {
             File backup = new File(backupRoot, item.path);
-            if (backup.isFile()
-                    && backup.length() == item.sourceSize
-                    && sha256(backup).equals(item.sourceSha256)) {
-                found = true;
-            } else {
+            if (!backup.isFile() || backup.length() <= 0) {
                 return false;
             }
         }
-        if (!found) {
-            return false;
-        }
         for (ManifestFile item : manifest.files) {
-            replaceFile(new File(backupRoot, item.path), new File(catalog.root, item.path));
+            File backup = new File(backupRoot, item.path);
+            File target = resolveBundleFile(bundleRoot, item.path);
+            if (target == null) {
+                target = safeBundlePath(bundleRoot, item.path);
+            }
+            replaceFile(backup, target);
         }
         return true;
     }
 
-    private static boolean allFilesMatch(
-            File root, List<ManifestFile> files, boolean source) throws Exception {
+    private static boolean allPatchedFilesMatch(
+            File root, List<ManifestFile> files) throws Exception {
         for (ManifestFile item : files) {
-            File file = new File(root, item.path);
-            long size = source ? item.sourceSize : item.size;
-            String hash = source ? item.sourceSha256 : item.sha256;
-            if (!file.isFile() || file.length() != size || !sha256(file).equals(hash)) {
+            File file = resolveBundleFile(root, item.path);
+            if (file == null || file.length() != item.size || !sha256(file).equals(item.sha256)) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static boolean allBundleFilesPresent(
+            File root, List<ManifestFile> files) throws Exception {
+        return firstMissingBundlePath(root, files) == null;
+    }
+
+    private static String firstMissingBundlePath(
+            File root, List<ManifestFile> files) throws Exception {
+        for (ManifestFile item : files) {
+            File file = resolveBundleFile(root, item.path);
+            if (file == null || file.length() <= 0) {
+                return item.path;
+            }
+        }
+        return null;
+    }
+
+    private static File resolveBundleFile(File root, String relativePath) throws Exception {
+        File exact = safeBundlePath(root, relativePath);
+        if (exact.isFile()) {
+            return exact;
+        }
+        String alternatePath = null;
+        if (relativePath.endsWith("/__data")) {
+            alternatePath = relativePath + "__";
+        } else if (relativePath.endsWith("/__data__")) {
+            alternatePath = relativePath.substring(0, relativePath.length() - 2);
+        }
+        if (alternatePath != null) {
+            File alternate = safeBundlePath(root, alternatePath);
+            if (alternate.isFile()) {
+                return alternate;
+            }
+        }
+        return null;
+    }
+
+    private static File safeBundlePath(File root, String relativePath) throws Exception {
+        File target = new File(root, safeRelativePath(relativePath));
+        String rootPath = root.getCanonicalPath();
+        String targetPath = target.getCanonicalPath();
+        if (!targetPath.equals(rootPath)
+                && !targetPath.startsWith(rootPath + File.separator)) {
+            throw new IllegalArgumentException("Addressables path escapes bundle cache root");
+        }
+        return target;
+    }
+
+    private static File assetBundleCacheRoot(Context context, RuntimeConfig config) {
+        File filesRoot = context.getExternalFilesDir(null);
+        if (filesRoot == null) {
+            return new File(context.getFilesDir(), config.assetBundleCacheDir);
+        }
+        return new File(filesRoot, config.assetBundleCacheDir);
     }
 
     private static File stateRoot(Context context) {

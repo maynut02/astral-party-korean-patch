@@ -201,3 +201,31 @@ def test_prepare_lspatch_input_aligns_before_inserting_play_block(
     assert MODULE.extract_apk_signing_block(output) == play_block
     with zipfile.ZipFile(output, "r") as archive:
         assert archive.read("classes.dex") == b"modified"
+
+
+def test_runtime_config_separates_catalog_and_assetbundle_caches() -> None:
+    config = MODULE.build_runtime_config(
+        "https://raw.githubusercontent.com/example/repo/distribution/release-index.json",
+        "com.femoo.sdk.Femoo_UnityActivity",
+    )
+    assert config["addressablesDir"] == "com.unity.addressables"
+    assert config["assetBundleCacheDir"] == "UnityCache/Shared"
+
+
+def test_android_runtime_does_not_compare_cached_bundle_to_cdn_source_bytes() -> None:
+    engine = (ROOT / "android/runtime/src/com/astralpatch/runtime/PatchEngine.java").read_text(
+        encoding="utf-8"
+    )
+    runtime_config = (
+        ROOT / "android/runtime/src/com/astralpatch/runtime/RuntimeConfig.java"
+    ).read_text(encoding="utf-8")
+
+    assert '"UnityCache/Shared"' in runtime_config
+    assert "assetBundleCacheRoot(context, config)" in engine
+    assert "firstMissingBundlePath(bundleRoot, manifest.files)" in engine
+    assert 'verifyFile(source, item.sourceSize, item.sourceSha256, "source")' not in engine
+    assert "sourceHash = sha256(source)" in engine
+    bootstrap = (
+        ROOT / "android/runtime/src/com/astralpatch/runtime/BootstrapActivity.java"
+    ).read_text(encoding="utf-8")
+    assert "대기 중인 리소스: " in bootstrap

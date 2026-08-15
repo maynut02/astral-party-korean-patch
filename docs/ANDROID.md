@@ -63,20 +63,22 @@ https://raw.githubusercontent.com/<owner>/<repo>/distribution/release-index.json
   -> 현재 catalog/hash 검사
       -> catalog 없음: 원본 게임 Activity 실행
       -> 호환 release 없음: 원본 게임 Activity 실행
-      -> 원본 bundle 미완료/불일치: 원본 게임 Activity 실행
-      -> sourceSize/sourceSha256 일치: Unity 시작 전에 patch 적용
+      -> 필요한 AssetBundle cache entry 미완료: 원본 게임 Activity 실행
+      -> BundleName/Hash cache entry 준비 완료: Unity 시작 전에 patch 적용
   -> com.femoo.sdk.Femoo_UnityActivity 실행
 ```
 
 게임 실행 중에는 Addressables를 수정하지 않습니다. `UpdateWatcher`가 새 catalog 또는 다운로드 완료 상태를 감지하면 완전 종료 후 재실행을 안내하고, 다음 실행의 `BootstrapActivity`가 patch를 적용합니다.
 
+Android에서는 catalog와 AssetBundle cache를 구분합니다. catalog/hash는 `files/com.unity.addressables`에서 읽고 실제 원격 AssetBundle은 Unity cache인 `files/UnityCache/Shared/<BundleName>/<Hash>/__data`에서 찾습니다. Unity가 다운로드한 AssetBundle을 cache에 LZ4로 재압축할 수 있으므로 runtime은 CDN 원본 `sourceSha256/sourceSize`와 cache 파일의 바이트 일치를 다운로드 완료 조건으로 사용하지 않습니다. 대신 현재 catalog가 지정한 BundleName/Hash cache entry가 존재하는지 확인하고, 패치 직전 기기상의 실제 cache 파일을 별도로 백업합니다.
+
 호환성 기준은 `gameVersion + catalogHash + route + channel`입니다. 일반 APK runtime은 `release` channel을 사용합니다.
 
 ## 안전성
 
-- manifest `sourceSize`/`sourceSha256` 검증
+- `gameVersion + catalogHash`와 manifest의 BundleName/Hash cache path 호환성 확인
 - gzip transport SHA-256 및 압축 해제 후 payload SHA-256 이중 검증
-- `.astralpatch/backups/<catalogHash>/...` 원본 backup
+- `.astralpatch/backups/<catalogHash>/...`에 기기상의 실제 cache bundle을 SHA-256 확인 후 backup
 - 적용 실패 시 rollback
 - Unity 실행 중 AssetBundle 교체 금지
 - AutoPatcher APK download size/SHA-256 검증

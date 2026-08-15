@@ -62,10 +62,14 @@ public final class BootstrapActivity extends Activity {
                     watchCurrentCatalog = false;
                     clearRestartMarker();
                     break;
-                case WAITING_FOR_GAME_DOWNLOAD:
-                    updateStatus("게임 리소스 다운로드가 필요합니다. 게임을 시작합니다.");
+                case WAITING_FOR_GAME_DOWNLOAD: {
+                    String missing = result.missingBundlePath == null
+                            ? ""
+                            : "\n대기 중인 리소스: " + result.missingBundlePath;
+                    updateStatus("게임 리소스 다운로드가 필요합니다. 게임을 시작합니다." + missing);
                     watchCurrentCatalog = true;
                     break;
+                }
                 case NO_PATCH:
                     updateStatus("현재 리소스용 한글패치가 아직 없습니다. 게임을 시작합니다.");
                     watchCurrentCatalog = true;
