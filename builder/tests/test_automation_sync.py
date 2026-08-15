@@ -7,11 +7,12 @@ from astral_builder.addressables.resolver import BundleOrigin, ResolvedBundle, R
 from astral_builder.automation.sync import (
     PreparedRevision,
     _bundle_locations,
+    _download_target,
     load_route_sync_config,
     persist_prepared_revision,
 )
 from astral_builder.game.source import DownloadedCatalog, GameSource
-from astral_builder.source.downloader import DownloadedBundle
+from astral_builder.source.downloader import DownloadedBundle, RemoteBundleDownloader
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -71,6 +72,48 @@ resources:
     assert config.translation_source_route == "INT_STEAM"
     assert config.legacy_font_name == "JingNanBoBoHei"
 
+
+
+def test_sync_target_reuses_same_bundle_with_progress(tmp_path: Path) -> None:
+    bundle = ResolvedBundle(
+        origin=BundleOrigin.REMOTE,
+        primary_key="shared.bundle",
+        internal_id="{App.WebServerConfig.Path}/shared.bundle",
+        bundle_name="shared-bundle",
+        cache_hash="a" * 32,
+        expected_size=4,
+        download_url="https://example.test/shared.bundle",
+        cache_relative_path=f"shared-bundle/{'a' * 32}/__data",
+    )
+    first = ResolvedTarget("lang:en", "English", (bundle,))
+    second = ResolvedTarget("lang:jp", "Japanese", (bundle,))
+    calls: list[str] = []
+    messages: list[str] = []
+
+    def fetch(url: str, _timeout: float) -> bytes:
+        calls.append(url)
+        return b"data"
+
+    downloader = RemoteBundleDownloader(fetch=fetch)
+    cache: dict[tuple[str, str], DownloadedBundle] = {}
+    first_result = _download_target(
+        first,
+        downloader=downloader,
+        root=tmp_path,
+        cache=cache,
+        progress=messages.append,
+    )
+    second_result = _download_target(
+        second,
+        downloader=downloader,
+        root=tmp_path,
+        cache=cache,
+        progress=messages.append,
+    )
+
+    assert calls == ["https://example.test/shared.bundle"]
+    assert first_result == second_result
+    assert any("reuse bundle" in message for message in messages)
 
 def test_bundle_locations_disambiguate_multiple_remote_dependencies(tmp_path: Path) -> None:
     bundles = tuple(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,7 +8,12 @@ import psycopg
 import yaml
 
 from astral_builder.addressables.catalog import AddressablesCatalog
-from astral_builder.addressables.resolver import BundleOrigin, ResolvedTarget, resolve_target
+from astral_builder.addressables.resolver import (
+    BundleOrigin,
+    ResolvedBundle,
+    ResolvedTarget,
+    resolve_target,
+)
 from astral_builder.database.repository import (
     AssetLocationInput,
     RevisionInput,
@@ -118,29 +124,78 @@ def _download_target(
     *,
     downloader: RemoteBundleDownloader,
     root: Path,
+    cache: dict[tuple[str, str], DownloadedBundle],
+    progress: Callable[[str], None],
 ) -> tuple[DownloadedBundle, ...]:
-    downloaded = downloader.download_target(target.bundles, root)
+    remote: list[ResolvedBundle] = []
+    seen: set[tuple[str, str]] = set()
+    for bundle in target.bundles:
+        if bundle.origin is not BundleOrigin.REMOTE:
+            continue
+        identity = (bundle.bundle_name, bundle.cache_hash)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        remote.append(bundle)
+
+    total_bytes = sum(max(bundle.expected_size, 0) for bundle in remote)
+    progress(
+        f"{target.logical_name}: resolved {len(remote)} remote bundle(s), "
+        f"expected {total_bytes / (1024 * 1024):.1f} MiB"
+    )
+
+    downloaded: list[DownloadedBundle] = []
+    for index, bundle in enumerate(remote, start=1):
+        identity = (bundle.bundle_name, bundle.cache_hash)
+        cached = cache.get(identity)
+        if cached is not None:
+            progress(
+                f"{target.logical_name}: reuse bundle {index}/{len(remote)} "
+                f"({cached.size / (1024 * 1024):.1f} MiB)"
+            )
+            downloaded.append(cached)
+            continue
+
+        progress(
+            f"{target.logical_name}: download bundle {index}/{len(remote)} "
+            f"(expected {max(bundle.expected_size, 0) / (1024 * 1024):.1f} MiB)"
+        )
+        destination = root / bundle.cache_hash / f"{bundle.cache_hash}.bundle"
+        item = downloader.download(bundle, destination)
+        cache[identity] = item
+        downloaded.append(item)
+        progress(
+            f"{target.logical_name}: downloaded bundle {index}/{len(remote)} "
+            f"({item.size / (1024 * 1024):.1f} MiB)"
+        )
+
+    downloaded_tuple = tuple(downloaded)
     expected_remote = {
         (bundle.bundle_name, bundle.cache_hash)
         for bundle in target.bundles
         if bundle.origin is BundleOrigin.REMOTE
     }
-    actual = {(item.resolved.bundle_name, item.resolved.cache_hash) for item in downloaded}
+    actual = {(item.resolved.bundle_name, item.resolved.cache_hash) for item in downloaded_tuple}
     if actual != expected_remote:
         raise RuntimeError(
             f"downloaded bundle set differs for {target.logical_name}: "
             f"expected={sorted(expected_remote)} actual={sorted(actual)}"
         )
-    return downloaded
+    return downloaded_tuple
 
 
 def _find_text_asset(
     bundles: tuple[DownloadedBundle, ...],
     asset_name: str,
+    *,
+    text_asset_cache: dict[Path, dict[str, bytes]],
 ) -> bytes:
     matches: list[bytes] = []
     for bundle in bundles:
-        assets = extract_text_assets(bundle.path)
+        assets = text_asset_cache.get(bundle.path)
+        if assets is None:
+            assets = extract_text_assets(bundle.path)
+            text_asset_cache[bundle.path] = assets
         if asset_name in assets:
             matches.append(assets[asset_name])
     if len(matches) != 1:
@@ -199,21 +254,34 @@ def prepare_revision(
     work_dir: str | Path,
     client: GameSourceClient | None = None,
     downloader: RemoteBundleDownloader | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> PreparedRevision:
     source_client = client or GameSourceClient()
     bundle_downloader = downloader or RemoteBundleDownloader()
+    if progress is None:
+        def default_progress(message: str) -> None:
+            print(f"[sync:{config.route}] {message}", flush=True)
+
+        progress = default_progress
     work_root = Path(work_dir)
     catalog_path = work_root / "catalog" / f"catalog_{game_version}.json"
     bundles_root = work_root / "bundles"
 
+    progress("discover remote revision")
     source = source_client.discover(config.route, game_version)
+    progress(f"revision r{source.revision}: fetch catalog hash")
     catalog_hash = source_client.fetch_catalog_hash(source)
+    progress(f"revision r{source.revision}: download catalog")
     catalog_download = source_client.download_catalog(source, catalog_path)
+    progress(
+        f"catalog downloaded ({catalog_download.size / (1024 * 1024):.1f} MiB); parse Addressables"
+    )
     catalog = AddressablesCatalog.from_path(catalog_download.path)
 
     all_downloads: dict[tuple[str, str], DownloadedBundle] = {}
     asset_locations: list[AssetLocationInput] = []
     language_payloads: dict[str, bytes] = {}
+    text_asset_cache: dict[Path, dict[str, bytes]] = {}
 
     for code, asset_name in config.lang_assets.items():
         target = resolve_target(
@@ -222,12 +290,22 @@ def prepare_revision(
             logical_name=f"lang:{code}",
             catalog_key=asset_name,
         )
-        downloaded = _download_target(target, downloader=bundle_downloader, root=bundles_root)
+        downloaded = _download_target(
+            target,
+            downloader=bundle_downloader,
+            root=bundles_root,
+            cache=all_downloads,
+            progress=progress,
+        )
         for item in downloaded:
             all_downloads[(item.resolved.bundle_name, item.resolved.cache_hash)] = item
         asset_locations.extend(_bundle_locations(target, downloaded))
         if config.translation_source_route == config.route:
-            language_payloads[code] = _find_text_asset(downloaded, asset_name)
+            progress(f"lang:{code}: extract TextAsset {asset_name!r}")
+            language_payloads[code] = _find_text_asset(
+                downloaded, asset_name, text_asset_cache=text_asset_cache
+            )
+            progress(f"lang:{code}: extraction complete")
 
     str_target = resolve_target(
         catalog,
@@ -239,6 +317,8 @@ def prepare_revision(
         str_target,
         downloader=bundle_downloader,
         root=bundles_root,
+        cache=all_downloads,
+        progress=progress,
     )
     for item in str_downloaded:
         all_downloads[(item.resolved.bundle_name, item.resolved.cache_hash)] = item
@@ -246,8 +326,20 @@ def prepare_revision(
 
     str_assets: dict[str, bytes] = {}
     if config.translation_source_route == config.route:
+        progress("str: extract translation TextAssets")
         for item in str_downloaded:
-            str_assets.update(extract_text_assets(item.path, name_prefix=config.str_asset_prefix))
+            assets = text_asset_cache.get(item.path)
+            if assets is None:
+                assets = extract_text_assets(item.path)
+                text_asset_cache[item.path] = assets
+            str_assets.update(
+                {
+                    name: payload
+                    for name, payload in assets.items()
+                    if name.startswith(config.str_asset_prefix)
+                }
+            )
+        progress(f"str: extracted {len(str_assets)} TextAsset(s)")
     empty_str_assets = tuple(sorted(name for name, payload in str_assets.items() if not payload))
 
     tmp_target = resolve_target(
@@ -256,18 +348,27 @@ def prepare_revision(
         logical_name="tmp-font",
         catalog_key=config.tmp_catalog_key,
     )
-    tmp_downloaded = _download_target(tmp_target, downloader=bundle_downloader, root=bundles_root)
+    tmp_downloaded = _download_target(
+        tmp_target,
+        downloader=bundle_downloader,
+        root=bundles_root,
+        cache=all_downloads,
+        progress=progress,
+    )
     for item in tmp_downloaded:
         all_downloads[(item.resolved.bundle_name, item.resolved.cache_hash)] = item
     asset_locations.extend(_bundle_locations(tmp_target, tmp_downloaded))
 
     if config.translation_source_route == config.route:
+        progress("convert extracted source text to translation units")
         lang_units = extract_lang_units(language_payloads)
         str_units = extract_str_units(str_assets, asset_prefix=config.str_asset_prefix)
         units = lang_units + str_units
+        progress(f"prepared {len(units)} canonical translation unit(s)")
     else:
         units = ()
 
+    progress(f"prepare complete: {len(all_downloads)} unique bundle(s)")
     return PreparedRevision(
         source=source,
         catalog_hash=catalog_hash,

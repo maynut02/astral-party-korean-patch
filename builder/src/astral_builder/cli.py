@@ -139,13 +139,21 @@ def _run_check(args: argparse.Namespace) -> int:
 
 def _run_sync(args: argparse.Namespace) -> int:
     config = load_route_sync_config(args.route_config)
+    print(f"[sync:{config.route}] start", flush=True)
     prepared = prepare_revision(
         config=config,
         game_version=args.game_version,
         work_dir=args.work_dir,
     )
+    print(f"[sync:{config.route}] persist prepared revision to database", flush=True)
     with psycopg.connect(_database_url()) as conn:
         result = persist_prepared_revision(conn, prepared)
+    print(
+        f"[sync:{config.route}] database sync complete: "
+        f"+{result.source_added_count} ~{result.source_modified_count} "
+        f"-{result.source_removed_count}",
+        flush=True,
+    )
     if args.github_output:
         write_sync_github_output(result, prepared, args.github_output)
     print(
