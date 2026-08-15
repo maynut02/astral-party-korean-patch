@@ -30,7 +30,7 @@ Android판은 `AstralAutoPatcher`를 통해 설치하는 것을 전제로 합니
 ## 개발
 
 Builder는 Python 3.12+, AutoPatcher는 stable Rust toolchain을 사용합니다.
-필요한 환경변수와 GitHub Actions Secret/Variable 목록은 [`.env.example`](.env.example)에 정리되어 있습니다. 저장소는 `.env`를 자동으로 로드하지 않으므로 로컬 실행 시 필요한 값을 환경변수로 설정하세요.
+필요한 환경변수와 GitHub Actions Secret/Variable 목록은 [`.env.example`](.env.example)에 정리되어 있습니다.
 
 ```bash
 python -m pip install -e './builder[dev]'
