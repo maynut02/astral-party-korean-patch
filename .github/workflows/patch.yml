@@ -21,35 +21,80 @@ concurrency:
 permissions:
   contents: write
 
+env:
+  DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+  DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
+  GAME_VERSION: ${{ vars.GAME_VERSION || '3.2.0' }}
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  RELEASE_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
+
 jobs:
-  build-and-publish:
+  database:
+    name: Database migration
     runs-on: ubuntu-latest
-    env:
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-      DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
-      STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
-      DEPOTDOWNLOADER_LOGIN_TOKEN: ${{ secrets.STEAM_REFRESH_TOKEN }}
-      GH_TOKEN: ${{ github.token }}
-      GITHUB_TOKEN: ${{ github.token }}
-      GAME_VERSION: ${{ vars.GAME_VERSION || '3.2.0' }}
-      RELEASE_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
     steps:
       - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: builder/pyproject.toml
-
-      - name: Install builder
-        run: python -m pip install -e './builder[dev]'
-
+      - uses: ./.github/actions/setup-builder
       - name: Apply database migrations
         run: python database/migrate.py
 
-      - name: Plan patch run from canonical INT_STEAM
-        id: plan
+  check:
+    name: Check ${{ matrix.route }}
+    needs: database
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - route: INT_STEAM
+            slug: int_steam
+          - route: CN_STEAM
+            slug: cn_steam
+          - route: INT_ANDROID
+            slug: int_android
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-builder
+      - name: Check remote revision and catalog
+        run: |
+          mkdir -p .work/check
+          astral-builder check \
+            --route '${{ matrix.route }}' \
+            --game-version "$GAME_VERSION" \
+            --github-output '.work/check/${{ matrix.slug }}.env'
+      - name: Upload route check
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-check-${{ matrix.slug }}
+          path: .work/check/${{ matrix.slug }}.env
+          if-no-files-found: error
+          retention-days: 1
+
+  plan:
+    name: Plan patch run
+    needs: check
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.aggregate.outputs.should_run }}
+      mode: ${{ steps.release.outputs.mode }}
+      channel: ${{ steps.release.outputs.channel }}
+      tag: ${{ steps.release.outputs.tag }}
+      title: ${{ steps.release.outputs.title }}
+      patch_version: ${{ steps.release.outputs.patch_version }}
+      game_version: ${{ steps.aggregate.outputs.game_version }}
+      max_revision: ${{ steps.aggregate.outputs.max_revision }}
+      updated_routes_csv: ${{ steps.aggregate.outputs.updated_routes_csv }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download route checks
+        uses: actions/download-artifact@v7
+        with:
+          pattern: patch-check-*
+          path: .work/check
+          merge-multiple: true
+      - name: Aggregate route checks
+        id: aggregate
         shell: bash
         env:
           REQUESTED_MODE: ${{ inputs.mode }}
@@ -57,143 +102,211 @@ jobs:
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
             mode=pre
-            astral-builder check \
-              --route INT_STEAM \
-              --game-version "$GAME_VERSION" \
-              --github-output "$GITHUB_OUTPUT"
+            scheduled=--scheduled
           else
             mode="${REQUESTED_MODE:-release}"
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            scheduled=''
           fi
-          case "$mode" in
-            pre|release) ;;
-            *) echo "unsupported patch mode: $mode" >&2; exit 1 ;;
-          esac
+          python tools/workflow/patch_plan.py \
+            --checks-dir .work/check \
+            --mode "$mode" \
+            $scheduled \
+            --github-output "$GITHUB_OUTPUT"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Define immutable release identity
+        if: steps.aggregate.outputs.should_run == 'true'
+        id: release
+        shell: bash
+        env:
+          MODE: ${{ steps.aggregate.outputs.mode }}
+          VERSION: ${{ steps.aggregate.outputs.game_version }}
+          MAX_REVISION: ${{ steps.aggregate.outputs.max_revision }}
+        run: |
+          set -euo pipefail
+          base="v${VERSION}_r${MAX_REVISION}"
+          if [ "$MODE" = "pre" ]; then
+            tag=patch-pre
+            title="${base}-pre"
+            patch_version="$title"
+            channel=develop
+          else
+            channel=release
+            mkdir -p .work
+            git ls-remote --tags --refs origin "refs/tags/${base}*" \
+              | awk '{sub("refs/tags/", "", $2); print $2}' > .work/existing-patch-tags.txt
+            tag="$(python tools/workflow/release_tag.py \
+              --base "$base" \
+              --tags-file .work/existing-patch-tags.txt)"
+            title="$tag"
+            patch_version="$tag"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          echo "patch_version=$patch_version" >> "$GITHUB_OUTPUT"
+      - name: No route update detected
+        if: steps.aggregate.outputs.should_run != 'true'
+        run: echo 'All routes already have a published build for their current revisions.'
 
-      - name: No canonical update detected
-        if: steps.plan.outputs.changed != 'true'
-        run: echo 'INT_STEAM has no unprocessed/pre-release revision. Nothing to build.'
-
-      - name: Synchronize canonical source and route targets
-        if: steps.plan.outputs.changed == 'true'
-        id: sync
+  sync:
+    name: Sync ${{ matrix.route }}
+    needs: [check, plan]
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - route: INT_STEAM
+            slug: int_steam
+            config: routes/int_steam.yaml
+          - route: CN_STEAM
+            slug: cn_steam
+            config: routes/cn_steam.yaml
+          - route: INT_ANDROID
+            slug: int_android
+            config: routes/int_android.yaml
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download route check
+        uses: actions/download-artifact@v7
+        with:
+          name: patch-check-${{ matrix.slug }}
+          path: .work/check
+      - name: Determine whether full sync is required
+        id: current
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .work/sync-output
+          file='.work/check/${{ matrix.slug }}.env'
+          sync_required="$(sed -n 's/^sync_required=//p' "$file" | tail -1)"
+          test "$sync_required" = true -o "$sync_required" = false
+          echo "sync_required=$sync_required" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-builder
+        if: steps.current.outputs.sync_required == 'true'
+      - name: Synchronize route resources
+        if: steps.current.outputs.sync_required == 'true'
+        run: |
+          mkdir -p .work/state
+          astral-builder sync \
+            --game-version "$GAME_VERSION" \
+            --route-config '${{ matrix.config }}' \
+            --work-dir '.work/sync-${{ matrix.slug }}' \
+            --github-output '.work/state/${{ matrix.slug }}.env'
+      - name: Reuse already synchronized route state
+        if: steps.current.outputs.sync_required != 'true'
+        shell: bash
+        run: |
+          mkdir -p .work/state
+          cp '.work/check/${{ matrix.slug }}.env' '.work/state/${{ matrix.slug }}.env'
+          {
+            echo 'source_added=0'
+            echo 'source_modified=0'
+            echo 'source_removed=0'
+          } >> '.work/state/${{ matrix.slug }}.env'
+      - name: Upload synchronized route state
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-state-${{ matrix.slug }}
+          path: .work/state/${{ matrix.slug }}.env
+          if-no-files-found: error
+          retention-days: 1
 
-          sync_route() {
-            local slug="$1"
-            local config="$2"
-            astral-builder sync \
-              --game-version "$GAME_VERSION" \
-              --route-config "$config" \
-              --work-dir ".work/sync-$slug" \
-              --github-output ".work/sync-output/$slug"
-          }
-
-          # INT_STEAM is the only canonical translation source. Other routes
-          # persist compatibility metadata/assets only and never create canonical source versions.
-          sync_route int_steam routes/int_steam.yaml
-          sync_route cn_steam routes/cn_steam.yaml
-          sync_route int_android routes/int_android.yaml
-
+  state:
+    name: Collect route state
+    needs: [plan, sync]
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      int_steam_revision_id: ${{ steps.collect.outputs.int_steam_revision_id }}
+      cn_steam_revision_id: ${{ steps.collect.outputs.cn_steam_revision_id }}
+      int_android_revision_id: ${{ steps.collect.outputs.int_android_revision_id }}
+      int_steam_revision: ${{ steps.collect.outputs.int_steam_revision }}
+      cn_steam_revision: ${{ steps.collect.outputs.cn_steam_revision }}
+      int_android_revision: ${{ steps.collect.outputs.int_android_revision }}
+      source_added: ${{ steps.collect.outputs.source_added }}
+      source_modified: ${{ steps.collect.outputs.source_modified }}
+      source_removed: ${{ steps.collect.outputs.source_removed }}
+      translation_total: ${{ steps.translations.outputs.total }}
+      translation_approved: ${{ steps.translations.outputs.approved }}
+      translation_untranslated: ${{ steps.translations.outputs.untranslated }}
+      translation_pending: ${{ steps.translations.outputs.pending }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-builder
+      - name: Download route states
+        uses: actions/download-artifact@v7
+        with:
+          pattern: patch-state-*
+          path: .work/state
+          merge-multiple: true
+      - name: Collect route revision IDs
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
           read_output() {
             local file="$1"
             local key="$2"
             sed -n "s/^${key}=//p" "$file" | tail -1
           }
-
           for slug in int_steam cn_steam int_android; do
-            file=".work/sync-output/$slug"
+            file=".work/state/${slug}.env"
             revision_id="$(read_output "$file" revision_id)"
             revision="$(read_output "$file" revision)"
-            game_version="$(read_output "$file" game_version)"
             test -n "$revision_id"
             test -n "$revision"
-            test -n "$game_version"
             echo "${slug}_revision_id=$revision_id" >> "$GITHUB_OUTPUT"
             echo "${slug}_revision=$revision" >> "$GITHUB_OUTPUT"
           done
-
-          canonical_game_version="$(read_output .work/sync-output/int_steam game_version)"
-          canonical_revision="$(read_output .work/sync-output/int_steam revision)"
-          source_added="$(read_output .work/sync-output/int_steam source_added)"
-          source_modified="$(read_output .work/sync-output/int_steam source_modified)"
-          source_removed="$(read_output .work/sync-output/int_steam source_removed)"
-          echo "game_version=$canonical_game_version" >> "$GITHUB_OUTPUT"
-          echo "revision=$canonical_revision" >> "$GITHUB_OUTPUT"
-          echo "source_added=$source_added" >> "$GITHUB_OUTPUT"
-          echo "source_modified=$source_modified" >> "$GITHUB_OUTPUT"
-          echo "source_removed=$source_removed" >> "$GITHUB_OUTPUT"
-
-      - name: Report canonical translation status
-        if: steps.plan.outputs.changed == 'true'
+          for key in source_added source_modified source_removed; do
+            value="$(read_output .work/state/int_steam.env "$key")"
+            echo "$key=${value:-0}" >> "$GITHUB_OUTPUT"
+          done
+      - name: Report production translation state
         id: translations
         run: >-
           astral-builder translation-status
-          --revision-id '${{ steps.sync.outputs.int_steam_revision_id }}'
+          --revision-id '${{ steps.collect.outputs.int_steam_revision_id }}'
           --github-output "$GITHUB_OUTPUT"
-
-      - name: Define release metadata
-        if: steps.plan.outputs.changed == 'true'
-        id: release
+      - name: Write state summary
         shell: bash
-        env:
-          MODE: ${{ steps.plan.outputs.mode }}
-          VERSION: ${{ steps.sync.outputs.game_version }}
-          REVISION: ${{ steps.sync.outputs.revision }}
         run: |
-          set -euo pipefail
-          base="v${VERSION}_r${REVISION}"
-          if [ "$MODE" = "pre" ]; then
-            tag=patch-pre
-            title="${base}-pre"
-            patch_version="${base}-pre"
-            channel=develop
-          else
-            tag="$base"
-            title="$base"
-            patch_version="$base"
-            channel=release
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "title=$title" >> "$GITHUB_OUTPUT"
-          echo "patch_version=$patch_version" >> "$GITHUB_OUTPUT"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-
           {
-            echo '## Patch build'
+            echo '## Patch state'
             echo
-            echo "- Mode: \`$MODE\`"
-            echo "- Release: \`$title\`"
-            echo "- Canonical source: \`INT_STEAM ${VERSION} r${REVISION}\`"
-            echo "- Source changes: \`+${{ steps.sync.outputs.source_added }} / ~${{ steps.sync.outputs.source_modified }} / -${{ steps.sync.outputs.source_removed }}\`"
+            echo "- Release: \`${{ needs.plan.outputs.title }}\`"
+            echo "- Highest route revision: \`r${{ needs.plan.outputs.max_revision }}\`"
+            echo "- INT_STEAM source changes: \`+${{ steps.collect.outputs.source_added }} / ~${{ steps.collect.outputs.source_modified }} / -${{ steps.collect.outputs.source_removed }}\`"
             echo "- Production translations: \`${{ steps.translations.outputs.approved }} / ${{ steps.translations.outputs.total }}\`"
-            echo "- No approved translation: \`${{ steps.translations.outputs.untranslated }}\` (original text retained)"
-            echo "- Pending translation proposals: \`${{ steps.translations.outputs.pending }}\` (not used by builds)"
+            echo "- Pending proposals: \`${{ steps.translations.outputs.pending }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  steam-inputs:
+    name: Fetch Steam legacy inputs
+    needs: plan
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    env:
+      STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+      DEPOTDOWNLOADER_LOGIN_TOKEN: ${{ secrets.STEAM_REFRESH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
       - uses: actions/setup-dotnet@v5
-        if: steps.plan.outputs.changed == 'true'
         with:
           dotnet-version: 9.0.x
-
-      - name: Fetch both Steam data.unity3d files
-        if: steps.plan.outputs.changed == 'true'
+      - name: Download both data.unity3d files
         shell: bash
         run: |
           set -euo pipefail
           test -n "$STEAM_USERNAME"
           test -n "$DEPOTDOWNLOADER_LOGIN_TOKEN"
-
           git clone --filter=blob:none https://github.com/SteamRE/DepotDownloader.git .work/DepotDownloader
           git -C .work/DepotDownloader checkout --detach c553ef4d60c00a4f5fd16c9fe017f569001589ff
           git -C .work/DepotDownloader apply "$GITHUB_WORKSPACE/tools/depotdownloader-ci.patch"
           test "$(git -C .work/DepotDownloader rev-parse HEAD)" = c553ef4d60c00a4f5fd16c9fe017f569001589ff
           dotnet build .work/DepotDownloader/DepotDownloader/DepotDownloader.csproj -c Release --nologo
-
           mkdir -p .work/steam-download
           cat > .work/legacy-filelist.txt <<'EOF'
           8vJXnINT/AstralParty_INT_Data/data.unity3d
@@ -211,132 +324,245 @@ jobs:
             -os windows \
             -filelist .work/legacy-filelist.txt \
             -dir .work/steam-download
-
           test -s .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d
           test -s .work/steam-download/8vJXn6CN/AstralParty_CN_Data/data.unity3d
+      - name: Upload INT_STEAM legacy input
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-steam-int_steam
+          path: .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Upload CN_STEAM legacy input
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-steam-cn_steam
+          path: .work/steam-download/8vJXn6CN/AstralParty_CN_Data/data.unity3d
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
-      - name: Build and validate all route patches
-        if: steps.plan.outputs.changed == 'true'
+  build-steam:
+    name: Build ${{ matrix.route }}
+    needs: [plan, state, steam-inputs]
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - route: INT_STEAM
+            slug: int_steam
+            config: routes/int_steam.yaml
+            legacy_artifact: patch-steam-int_steam
+            legacy_dir: .work/steam-download/8vJXnINT/AstralParty_INT_Data
+            legacy_path: .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d
+          - route: CN_STEAM
+            slug: cn_steam
+            config: routes/cn_steam.yaml
+            legacy_artifact: patch-steam-cn_steam
+            legacy_dir: .work/steam-download/8vJXn6CN/AstralParty_CN_Data
+            legacy_path: .work/steam-download/8vJXn6CN/AstralParty_CN_Data/data.unity3d
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-builder
+      - name: Download route Steam input
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.legacy_artifact }}
+          path: ${{ matrix.legacy_dir }}
+      - name: Build and validate
         id: build
         shell: bash
         env:
-          TAG: ${{ steps.release.outputs.tag }}
-          PATCH_VERSION: ${{ steps.release.outputs.patch_version }}
-          CHANNEL: ${{ steps.release.outputs.channel }}
-          INT_STEAM_REVISION_ID: ${{ steps.sync.outputs.int_steam_revision_id }}
-          CN_STEAM_REVISION_ID: ${{ steps.sync.outputs.cn_steam_revision_id }}
-          INT_ANDROID_REVISION_ID: ${{ steps.sync.outputs.int_android_revision_id }}
+          INT_STEAM_REVISION_ID: ${{ needs.state.outputs.int_steam_revision_id }}
+          CN_STEAM_REVISION_ID: ${{ needs.state.outputs.cn_steam_revision_id }}
         run: |
           set -euo pipefail
-          mkdir -p output/release .work/build-output
-          asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          case '${{ matrix.route }}' in
+            INT_STEAM) REVISION_ID="$INT_STEAM_REVISION_ID" ;;
+            CN_STEAM) REVISION_ID="$CN_STEAM_REVISION_ID" ;;
+            *) echo 'unsupported Steam route' >&2; exit 1 ;;
+          esac
+          root='output/patch/${{ matrix.slug }}'
+          output_file='.work/build-output.env'
+          asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
+          astral-builder build \
+            --revision-id "$REVISION_ID" \
+            --route-config '${{ matrix.config }}' \
+            --work-dir '.work/build-${{ matrix.slug }}' \
+            --output-dir "$root" \
+            --asset-base-url "$asset_base" \
+            --patch-version '${{ needs.plan.outputs.patch_version }}' \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --git-commit "$GITHUB_SHA" \
+            --channel '${{ needs.plan.outputs.channel }}' \
+            --legacy-data '${{ matrix.legacy_path }}' \
+            --github-output "$output_file"
+          astral-builder validate-build \
+            --manifest "$root/manifest.json" \
+            --assets-dir "$root/assets" \
+            --route-config '${{ matrix.config }}'
+          mkdir -p output/release
+          cp "$root/manifest.json" 'output/release/${{ matrix.route }}_manifest.json'
+          cp "$root"/assets/* output/release/
+          build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
+          test -n "$build_id"
+          printf '%s\n' "$build_id" > 'output/release/${{ matrix.route }}_build_id.txt'
+      - name: Upload route build
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-build-${{ matrix.slug }}
+          path: output/release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
-          build_route() {
-            local route="$1"
-            local slug="$2"
-            local revision_id="$3"
-            local config="$4"
-            local legacy_data="$5"
-            local root="output/patch/$slug"
-            local output_file=".work/build-output/$slug"
-            local args=(
-              --revision-id "$revision_id"
-              --route-config "$config"
-              --work-dir ".work/build-$slug"
-              --output-dir "$root"
-              --asset-base-url "$asset_base"
-              --patch-version "$PATCH_VERSION"
-              --github-run-id "$GITHUB_RUN_ID"
-              --git-commit "$GITHUB_SHA"
-              --channel "$CHANNEL"
-              --github-output "$output_file"
-            )
-            if [ -n "$legacy_data" ]; then
-              args+=(--legacy-data "$legacy_data")
-            fi
-            astral-builder build "${args[@]}"
-            astral-builder validate-build \
-              --manifest "$root/manifest.json" \
-              --assets-dir "$root/assets" \
-              --route-config "$config"
+  build-android:
+    name: Build INT_ANDROID
+    needs: [plan, state]
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-builder
+      - name: Build and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=output/patch/int_android
+          output_file=.work/build-output.env
+          asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
+          astral-builder build \
+            --revision-id '${{ needs.state.outputs.int_android_revision_id }}' \
+            --route-config routes/int_android.yaml \
+            --work-dir .work/build-int_android \
+            --output-dir "$root" \
+            --asset-base-url "$asset_base" \
+            --patch-version '${{ needs.plan.outputs.patch_version }}' \
+            --github-run-id "$GITHUB_RUN_ID" \
+            --git-commit "$GITHUB_SHA" \
+            --channel '${{ needs.plan.outputs.channel }}' \
+            --github-output "$output_file"
+          astral-builder validate-build \
+            --manifest "$root/manifest.json" \
+            --assets-dir "$root/assets" \
+            --route-config routes/int_android.yaml
+          mkdir -p output/release
+          cp "$root/manifest.json" output/release/INT_ANDROID_manifest.json
+          cp "$root"/assets/* output/release/
+          build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
+          test -n "$build_id"
+          printf '%s\n' "$build_id" > output/release/INT_ANDROID_build_id.txt
+      - name: Upload route build
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-build-int_android
+          path: output/release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
-            cp "$root/manifest.json" "output/release/${route}_manifest.json"
-            cp "$root"/assets/* output/release/
-            local build_id
-            build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
-            test -n "$build_id"
-            echo "${slug}_build_id=$build_id" >> "$GITHUB_OUTPUT"
-          }
-
-          build_route \
-            INT_STEAM int_steam "$INT_STEAM_REVISION_ID" routes/int_steam.yaml \
-            .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d
-          build_route \
-            CN_STEAM cn_steam "$CN_STEAM_REVISION_ID" routes/cn_steam.yaml \
-            .work/steam-download/8vJXn6CN/AstralParty_CN_Data/data.unity3d
-          build_route \
-            INT_ANDROID int_android "$INT_ANDROID_REVISION_ID" routes/int_android.yaml ''
-
-          count="$(find output/release -maxdepth 1 -type f | wc -l)"
-          test "$count" -ge 3
-          echo "asset_count=$count" >> "$GITHUB_OUTPUT"
-
-      - name: Publish one patch release for all routes
-        if: steps.plan.outputs.changed == 'true'
+  publish:
+    name: Publish GitHub Release
+    needs: [plan, state, build-steam, build-android]
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download all route builds
+        uses: actions/download-artifact@v7
+        with:
+          pattern: patch-build-*
+          path: output/release
+          merge-multiple: true
+      - name: Verify complete release set
+        run: |
+          set -euo pipefail
+          for route in INT_STEAM CN_STEAM INT_ANDROID; do
+            test -s "output/release/${route}_manifest.json"
+            test -s "output/release/${route}_build_id.txt"
+          done
+      - name: Write release notes
         shell: bash
         env:
-          TAG: ${{ steps.release.outputs.tag }}
-          TITLE: ${{ steps.release.outputs.title }}
-          MODE: ${{ steps.plan.outputs.mode }}
-          GAME_VERSION_ACTUAL: ${{ steps.sync.outputs.game_version }}
-          INT_STEAM_REVISION: ${{ steps.sync.outputs.int_steam_revision }}
-          CN_STEAM_REVISION: ${{ steps.sync.outputs.cn_steam_revision }}
-          INT_ANDROID_REVISION: ${{ steps.sync.outputs.int_android_revision }}
+          UPDATED_ROUTES: ${{ needs.plan.outputs.updated_routes_csv }}
         run: |
           set -euo pipefail
-          notes_file=.work/patch-release-notes.md
           mkdir -p .work
-          cat > "$notes_file" <<EOF
-          ## Routes
-
-          - INT_STEAM r${INT_STEAM_REVISION}
-          - CN_STEAM r${CN_STEAM_REVISION}
-          - INT_ANDROID r${INT_ANDROID_REVISION}
-          EOF
-
-          # Keep exactly one Release per pre/current stable name. Replacement happens only
-          # after all three route builds have validated successfully.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release delete "$TAG" --yes --cleanup-tag
-          elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            git push origin ":refs/tags/$TAG"
+          {
+            echo '## Updated routes'
+            echo
+            if [ -z "$UPDATED_ROUTES" ]; then
+              echo '- None'
+            else
+              IFS=',' read -ra routes <<< "$UPDATED_ROUTES"
+              for route in "${routes[@]}"; do
+                echo "- $route"
+              done
+            fi
+          } > .work/patch-release-notes.md
+      - name: Publish release
+        shell: bash
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          TITLE: ${{ needs.plan.outputs.title }}
+          MODE: ${{ needs.plan.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "pre" ]; then
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release delete "$TAG" --yes --cleanup-tag
+            elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              git push origin ":refs/tags/$TAG"
+            fi
+          else
+            if gh release view "$TAG" >/dev/null 2>&1 || \
+               git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "immutable release tag already exists: $TAG" >&2
+              exit 1
+            fi
           fi
 
           cleanup() {
             gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
           }
           trap cleanup ERR
-
           args=(
             release create "$TAG"
             --draft
             --target "$GITHUB_SHA"
             --title "$TITLE"
-            --notes-file "$notes_file"
+            --notes-file .work/patch-release-notes.md
           )
           if [ "$MODE" = "pre" ]; then
             args+=(--prerelease)
           fi
           gh "${args[@]}"
+          find output/release -maxdepth 1 -type f -name '*_build_id.txt' -delete
           gh release upload "$TAG" output/release/*
           gh release edit "$TAG" --draft=false
           trap - ERR
 
+  index:
+    name: Update distribution index
+    needs: [plan, publish]
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-builder
+      - name: Download route builds
+        uses: actions/download-artifact@v7
+        with:
+          pattern: patch-build-*
+          path: output/release
+          merge-multiple: true
       - name: Update shared patch release index
-        if: steps.plan.outputs.changed == 'true'
         shell: bash
         env:
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ needs.plan.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p .work/distribution
@@ -350,39 +576,41 @@ jobs:
                 --dir .work/distribution || true
             fi
           fi
-
           for route in INT_STEAM CN_STEAM INT_ANDROID; do
-            manifest="output/release/${route}_manifest.json"
             astral-builder update-index \
-              --manifest "$manifest" \
+              --manifest "output/release/${route}_manifest.json" \
               --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${route}_manifest.json" \
               --index .work/distribution/release-index.json
           done
-
           python tools/distribution/publish_file.py \
             --source .work/distribution/release-index.json \
             --path release-index.json \
-            --message "chore: update patch distribution index"
-
-          # Compatibility bridge for already-distributed clients with the old hardcoded URL.
-          # It is never created anew, so deleting the legacy index release is an explicit opt-out.
+            --message 'chore: update patch distribution index'
           if gh release view patch-index >/dev/null 2>&1; then
-            gh release upload patch-index .work/distribution/release-index.json --clobber ||               echo 'warning: failed to mirror legacy patch-index release' >&2
+            gh release upload patch-index .work/distribution/release-index.json --clobber || \
+              echo 'warning: failed to mirror legacy patch-index release' >&2
           fi
 
-      - name: Mark all route builds released
-        if: steps.plan.outputs.changed == 'true'
-        run: |
-          astral-builder mark-released --build-id '${{ steps.build.outputs.int_steam_build_id }}'
-          astral-builder mark-released --build-id '${{ steps.build.outputs.cn_steam_build_id }}'
-          astral-builder mark-released --build-id '${{ steps.build.outputs.int_android_build_id }}'
-
-      - name: Upload build artifact
-        if: steps.plan.outputs.changed == 'true'
-        uses: actions/upload-artifact@v7
+  finalize:
+    name: Finalize build records
+    needs: [plan, index]
+    if: needs.plan.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-builder
+      - name: Download route build metadata
+        uses: actions/download-artifact@v7
         with:
-          name: ${{ steps.release.outputs.title }}
-          path: output/release/
-          if-no-files-found: error
-          compression-level: 6
-          retention-days: 14
+          pattern: patch-build-*
+          path: output/release
+          merge-multiple: true
+      - name: Mark all route builds released
+        shell: bash
+        run: |
+          set -euo pipefail
+          for route in INT_STEAM CN_STEAM INT_ANDROID; do
+            build_id="$(tr -d '\r\n' < "output/release/${route}_build_id.txt")"
+            test -n "$build_id"
+            astral-builder mark-released --build-id "$build_id"
+          done

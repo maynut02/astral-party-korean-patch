@@ -120,6 +120,9 @@ def _run_check(args: argparse.Namespace) -> int:
         json.dumps(
             {
                 "changed": result.changed,
+                "syncRequired": result.sync_required,
+                "releaseChanged": result.release_changed,
+                "revisionId": result.revision_id,
                 "route": result.source.route,
                 "gameVersion": result.source.version,
                 "revision": result.source.revision,

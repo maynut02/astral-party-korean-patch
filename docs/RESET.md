@@ -200,7 +200,7 @@ Patch
 → mode = release
 ```
 
-최종 Release:
+최종 Release 이름은 세 route의 현재 revision 중 가장 큰 값을 사용합니다. 세 route가 모두 r116이면:
 
 ```text
 v3.2.0_r116
@@ -209,6 +209,8 @@ v3.2.0_r116
 ├─ INT_ANDROID_manifest.json
 └─ route별 payload
 ```
+
+예를 들어 Android만 r117이면 `v3.2.0_r117`이 됩니다. 같은 최고 revision을 다시 정식 배포하면 기존 Release를 교체하지 않고 `_p2`, `_p3`가 붙습니다.
 
 ## 9. APK와 AutoPatcher 다시 생성
 

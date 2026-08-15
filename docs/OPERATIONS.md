@@ -178,36 +178,51 @@ astral-builder translation-status \
 17 */6 * * *
 ```
 
-즉 6시간마다 `INT_STEAM`만 update check합니다. route별 DB check workflow는 더 이상 없습니다.
+즉 6시간마다 세 route의 revision/catalog hash를 **병렬 lightweight check**합니다. 번역 원문은 여전히 `INT_STEAM`만 canonical source이지만, CN/Android 단독 업데이트도 자동으로 탐지합니다.
 
-새 canonical revision이 있거나 이전 자동 배포가 완료되지 않은 경우에만 다음 작업을 실행합니다.
+하나 이상의 route가 새 published revision을 필요로 할 때만 다음 pipeline이 실행됩니다.
 
 ```text
-INT_STEAM update check
-  -> migration
-  -> INT_STEAM canonical source sync
-  -> CN_STEAM target compatibility sync
-  -> INT_ANDROID target compatibility sync
-  -> translation status report
-  -> Steam data.unity3d 2개를 한 번의 DepotDownloader 실행으로 취득
-  -> INT_STEAM / CN_STEAM / INT_ANDROID build
-  -> 세 route 모두 independent validation
-  -> 하나의 prerelease 생성
+DB migration
+  -> INT_STEAM / CN_STEAM / INT_ANDROID check (parallel)
+  -> 실행 계획 + 최고 revision 계산
+  -> 필요한 route만 resource sync (parallel)
+  -> Steam data.unity3d 2개 취득 (sync와 parallel)
+  -> translation status
+  -> INT_STEAM / CN_STEAM build+validate (parallel)
+  -> INT_ANDROID build+validate (Steam input을 기다리지 않고 독립 실행)
+  -> 세 결과가 모두 성공하면 하나의 prerelease 생성
   -> release-index.json 갱신
   -> 세 build를 released 상태로 기록
 ```
 
+Actions UI에서도 역할별 job으로 분리됩니다.
+
+| Job | 역할 |
+| --- | --- |
+| `Database migration` | schema 준비 |
+| `Check <route>` | 세 route revision/catalog 병렬 확인 |
+| `Plan patch run` | 실행 여부, 변경 route, 최고 revision, Release tag 결정 |
+| `Sync <route>` | 실제 sync가 필요한 route만 병렬 다운로드/DB 반영 |
+| `Collect route state` | 최종 revision ID와 번역 상태 수집 |
+| `Fetch Steam legacy inputs` | Steam data.unity3d 두 개 취득, sync와 병렬 진행 |
+| `Build INT_STEAM/CN_STEAM` | Steam route 병렬 build + validate |
+| `Build INT_ANDROID` | Android build + validate, Steam input과 독립 |
+| `Publish GitHub Release` | 세 route 결과를 단일 Release로 게시 |
+| `Update distribution index` | `release-index.json` 갱신 |
+| `Finalize build records` | 세 DB build를 `released`로 완료 처리 |
+
 자동 Pre는 `develop` distribution channel을 사용하고 일반 AutoPatcher/Android runtime의 기본 `release` channel을 덮어쓰지 않습니다.
 
-Release 표시 이름:
+Release 표시 이름은 세 route의 **현재 revision 중 가장 큰 값**을 사용합니다. 예를 들어 `INT_STEAM r116 / CN_STEAM r116 / INT_ANDROID r117`이면 다음과 같습니다.
 
 ```text
-v3.2.0_r116-pre
+v3.2.0_r117-pre
 ```
 
 Pre용 내부 tag는 `patch-pre` 하나를 rolling 방식으로 사용하므로 게임 업데이트마다 오래된 pre Release가 누적되지 않습니다. 새 빌드는 세 route 검증이 모두 끝난 뒤 기존 `patch-pre`를 교체합니다.
 
-현재 revision에 이미 성공한 `develop` 또는 `release` build가 하나라도 있으면 자동 check는 같은 revision을 반복 빌드하지 않습니다.
+세 route는 각각 lightweight check를 병렬 수행합니다. 하나라도 현재 published revision과 달라지면 자동 pre가 실행됩니다. 실제 bundle sync는 `sync_required=true`인 route만 수행하고, 이미 sync까지 완료된 retry에서는 기존 DB revision state를 재사용합니다.
 
 ## 7. 수동 정식 Patch Release
 
@@ -223,13 +238,21 @@ INT_ANDROID
 
 세 route 중 하나라도 sync/build/validation에 실패하면 Release를 공개하지 않습니다. 모든 결과가 검증된 뒤 하나의 Release를 생성하고 세 manifest와 route-prefixed payload를 함께 올립니다.
 
-정식 Release 표시 이름과 tag:
+정식 Release 이름의 revision도 세 route의 현재 revision 중 가장 큰 값을 사용합니다. 예를 들어 `116 / 116 / 117`이면:
 
 ```text
-v3.2.0_r116
+v3.2.0_r117
 ```
 
-같은 `gameVersion + canonical INT_STEAM revision`을 다시 수동 배포하면 표시 이름과 tag는 그대로 유지하고 기존 Release를 교체합니다. 교체는 세 route의 새 빌드/검증이 모두 끝난 뒤에만 시작하므로 번역 수정만 있는 같은 게임 revision에서도 `v3.2.0_r116` 하나만 유지할 수 있습니다.
+정식 Release는 **immutable**입니다. 같은 최고 revision에서 번역 수정 등으로 다시 배포할 경우 기존 Release를 삭제하지 않고 patch revision을 증가시킵니다.
+
+```text
+v3.2.0_r117
+v3.2.0_r117_p2
+v3.2.0_r117_p3
+```
+
+`release-index.json`은 같은 route/revision/channel에 대해 가장 최근 정식 build를 가리키므로 이전 GitHub Release는 audit/rollback 용도로 그대로 남습니다. Release 설명의 `Updated routes`에는 직전 정식판과 비교해 revision이 바뀐 route만 기록합니다. 번역만 다시 배포한 경우에는 `None`으로 표시합니다.
 
 ## 8. Patch manifest와 release index
 
@@ -404,7 +427,7 @@ Patcher 애플리케이션은 Neon credential을 받지 않으며 DB에 직접 �
 3. `Patch`의 자동 schedule이 활성화되어 있는지 확인.
 4. 필요하면 `Patch`를 `mode=pre`로 수동 실행해 전체 세 route 호환판을 검증.
 5. 번역 정식 배포 시 `Patch`를 `mode=release`로 한 번만 실행.
-6. Release 이름이 `v<game>_r<INT_STEAM revision>`이고 세 route manifest가 모두 존재하는지 확인.
+6. Release 이름이 `v<game>_r<세 route 중 최고 revision>` 형식이고 세 route manifest가 모두 존재하는지 확인. 같은 최고 revision 재배포라면 `_pN` suffix가 증가했는지 확인.
 7. `distribution/release-index.json`에 세 route entry가 갱신됐는지 확인.
 8. Android APK를 새로 배포해야 할 때 `INT_ANDROID APK`를 수동 실행하고 `INT_ANDROID v<game>` Release와 `AstralParty_INT_ANDROID.apk`를 확인.
 9. AutoPatcher 버전을 배포할 때 `AutoPatcher`를 수동 실행하고 `AutoPatcher v<version>` Release를 확인.

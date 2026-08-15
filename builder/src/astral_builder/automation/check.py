@@ -15,6 +15,9 @@ class RevisionCheck:
     source: GameSource
     catalog_hash: str
     changed: bool
+    sync_required: bool
+    release_changed: bool
+    revision_id: str | None = None
 
 
 def check_revision(
@@ -32,6 +35,7 @@ def check_revision(
         cur.execute(
             """
             SELECT
+                gr.id,
                 gr.catalog_build_hash,
                 gr.processed_at,
                 EXISTS (
@@ -40,7 +44,14 @@ def check_revision(
                     WHERE b.revision_id = gr.id
                       AND b.channel IN ('develop', 'release')
                       AND b.status = 'released'
-                ) AS has_published_build
+                ) AS has_published_build,
+                EXISTS (
+                    SELECT 1
+                    FROM builds AS b
+                    WHERE b.revision_id = gr.id
+                      AND b.channel = 'release'
+                      AND b.status = 'released'
+                ) AS has_release_build
             FROM game_revisions AS gr
             WHERE gr.route = %s AND gr.game_version = %s AND gr.revision = %s
             """,
@@ -49,25 +60,38 @@ def check_revision(
         row = cur.fetchone()
 
     if row is None:
-        return RevisionCheck(source=source, catalog_hash=catalog_hash, changed=True)
+        return RevisionCheck(
+            source=source,
+            catalog_hash=catalog_hash,
+            changed=True,
+            sync_required=True,
+            release_changed=True,
+        )
 
-    persisted_hash, processed_at, has_published_build = row
+    revision_id, persisted_hash, processed_at, has_published_build, has_release_build = row
     if persisted_hash != catalog_hash:
         raise RevisionConflictError(
             "remote catalog hash changed for an existing immutable revision: "
             f"{source.route}/{source.version}/{source.revision} "
             f"db={persisted_hash!r} remote={catalog_hash!r}"
         )
+    sync_required = processed_at is None
     return RevisionCheck(
         source=source,
         catalog_hash=catalog_hash,
-        changed=processed_at is None or not has_published_build,
+        changed=sync_required or not has_published_build,
+        sync_required=sync_required,
+        release_changed=not has_release_build,
+        revision_id=str(revision_id),
     )
 
 
 def write_github_output(check: RevisionCheck, destination: str | Path | TextIO) -> None:
     lines = (
         f"changed={'true' if check.changed else 'false'}",
+        f"sync_required={'true' if check.sync_required else 'false'}",
+        f"release_changed={'true' if check.release_changed else 'false'}",
+        f"revision_id={check.revision_id or ''}",
         f"route={check.source.route}",
         f"game_version={check.source.version}",
         f"revision={check.source.revision}",

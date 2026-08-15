@@ -187,19 +187,19 @@ Actions 화면에는 사용자 관점의 네 workflow만 노출합니다.
 
 ```text
 scheduled pre
-  -> INT_STEAM만 remote revision check
-  -> INT_STEAM canonical source sync
-  -> CN_STEAM / INT_ANDROID target compatibility sync
-  -> production/pending translation status report
-  -> Steam legacy inputs 한 번에 취득
-  -> 세 route build + validation
-  -> 하나의 v<game>_r<canonical-revision>-pre prerelease
+  -> 세 route remote revision/catalog lightweight check 병렬 실행
+  -> 하나라도 변경되면 실제 sync가 필요한 route만 병렬 sync
+  -> INT_STEAM만 canonical source change 적용
+  -> Steam legacy inputs는 sync와 병렬 취득
+  -> 세 route build + validation 병렬 실행
+  -> 하나의 v<game>_r<highest-route-revision>-pre rolling prerelease
 
 manual release
-  -> 최신 세 route target sync
-  -> 같은 INT_STEAM canonical translation snapshot 사용
-  -> 세 route build + validation
-  -> 하나의 v<game>_r<canonical-revision> release (같은 revision 재배포 시 검증 후 교체)
+  -> 세 route lightweight check 후 필요한 route만 sync
+  -> 같은 INT_STEAM canonical production translation snapshot 사용
+  -> 세 route build + validation 병렬 실행
+  -> v<game>_r<highest-route-revision> immutable release
+  -> 같은 최고 revision 재배포 시 _p2, _p3 ... patch revision 증가
 ```
 
 번역 승인 자체는 release를 트리거하지 않습니다. `translations` production row가 있으면 그 값을 사용하고 없으면 현재 원문을 유지합니다. pending/rejected/superseded proposal은 빌드 입력에 포함되지 않습니다.
@@ -213,7 +213,7 @@ Release 표시 이름은 다음 규칙을 사용합니다.
 ```text
 AutoPatcher v<patcher-version>
 INT_ANDROID v<game-version>
-v<game-version>_r<canonical-revision>
+v<game-version>_r<highest-route-revision>
 ```
 
 
