@@ -6,11 +6,11 @@ Astral Party 비공식 한국어 패치 프로젝트입니다. 게임 업데이�
 
 | Route | 플랫폼 | 설치 방식 |
 | --- | --- | --- |
-| `INT_STEAM` | Windows / Steam | AstralAutoPatcher |
-| `CN_STEAM` | Windows / Steam | AstralAutoPatcher |
-| `INT_ANDROID` | Android | AstralAutoPatcher + ADB |
+| `INT_STEAM` | Windows(Steam) | AstralAutoPatcher |
+| `CN_STEAM` | Windows(Steam) | AstralAutoPatcher |
+| `INT_ANDROID` | Android(JP) | AstralAutoPatcher(ADB) |
 
-릴리즈 파일은 GitHub의 [Releases](https://github.com/maynut02/astral-party-korean-patch/releases)에서 배포합니다. 일반 사용자는 저장소를 직접 빌드할 필요가 없습니다.
+릴리즈 파일은 GitHub의 [Releases](https://github.com/maynut02/astral-party-korean-patch/releases)에서 배포합니다.
 
 ### Android
 
@@ -45,8 +45,5 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 
 ## 라이선스
 
-직접 작성한 소스 코드는 [MIT License](LICENSE)로 배포합니다.
-
-`resources/`의 폰트·아틀라스 등 제3자 자산과 Astral Party 자체의 게임 데이터·상표·저작물은 MIT License 적용 대상이 아니며 각 권리자의 조건을 따릅니다. 자세한 내용은 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인하세요.
-
-이 프로젝트는 Astral Party의 개발사·배급사와 공식적으로 제휴된 프로젝트가 아닙니다.
+[MIT License](LICENSE)
+Astral Party의 상표 및 모든 게임 리소스는 Shanghai Electric Cicada의 소유입니다.
