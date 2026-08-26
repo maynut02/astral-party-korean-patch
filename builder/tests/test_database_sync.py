@@ -122,10 +122,12 @@ def test_source_stage_bulk_write_count_is_constant_for_large_initial_import() ->
 
     assert len(rows) == 1000
     assert len(cursor.copied) == 1000
-    assert len(cursor.executed) == 6
+    assert len(cursor.executed) == 7
     assert any("COPY" not in statement for statement in cursor.executed)
     assert any("ON CONFLICT (unit_id, source_fingerprint) DO NOTHING" in q for q in cursor.executed)
     assert any("JOIN source_versions AS versions" in q for q in cursor.executed)
+    assert any("created_by" in q and "'bot'" in q for q in cursor.executed if "INSERT INTO source_changes" in q)
+    assert any("UPDATE translation_changes" in q and "status = 'superseded'" in q for q in cursor.executed)
     assert progress[0] == "database: stage 1000 added/modified source row(s)"
 
 
@@ -158,6 +160,7 @@ def test_removed_sources_use_one_copy_and_fixed_number_of_statements() -> None:
     )
 
     assert len(cursor.copied) == 500
-    assert len(cursor.executed) == 4
-    assert any("INSERT INTO source_changes" in q for q in cursor.executed)
+    assert len(cursor.executed) == 5
+    assert any("INSERT INTO source_changes" in q and "'bot'" in q for q in cursor.executed)
+    assert any("UPDATE translation_changes" in q and "status = 'superseded'" in q for q in cursor.executed)
     assert any("UPDATE translation_units" in q for q in cursor.executed)

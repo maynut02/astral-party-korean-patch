@@ -13,6 +13,8 @@ def test_database_uses_one_fresh_baseline_migration() -> None:
 
 def test_schema_separates_source_history_pending_changes_and_production_translations() -> None:
     sql = (MIGRATIONS / "0001_initial.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE app_users" in sql
+    assert "VALUES ('bot', 'bot@system.local', 'Bot', 'bot')" in sql
     assert "CREATE TABLE source_versions" in sql
     assert "CREATE TABLE source_changes" in sql
     assert "PRIMARY KEY (revision_id, unit_id)" in sql
@@ -25,6 +27,11 @@ def test_schema_separates_source_history_pending_changes_and_production_translat
     assert " status " not in translations_sql
     assert "applied_change_id" in translations_sql
     assert "CREATE TRIGGER translations_require_approved_change" in sql
+    assert "CREATE TABLE editor_dictionaries" in sql
+    assert "CREATE TABLE editor_dictionary_entries" in sql
+    assert "CREATE TABLE request_rate_limit_counters" in sql
     assert "CREATE VIEW translation_workbench" in sql
+    assert "tc.status = 'pending'" in sql
+    assert "tc.source_version_id = src.source_version_id" in sql
     assert "CREATE VIEW source_revision_change_summary" in sql
     assert "CREATE VIEW translation_change_group_summary" in sql

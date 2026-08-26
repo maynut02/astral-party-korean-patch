@@ -272,11 +272,11 @@ def _bulk_persist_source_stage(
         """
         INSERT INTO source_changes(
             revision_id, unit_id, change_type,
-            old_source_version_id, new_source_version_id
+            old_source_version_id, new_source_version_id, created_by
         )
         SELECT
             %s, stage.unit_id, stage.change_type,
-            stage.old_source_version_id, versions.id
+            stage.old_source_version_id, versions.id, 'bot'
         FROM source_sync_stage AS stage
         JOIN source_versions AS versions
           ON versions.unit_id = stage.unit_id
@@ -289,6 +289,23 @@ def _bulk_persist_source_stage(
             "bulk source change insert count mismatch: "
             f"expected={len(rows)} actual={cur.rowcount}"
         )
+
+    progress("database: supersede pending translations for replaced source version(s)")
+    cur.execute(
+        """
+        UPDATE translation_changes AS changes
+        SET
+            status = 'superseded',
+            reviewed_by = 'bot',
+            reviewed_at = now()
+        FROM source_sync_stage AS stage
+        WHERE changes.unit_id = stage.unit_id
+          AND changes.locale = 'ko'
+          AND changes.status = 'pending'
+          AND stage.old_source_version_id IS NOT NULL
+          AND changes.source_version_id = stage.old_source_version_id
+        """
+    )
 
     progress(f"database: update {len(rows)} current source pointer(s)")
     cur.execute(
@@ -339,9 +356,9 @@ def _bulk_persist_removed_sources(
         """
         INSERT INTO source_changes(
             revision_id, unit_id, change_type,
-            old_source_version_id, new_source_version_id
+            old_source_version_id, new_source_version_id, created_by
         )
-        SELECT %s, unit_id, 'removed', old_source_version_id, NULL
+        SELECT %s, unit_id, 'removed', old_source_version_id, NULL, 'bot'
         FROM source_remove_stage
         """,
         (revision_id,),
@@ -351,6 +368,22 @@ def _bulk_persist_removed_sources(
             "bulk removed source change count mismatch: "
             f"expected={len(removed)} actual={cur.rowcount}"
         )
+
+    progress("database: supersede pending translations for removed source version(s)")
+    cur.execute(
+        """
+        UPDATE translation_changes AS changes
+        SET
+            status = 'superseded',
+            reviewed_by = 'bot',
+            reviewed_at = now()
+        FROM source_remove_stage AS removed
+        WHERE changes.unit_id = removed.unit_id
+          AND changes.locale = 'ko'
+          AND changes.status = 'pending'
+          AND changes.source_version_id = removed.old_source_version_id
+        """
+    )
 
     progress(f"database: clear {len(removed)} removed source pointer(s)")
     cur.execute(

@@ -16,6 +16,27 @@ CREATE TABLE game_revisions (
 CREATE INDEX game_revisions_route_detected_idx
     ON game_revisions (route, detected_at DESC);
 
+-- Application identities are part of the shared database contract. The patch pipeline
+-- always records automated work as the reserved Bot account, while real users are
+-- provisioned by the web application on first login.
+CREATE TABLE app_users (
+    google_sub text PRIMARY KEY,
+    email text NOT NULL,
+    handle text,
+    "role" text NOT NULL DEFAULT 'user'
+        CHECK ("role" IN ('admin', 'verified', 'user', 'bot')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    last_login_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX app_users_handle_unique_idx
+    ON app_users (lower(handle))
+    WHERE handle IS NOT NULL;
+
+INSERT INTO app_users (google_sub, email, handle, "role")
+VALUES ('bot', 'bot@system.local', 'Bot', 'bot');
+
 CREATE TABLE asset_locations (
     id uuid PRIMARY KEY,
     revision_id uuid NOT NULL REFERENCES game_revisions(id) ON DELETE CASCADE,
@@ -69,6 +90,8 @@ CREATE INDEX source_versions_unit_created_idx
     ON source_versions (unit_id, created_at DESC);
 CREATE INDEX source_versions_fingerprint_idx
     ON source_versions (source_fingerprint);
+CREATE INDEX translation_units_namespace_key_idx
+    ON translation_units (namespace, unit_key, id);
 
 -- One INT_STEAM game revision is the source-change group. Only added/modified/removed
 -- units get rows here; unchanged source text is not duplicated per revision.
@@ -80,6 +103,7 @@ CREATE TABLE source_changes (
     new_source_version_id uuid REFERENCES source_versions(id) ON DELETE RESTRICT,
     status text NOT NULL DEFAULT 'applied' CHECK (status = 'applied'),
     applied_at timestamptz NOT NULL DEFAULT now(),
+    created_by text NOT NULL DEFAULT 'bot' REFERENCES app_users(google_sub) ON DELETE RESTRICT,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (revision_id, unit_id),
     CONSTRAINT source_changes_shape_check CHECK (
@@ -93,13 +117,15 @@ CREATE TABLE source_changes (
 );
 
 CREATE INDEX source_changes_unit_revision_idx
-    ON source_changes (unit_id, revision_id);
+    ON source_changes (unit_id, revision_id, change_type);
+CREATE INDEX source_changes_revision_unit_idx
+    ON source_changes (revision_id, unit_id, created_at DESC);
 
 CREATE TABLE translation_change_groups (
     id uuid PRIMARY KEY,
     title text NOT NULL CHECK (btrim(title) <> ''),
     description text,
-    created_by text,
+    created_by text NOT NULL DEFAULT 'bot' REFERENCES app_users(google_sub) ON DELETE RESTRICT,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -115,9 +141,9 @@ CREATE TABLE translation_changes (
     proposed_text text NOT NULL CHECK (btrim(proposed_text) <> ''),
     status text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'approved', 'rejected', 'superseded')),
-    created_by text,
+    created_by text NOT NULL DEFAULT 'bot' REFERENCES app_users(google_sub) ON DELETE RESTRICT,
     created_at timestamptz NOT NULL DEFAULT now(),
-    reviewed_by text,
+    reviewed_by text REFERENCES app_users(google_sub) ON DELETE RESTRICT,
     reviewed_at timestamptz,
     CONSTRAINT translation_changes_review_check CHECK (
         (status = 'pending' AND reviewed_by IS NULL AND reviewed_at IS NULL)
@@ -129,8 +155,12 @@ CREATE TABLE translation_changes (
 
 CREATE INDEX translation_changes_unit_locale_created_idx
     ON translation_changes (unit_id, locale, created_at DESC);
+CREATE INDEX translation_changes_latest_unit_idx
+    ON translation_changes (unit_id, locale, status, source_version_id, created_at DESC, id DESC);
 CREATE INDEX translation_changes_status_created_idx
     ON translation_changes (status, created_at DESC);
+CREATE INDEX translation_changes_log_idx
+    ON translation_changes (locale, status, created_at DESC, id DESC);
 CREATE INDEX translation_changes_group_idx
     ON translation_changes (group_id, created_at);
 
@@ -175,7 +205,7 @@ CREATE TABLE translations (
     text text NOT NULL CHECK (btrim(text) <> ''),
     approved_source_version_id uuid NOT NULL REFERENCES source_versions(id) ON DELETE RESTRICT,
     applied_change_id uuid NOT NULL UNIQUE REFERENCES translation_changes(id) ON DELETE RESTRICT,
-    approved_by text,
+    approved_by text NOT NULL REFERENCES app_users(google_sub) ON DELETE RESTRICT,
     approved_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT translations_unit_locale_key UNIQUE (unit_id, locale)
@@ -220,6 +250,53 @@ CREATE TRIGGER translations_require_approved_change
 BEFORE INSERT OR UPDATE ON translations
 FOR EACH ROW
 EXECUTE FUNCTION enforce_approved_translation_change();
+
+-- Web editor-owned data is migrated here as part of the same schema contract. Runtime
+-- application requests never create or alter database objects.
+CREATE TABLE editor_dictionaries (
+    id uuid PRIMARY KEY,
+    owner_id text NOT NULL REFERENCES app_users(google_sub) ON DELETE CASCADE,
+    name text NOT NULL CHECK (btrim(name) <> ''),
+    description text NOT NULL DEFAULT '',
+    visibility text NOT NULL DEFAULT 'private'
+        CHECK (visibility IN ('public', 'private')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX editor_dictionaries_visibility_idx
+    ON editor_dictionaries (visibility, updated_at DESC);
+CREATE INDEX editor_dictionaries_owner_idx
+    ON editor_dictionaries (owner_id, updated_at DESC);
+
+CREATE TABLE editor_dictionary_entries (
+    id uuid PRIMARY KEY,
+    dictionary_id uuid NOT NULL REFERENCES editor_dictionaries(id) ON DELETE CASCADE,
+    source_text text NOT NULL CHECK (btrim(source_text) <> ''),
+    translation text NOT NULL CHECK (btrim(translation) <> ''),
+    note text NOT NULL DEFAULT '',
+    created_by text NOT NULL REFERENCES app_users(google_sub) ON DELETE RESTRICT,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX editor_dictionary_entries_dictionary_idx
+    ON editor_dictionary_entries (dictionary_id, updated_at DESC);
+CREATE INDEX editor_dictionary_entries_search_idx
+    ON editor_dictionary_entries (dictionary_id, source_text, translation);
+CREATE INDEX editor_dictionary_entries_sort_idx
+    ON editor_dictionary_entries (dictionary_id, source_text, id);
+
+CREATE TABLE request_rate_limit_counters (
+    bucket_key text NOT NULL,
+    window_key text NOT NULL,
+    count integer NOT NULL DEFAULT 0 CHECK (count >= 0),
+    expires_at timestamptz NOT NULL,
+    PRIMARY KEY (bucket_key, window_key)
+);
+
+CREATE INDEX request_rate_limit_counters_expires_at_idx
+    ON request_rate_limit_counters (expires_at);
 
 CREATE TABLE builds (
     id uuid PRIMARY KEY,
@@ -296,7 +373,10 @@ LEFT JOIN translations tr
 LEFT JOIN LATERAL (
     SELECT tc.id, tc.status, tc.source_version_id, tc.proposed_text, tc.created_by, tc.created_at
     FROM translation_changes tc
-    WHERE tc.unit_id = src.unit_id AND tc.locale = 'ko'
+    WHERE tc.unit_id = src.unit_id
+      AND tc.locale = 'ko'
+      AND tc.status = 'pending'
+      AND tc.source_version_id = src.source_version_id
     ORDER BY tc.created_at DESC, tc.id DESC
     LIMIT 1
 ) latest_change ON TRUE;
