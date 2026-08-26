@@ -24,8 +24,22 @@ def test_database_url_prefers_explicit_then_direct_environment(monkeypatch) -> N
     assert MODULE.resolve_database_url() == "postgresql://direct"
 
 
-def test_database_url_requires_configuration(monkeypatch) -> None:
+def test_database_url_requires_configuration(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(MODULE, "PROJECT_ENV", tmp_path / ".env")
     for name in ("DATABASE_URL", "NEON_DATABASE_URL_DIRECT", "DATABASE_URL_DIRECT"):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(SystemExit, match="DATABASE_URL_DIRECT"):
         MODULE.resolve_database_url()
+
+
+def test_database_url_loads_repository_env(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "NEON_DATABASE_URL_DIRECT=postgresql://from-project-env\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(MODULE, "PROJECT_ENV", env_path)
+    for name in ("DATABASE_URL", "NEON_DATABASE_URL_DIRECT", "DATABASE_URL_DIRECT"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert MODULE.resolve_database_url() == "postgresql://from-project-env"
