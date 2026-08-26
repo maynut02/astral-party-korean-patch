@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
+
+from local_env import resolve_database_url as resolve_project_database_url
 
 try:
     import psycopg
@@ -20,16 +21,6 @@ def migration_files() -> tuple[Path, ...]:
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def resolve_database_url(explicit: str = "") -> str:
-    if explicit.strip():
-        return explicit.strip()
-    for name in ("DATABASE_URL_DIRECT", "NEON_DATABASE_URL_DIRECT", "DATABASE_URL"):
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
-    raise SystemExit("DATABASE_URL_DIRECT or NEON_DATABASE_URL_DIRECT is required")
 
 
 def migrate(database_url: str) -> int:
@@ -86,7 +77,7 @@ def main() -> int:
     )
     parser.add_argument("--database-url", default="")
     args = parser.parse_args()
-    count = migrate(resolve_database_url(args.database_url))
+    count = migrate(resolve_project_database_url(direct=True, explicit=args.database_url))
     print(f"applied migrations: {count}")
     return 0
 

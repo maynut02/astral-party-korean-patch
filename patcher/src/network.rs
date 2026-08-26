@@ -350,8 +350,6 @@ fn target_dir(target: InstallTarget) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write as _;
-
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use tempfile::tempdir;
