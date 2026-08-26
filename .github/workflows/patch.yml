@@ -28,18 +28,8 @@ env:
   RELEASE_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
 
 jobs:
-  database:
-    name: Database migration
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-builder
-      - name: Apply database migrations
-        run: python database/migrate.py
-
   check:
     name: Check ${{ matrix.route }}
-    needs: database
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

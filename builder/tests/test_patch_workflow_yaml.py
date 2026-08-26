@@ -13,7 +13,6 @@ def _workflow() -> dict:
 def test_patch_workflow_is_split_into_parallel_roles() -> None:
     jobs = _workflow()["jobs"]
     assert set(jobs) == {
-        "database",
         "check",
         "plan",
         "sync",
