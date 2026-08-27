@@ -20,8 +20,8 @@ permissions:
   contents: write
 
 env:
-  DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-  DATABASE_URL_DIRECT: ${{ secrets.NEON_DATABASE_URL_DIRECT }}
+  DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
+  DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
   GAME_VERSION: ${{ vars.GAME_VERSION || '3.2.0' }}
   GH_TOKEN: ${{ github.token }}
   GITHUB_TOKEN: ${{ github.token }}
@@ -43,6 +43,12 @@ jobs:
             slug: int_android
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-database-tunnel
+        with:
+          host: ${{ secrets.DB_SSH_HOST }}
+          user: ${{ secrets.DB_SSH_USER }}
+          private-key: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
       - uses: ./.github/actions/setup-builder
       - name: Check remote revision and catalog
         run: |
@@ -164,6 +170,13 @@ jobs:
           sync_required="$(sed -n 's/^sync_required=//p' "$file" | tail -1)"
           test "$sync_required" = true -o "$sync_required" = false
           echo "sync_required=$sync_required" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-database-tunnel
+        if: steps.current.outputs.sync_required == 'true'
+        with:
+          host: ${{ secrets.DB_SSH_HOST }}
+          user: ${{ secrets.DB_SSH_USER }}
+          private-key: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
       - uses: ./.github/actions/setup-builder
         if: steps.current.outputs.sync_required == 'true'
       - name: Synchronize route resources
@@ -215,6 +228,12 @@ jobs:
       translation_pending: ${{ steps.translations.outputs.pending }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-database-tunnel
+        with:
+          host: ${{ secrets.DB_SSH_HOST }}
+          user: ${{ secrets.DB_SSH_USER }}
+          private-key: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
       - uses: ./.github/actions/setup-builder
       - name: Download route states
         uses: actions/download-artifact@v7
@@ -347,6 +366,12 @@ jobs:
             legacy_path: .work/steam-download/8vJXn6CN/AstralParty_CN_Data/data.unity3d
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-database-tunnel
+        with:
+          host: ${{ secrets.DB_SSH_HOST }}
+          user: ${{ secrets.DB_SSH_USER }}
+          private-key: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
       - uses: ./.github/actions/setup-builder
       - name: Download route Steam input
         uses: actions/download-artifact@v7
@@ -407,6 +432,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-database-tunnel
+        with:
+          host: ${{ secrets.DB_SSH_HOST }}
+          user: ${{ secrets.DB_SSH_USER }}
+          private-key: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
       - uses: ./.github/actions/setup-builder
       - name: Build and validate
         shell: bash
@@ -574,6 +605,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-database-tunnel
+        with:
+          host: ${{ secrets.DB_SSH_HOST }}
+          user: ${{ secrets.DB_SSH_USER }}
+          private-key: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
       - uses: ./.github/actions/setup-builder
       - name: Download route build metadata
         uses: actions/download-artifact@v7
