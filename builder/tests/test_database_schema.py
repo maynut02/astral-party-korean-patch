@@ -6,9 +6,17 @@ ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS = ROOT / "database" / "migrations"
 
 
-def test_database_uses_one_fresh_baseline_migration() -> None:
-    assert [path.name for path in sorted(MIGRATIONS.glob("*.sql"))] == ["0001_initial.sql"]
-    parse_sql((MIGRATIONS / "0001_initial.sql").read_text(encoding="utf-8"))
+def test_database_migrations_are_complete_and_parseable() -> None:
+    migrations = sorted(MIGRATIONS.glob("*.sql"))
+    assert [path.name for path in migrations] == [
+        "0001_initial.sql",
+        "0002_user_profile_details.sql",
+        "0003_user_game_profile_constraints.sql",
+        "0004_translation_changes_creator_status_index.sql",
+    ]
+
+    for migration in migrations:
+        parse_sql(migration.read_text(encoding="utf-8"))
 
 
 def test_schema_separates_source_history_pending_changes_and_production_translations() -> None:
