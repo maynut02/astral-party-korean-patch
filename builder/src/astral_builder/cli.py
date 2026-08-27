@@ -85,7 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fail when any current unit has no approved production translation.",
     )
 
-    mark_released = subparsers.add_parser("mark-released", help="Mark a database build as released.")
+    mark_released = subparsers.add_parser(
+        "mark-released",
+        help="Mark a database build as released.",
+    )
     mark_released.add_argument("--build-id", required=True)
     return parser
 
