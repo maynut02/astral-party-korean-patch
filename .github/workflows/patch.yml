@@ -17,20 +17,19 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
-  DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
-  DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
   GAME_VERSION: ${{ vars.GAME_VERSION || '3.2.0' }}
-  GH_TOKEN: ${{ github.token }}
-  GITHUB_TOKEN: ${{ github.token }}
   RELEASE_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
 
 jobs:
   check:
     name: Check ${{ matrix.route }}
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
     strategy:
       fail-fast: false
       matrix:
@@ -141,6 +140,9 @@ jobs:
     needs: [check, plan]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
     strategy:
       fail-fast: false
       matrix:
@@ -212,6 +214,9 @@ jobs:
     needs: [plan, sync]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
     outputs:
       int_steam_revision_id: ${{ steps.collect.outputs.int_steam_revision_id }}
       cn_steam_revision_id: ${{ steps.collect.outputs.cn_steam_revision_id }}
@@ -348,6 +353,9 @@ jobs:
     needs: [plan, state, steam-inputs]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
     strategy:
       fail-fast: false
       matrix:
@@ -413,6 +421,10 @@ jobs:
           mkdir -p output/release
           cp "$root/manifest.json" 'output/release/${{ matrix.route }}_manifest.json'
           cp "$root"/assets/* output/release/
+          python tools/workflow/manual_patch.py \
+            --manifest "$root/manifest.json" \
+            --payloads-dir "$root/payloads" \
+            --output 'output/release/${{ matrix.route }}_manual_patch.zip'
           build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
           test -n "$build_id"
           printf '%s\n' "$build_id" > 'output/release/${{ matrix.route }}_build_id.txt'
@@ -430,6 +442,9 @@ jobs:
     needs: [plan, state]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-database-tunnel
@@ -481,6 +496,10 @@ jobs:
     needs: [plan, state, build-steam, build-android]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
       - name: Download all route builds
@@ -557,6 +576,11 @@ jobs:
     needs: [plan, publish]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-builder
@@ -603,6 +627,9 @@ jobs:
     needs: [plan, index]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
+      DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-database-tunnel
