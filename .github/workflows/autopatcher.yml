@@ -2,6 +2,16 @@ name: AutoPatcher
 
 on:
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 concurrency:
   group: autopatcher-release
@@ -32,20 +42,73 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Read patcher version
+      - name: Resolve next patcher version
         id: version
         shell: pwsh
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $cargo = Get-Content 'Cargo.toml' -Raw
-          $cargoMatch = [regex]::Match(
-            $cargo,
-            '(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'
-          )
-          if (-not $cargoMatch.Success) {
-            throw 'Could not read the Cargo package version.'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $versions = gh release list --limit 1000 --json tagName --jq '.[].tagName' |
+            ForEach-Object {
+              if ($_ -match '^patcher-v(\d+)\.(\d+)\.(\d+)$') {
+                [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+              }
+            }
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to read existing AutoPatcher releases.'
           }
-          $version = $cargoMatch.Groups[1].Value
+
+          if ($versions) {
+            $current = $versions | Sort-Object -Descending | Select-Object -First 1
+          } else {
+            $cargo = Get-Content 'Cargo.toml' -Raw
+            $cargoMatch = [regex]::Match(
+              $cargo,
+              '(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'
+            )
+            if (-not $cargoMatch.Success) {
+              throw 'Could not read the Cargo package version.'
+            }
+            $current = [version]$cargoMatch.Groups[1].Value
+          }
+
+          switch ($env:BUMP) {
+            'patch' { $next = [version]::new($current.Major, $current.Minor, $current.Build + 1) }
+            'minor' { $next = [version]::new($current.Major, $current.Minor + 1, 0) }
+            'major' { $next = [version]::new($current.Major + 1, 0, 0) }
+            default { throw "Unsupported version bump: $env:BUMP" }
+          }
+
+          $version = $next.ToString(3)
+          $cargo = Get-Content 'Cargo.toml' -Raw
+          $cargo = [regex]::Replace(
+            $cargo,
+            '(?ms)(^\[package\].*?^version\s*=\s*)"[^"]+"',
+            "`$1`"$version`"",
+            1
+          )
+          Set-Content -Path 'Cargo.toml' -Value $cargo -Encoding utf8NoBOM -NoNewline
+
+          $lock = Get-Content 'Cargo.lock' -Raw
+          $lock = [regex]::Replace(
+            $lock,
+            '(?ms)(^\[\[package\]\]\r?\nname = "astral-auto-patcher"\r?\nversion = )"[^"]+"',
+            "`$1`"$version`"",
+            1
+          )
+          Set-Content -Path 'Cargo.lock' -Value $lock -Encoding utf8NoBOM -NoNewline
+
+          if ((Get-Content 'Cargo.toml' -Raw) -notmatch "(?m)^version\s*=\s*`"$([regex]::Escape($version))`"$") {
+            throw 'Failed to update Cargo.toml version.'
+          }
+          if ((Get-Content 'Cargo.lock' -Raw) -notmatch "(?ms)^\[\[package\]\]\r?\nname = `"astral-auto-patcher`"\r?\nversion = `"$([regex]::Escape($version))`"") {
+            throw 'Failed to update Cargo.lock version.'
+          }
+
+          Write-Host "AutoPatcher version: $current -> $version ($env:BUMP)"
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=patcher-v$version" >> $env:GITHUB_OUTPUT
       - name: Rust format
