@@ -400,12 +400,13 @@ jobs:
             *) echo 'unsupported Steam route' >&2; exit 1 ;;
           esac
           root='output/patch/${{ matrix.slug }}'
+          work='.work/build-${{ matrix.slug }}'
           output_file='.work/build-output.env'
           asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
           astral-builder build \
             --revision-id "$REVISION_ID" \
             --route-config '${{ matrix.config }}' \
-            --work-dir '.work/build-${{ matrix.slug }}' \
+            --work-dir "$work" \
             --output-dir "$root" \
             --asset-base-url "$asset_base" \
             --patch-version '${{ needs.plan.outputs.patch_version }}' \
@@ -423,7 +424,7 @@ jobs:
           cp "$root"/assets/* output/release/
           python tools/workflow/manual_patch.py \
             --manifest "$root/manifest.json" \
-            --payloads-dir "$root/payloads" \
+            --payloads-dir "$work/payloads" \
             --output 'output/release/${{ matrix.route }}_manual_patch.zip'
           build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
           test -n "$build_id"
