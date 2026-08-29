@@ -8,6 +8,7 @@ pub const URI_SCHEME: &str = "astral";
 pub enum UriAction {
     Menu,
     Install,
+    AndroidInstall,
     Remove,
     Settings,
 }
@@ -52,6 +53,16 @@ impl UriRequest {
         let parts = rest.split('/').collect::<Vec<_>>();
         if parts.is_empty() || parts.len() > 2 || parts.iter().any(|part| part.is_empty()) {
             return Err(UriError::Unsupported(value.to_owned()));
+        }
+
+        if parts.len() == 2
+            && parts[0].eq_ignore_ascii_case("install")
+            && parts[1].eq_ignore_ascii_case("INT_ANDROID")
+        {
+            return Ok(Self {
+                action: UriAction::AndroidInstall,
+                route: None,
+            });
         }
 
         let action = match parts[0].to_ascii_lowercase().as_str() {
@@ -114,9 +125,20 @@ mod tests {
     }
 
     #[test]
+    fn accepts_android_install_action() {
+        assert_eq!(
+            UriRequest::parse("astral://install/INT_ANDROID").unwrap(),
+            UriRequest {
+                action: UriAction::AndroidInstall,
+                route: None,
+            }
+        );
+    }
+
+    #[test]
     fn rejects_untrusted_or_unknown_uri_parts() {
         assert!(UriRequest::parse("astral://install?url=https://evil.test").is_err());
-        assert!(UriRequest::parse("astral://install/INT_ANDROID").is_err());
+        assert!(UriRequest::parse("astral://remove/INT_ANDROID").is_err());
         assert!(UriRequest::parse("astral://CN_STEAM/install").is_err());
         assert!(UriRequest::parse("https://example.test").is_err());
     }

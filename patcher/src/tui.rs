@@ -234,6 +234,9 @@ impl App {
             UriAction::Install => {
                 app.start_operation(OperationKind::SteamInstall, true, initial_request.route)
             }
+            UriAction::AndroidInstall => {
+                app.start_operation(OperationKind::AndroidInstall, true, None)
+            }
             UriAction::Remove => {
                 app.start_operation(OperationKind::SteamRemove, true, initial_request.route)
             }
@@ -2023,6 +2026,15 @@ mod tests {
         assert_eq!(app.screen, Screen::Operation);
         assert!(app.operation_pending());
         assert!(app.operation.as_ref().unwrap().protocol_request);
+    }
+
+    #[test]
+    fn protocol_android_install_starts_android_operation() {
+        let app = app(UriAction::AndroidInstall);
+        let operation = app.operation.as_ref().unwrap();
+        assert_eq!(operation.kind, OperationKind::AndroidInstall);
+        assert!(operation.protocol_request);
+        assert_eq!(app.screen, Screen::Operation);
     }
 
     #[test]
