@@ -42,11 +42,13 @@ public final class MainActivity extends Activity {
     private static final String PATCHER_INDEX_URL =
             "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/mobile-patcher-index.json";
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
-    private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer";
+    private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer-v3";
     private static final String INSTALLER_SERVICE_DESCRIPTOR =
             "io.github.maynut02.astralpatcher.IInstallerService";
-    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/2";
+    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/3";
     private static final int INSTALL_CHUNK_SIZE = 128 * 1024;
+    private static final int INSTALL_VERIFY_ATTEMPTS = 10;
+    private static final long INSTALL_VERIFY_DELAY_MS = 200;
     private static final int MAX_LOG_CHARS = 24 * 1024;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -66,7 +68,7 @@ public final class MainActivity extends Activity {
     private DistributionIndex latestGame;
     private MobilePatcherRelease latestPatcher;
     private File pendingSystemInstall;
-    private File pendingGameInstall;
+    private GameInstallRequest pendingGameInstall;
     private IInstallerService installerService;
     private Shizuku.UserServiceArgs installerServiceArgs;
     private boolean installerServiceBinding;
@@ -102,10 +104,10 @@ public final class MainActivity extends Activity {
             installerService = IInstallerService.Stub.asInterface(service);
             installerServiceBinding = false;
             appendLog("Shizuku 설치 서비스에 연결되었습니다.");
-            File apk = pendingGameInstall;
+            GameInstallRequest request = pendingGameInstall;
             pendingGameInstall = null;
-            if (apk != null) {
-                installGameWithBoundService(apk);
+            if (request != null) {
+                installGameWithBoundService(request);
             }
         }
 
@@ -393,10 +395,14 @@ public final class MainActivity extends Activity {
                     throw new IllegalStateException("게임 APK SHA-256 검증에 실패했습니다.");
                 }
                 appendLog("게임 APK 다운로드 및 SHA-256 검증 완료: " + apk.length() + " bytes");
-                verifyApkPackage(apk, DistributionIndex.PACKAGE_NAME, index.gameVersion);
+                PackageInfo apkInfo = verifyApkPackage(
+                        apk, DistributionIndex.PACKAGE_NAME, index.gameVersion);
                 appendLog("게임 APK 패키지 검증 완료: " + DistributionIndex.PACKAGE_NAME
-                        + " / " + index.gameVersion);
-                runOnUiThread(() -> installGameWithShizuku(apk));
+                        + " / " + index.gameVersion + " (versionCode="
+                        + apkInfo.getLongVersionCode() + ")");
+                GameInstallRequest request = new GameInstallRequest(
+                        apk, index.gameVersion, apkInfo.getLongVersionCode());
+                runOnUiThread(() -> installGameWithShizuku(request));
             } catch (Exception error) {
                 runOnUiThread(() -> setBusy(false, null));
                 showError("게임 APK 다운로드에 실패했습니다.", error);
@@ -404,7 +410,7 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private void installGameWithShizuku(File apk) {
+    private void installGameWithShizuku(GameInstallRequest request) {
         if (!isShizukuReady()) {
             setBusy(false, "Shizuku 연결 또는 권한이 해제되어 게임을 설치할 수 없습니다.");
             updateGameActionAvailability();
@@ -412,16 +418,16 @@ public final class MainActivity extends Activity {
         }
 
         if (installerService != null) {
-            installGameWithBoundService(apk);
+            installGameWithBoundService(request);
             return;
         }
 
         if (installerServiceBinding) {
-            pendingGameInstall = apk;
+            pendingGameInstall = request;
             return;
         }
 
-        pendingGameInstall = apk;
+        pendingGameInstall = request;
         installerServiceBinding = true;
         appendLog("Shizuku 설치 서비스에 연결하는 중입니다.");
         try {
@@ -434,20 +440,24 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void installGameWithBoundService(File apk) {
+    private void installGameWithBoundService(GameInstallRequest request) {
         IInstallerService service = installerService;
         if (service == null) {
             setBusy(false, "Shizuku 설치 서비스가 연결되지 않았습니다.");
             return;
         }
 
+        File apk = request.apk;
         appendLog("Shizuku를 통해 게임을 설치하는 중입니다. APK 크기: " + apk.length() + " bytes");
         executor.execute(() -> {
             boolean installStarted = false;
             try {
                 String serviceInfo = service.getServiceInfo();
                 appendLog("Shizuku 설치 서비스 확인: " + serviceInfo);
-                if (serviceInfo == null || !serviceInfo.startsWith(INSTALLER_SERVICE_PROTOCOL)) {
+                String serviceProtocol = serviceInfo == null
+                        ? null
+                        : serviceInfo.split(" ", 2)[0];
+                if (!INSTALLER_SERVICE_PROTOCOL.equals(serviceProtocol)) {
                     throw new IllegalStateException(
                             "설치 서비스 프로토콜 확인에 실패했습니다: " + serviceInfo);
                 }
@@ -464,15 +474,15 @@ public final class MainActivity extends Activity {
                         service.writeInstallChunk(chunk);
                     }
                 }
+                appendLog("게임 APK 데이터 전송 완료: " + apk.length() + " bytes");
+                appendLog("Shizuku 설치 서비스 전송 상태: " + service.getServiceInfo());
 
-                String installResult = service.finishInstall();
+                service.finishInstallV3();
                 installStarted = false;
-                appendLog("pm install 결과: " + installResult);
-                if (installResult == null || installResult.trim().isEmpty()) {
-                    throw new IllegalStateException("pm install이 빈 결과를 반환했습니다.");
-                }
-                String installer = installedGameInstaller();
-                appendLog("설치 출처 확인 결과: " + installer);
+                String completedServiceInfo = service.getServiceInfo();
+                appendLog("Shizuku 설치 서비스 완료 상태: " + completedServiceInfo);
+
+                String installer = verifyInstalledGame(request);
                 if (!DistributionIndex.INSTALLER_PACKAGE.equals(installer)) {
                     throw new IllegalStateException(
                             "설치 출처 검증에 실패했습니다: " + installer);
@@ -482,6 +492,11 @@ public final class MainActivity extends Activity {
                     refreshStatus();
                 });
             } catch (Exception error) {
+                try {
+                    appendLog("실패 시 Shizuku 설치 서비스 상태: " + service.getServiceInfo());
+                } catch (Exception statusError) {
+                    appendLog("실패 시 설치 서비스 상태 조회 실패: " + statusError.getMessage());
+                }
                 if (installStarted) {
                     try {
                         service.cancelInstall();
@@ -495,6 +510,53 @@ public final class MainActivity extends Activity {
                 runOnUiThread(this::releaseInstallerService);
             }
         });
+    }
+
+    private String verifyInstalledGame(GameInstallRequest request) throws Exception {
+        String lastVersion = null;
+        long lastVersionCode = -1;
+        String lastInstaller = null;
+        PackageManager.NameNotFoundException lastNotFound = null;
+
+        for (int attempt = 1; attempt <= INSTALL_VERIFY_ATTEMPTS; attempt++) {
+            PackageInfo installedInfo = installedGamePackageInfo();
+            if (installedInfo != null) {
+                lastVersion = installedInfo.versionName;
+                lastVersionCode = installedInfo.getLongVersionCode();
+                try {
+                    lastInstaller = installedGameInstaller();
+                    appendLog("설치 결과 확인 " + attempt + "/" + INSTALL_VERIFY_ATTEMPTS
+                            + ": version=" + lastVersion + ", versionCode=" + lastVersionCode
+                            + ", installer=" + lastInstaller);
+                    if (request.expectedVersion.equals(lastVersion)
+                            && request.expectedVersionCode == lastVersionCode
+                            && DistributionIndex.INSTALLER_PACKAGE.equals(lastInstaller)) {
+                        return lastInstaller;
+                    }
+                } catch (PackageManager.NameNotFoundException error) {
+                    lastNotFound = error;
+                }
+            }
+
+            if (attempt < INSTALL_VERIFY_ATTEMPTS) {
+                Thread.sleep(INSTALL_VERIFY_DELAY_MS);
+            }
+        }
+
+        if (lastVersion == null && lastNotFound != null) {
+            throw lastNotFound;
+        }
+        if (!request.expectedVersion.equals(lastVersion)
+                || request.expectedVersionCode != lastVersionCode) {
+            throw new IllegalStateException(
+                    "설치된 게임 버전이 다릅니다: expected=" + request.expectedVersion
+                            + " (" + request.expectedVersionCode + ")"
+                            + ", actual=" + lastVersion + " (" + lastVersionCode + ")"
+                            + ", installer=" + lastInstaller);
+        }
+        throw new IllegalStateException(
+                "게임 설치 상태 검증에 실패했습니다: version=" + lastVersion
+                        + ", installer=" + lastInstaller);
     }
 
     private void releaseInstallerService() {
@@ -533,7 +595,8 @@ public final class MainActivity extends Activity {
         startActivity(install);
     }
 
-    private void verifyApkPackage(File apk, String expectedPackage, String expectedVersion) throws Exception {
+    private PackageInfo verifyApkPackage(
+            File apk, String expectedPackage, String expectedVersion) throws Exception {
         PackageInfo info = getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
         if (info == null || !expectedPackage.equals(info.packageName)) {
             throw new IllegalStateException("다운로드한 APK packageName이 예상과 다릅니다.");
@@ -542,6 +605,7 @@ public final class MainActivity extends Activity {
             throw new IllegalStateException(
                     "다운로드한 APK 버전이 배포 정보와 다릅니다: " + info.versionName);
         }
+        return info;
     }
 
     private void verifyMobilePatcherApk(File apk, MobilePatcherRelease release) throws Exception {
@@ -608,9 +672,13 @@ public final class MainActivity extends Activity {
     }
 
     private String installedGameVersion() {
+        PackageInfo info = installedGamePackageInfo();
+        return info == null ? null : info.versionName;
+    }
+
+    private PackageInfo installedGamePackageInfo() {
         try {
-            PackageInfo info = getPackageManager().getPackageInfo(DistributionIndex.PACKAGE_NAME, 0);
-            return info.versionName;
+            return getPackageManager().getPackageInfo(DistributionIndex.PACKAGE_NAME, 0);
         } catch (PackageManager.NameNotFoundException error) {
             return null;
         }
@@ -619,6 +687,18 @@ public final class MainActivity extends Activity {
     private String installedGameInstaller() throws PackageManager.NameNotFoundException {
         InstallSourceInfo source = getPackageManager().getInstallSourceInfo(DistributionIndex.PACKAGE_NAME);
         return source.getInstallingPackageName();
+    }
+
+    private static final class GameInstallRequest {
+        final File apk;
+        final String expectedVersion;
+        final long expectedVersionCode;
+
+        GameInstallRequest(File apk, String expectedVersion, long expectedVersionCode) {
+            this.apk = apk;
+            this.expectedVersion = expectedVersion;
+            this.expectedVersionCode = expectedVersionCode;
+        }
     }
 
     private boolean isShizukuReady() {

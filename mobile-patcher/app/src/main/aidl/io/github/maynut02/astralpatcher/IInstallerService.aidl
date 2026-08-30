@@ -6,5 +6,6 @@ interface IInstallerService {
     void writeInstallChunk(in byte[] data) = 3;
     String finishInstall() = 4;
     void cancelInstall() = 5;
+    void finishInstallV3() = 6;
     void destroy() = 16777114;
 }
