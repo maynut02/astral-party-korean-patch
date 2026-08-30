@@ -2,7 +2,6 @@
 <resources>
     <string name="app_name">아스트랄 한글패치</string>
     <string name="title">Astral Party 한국어 패치</string>
-    <string name="subtitle">Android 모바일 설치 도구</string>
     <string name="status_checking">상태를 확인하는 중입니다.</string>
     <string name="shizuku_install">Shizuku 다운로드 및 설치</string>
     <string name="shizuku_open">Shizuku 열기</string>
@@ -10,4 +9,6 @@
     <string name="game_install">최신 한국어판 다운로드</string>
     <string name="game_launch">게임 실행</string>
     <string name="refresh">새로고침</string>
+    <string name="log_title">실행 로그</string>
+    <string name="log_empty">아직 기록된 로그가 없습니다.</string>
 </resources>

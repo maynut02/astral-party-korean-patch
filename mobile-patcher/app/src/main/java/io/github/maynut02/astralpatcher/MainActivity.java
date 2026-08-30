@@ -13,6 +13,8 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.provider.Settings;
+import android.text.format.DateFormat;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ProgressBar;
@@ -38,6 +40,7 @@ public final class MainActivity extends Activity {
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
     private static final int INSTALLER_USER_SERVICE_VERSION = 1;
     private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer";
+    private static final int MAX_LOG_CHARS = 24 * 1024;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -69,6 +72,7 @@ public final class MainActivity extends Activity {
         public void onServiceConnected(ComponentName name, IBinder service) {
             installerService = IInstallerService.Stub.asInterface(service);
             installerServiceBinding = false;
+            appendLog("Shizuku 설치 서비스에 연결되었습니다.");
             File apk = pendingGameInstall;
             pendingGameInstall = null;
             if (apk != null) {
@@ -80,6 +84,7 @@ public final class MainActivity extends Activity {
         public void onServiceDisconnected(ComponentName name) {
             installerService = null;
             installerServiceBinding = false;
+            appendLog("Shizuku 설치 서비스 연결이 종료되었습니다.");
         }
     };
 
@@ -223,7 +228,7 @@ public final class MainActivity extends Activity {
 
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
             if (Shizuku.shouldShowRequestPermissionRationale()) {
-                detailStatus.setText("Shizuku 앱에서 Mobile Patcher 권한을 허용한 뒤 다시 시도하세요.");
+                appendLog("Shizuku 앱에서 Mobile Patcher 권한을 허용한 뒤 다시 시도하세요.");
                 openPackage(ShizukuRelease.PACKAGE_NAME);
             } else {
                 Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST);
@@ -263,7 +268,7 @@ public final class MainActivity extends Activity {
 
     private void downloadLatestGame() {
         if (!isShizukuReady()) {
-            detailStatus.setText("게임 설치에는 실행 중인 Shizuku와 Mobile Patcher 권한이 필요합니다.");
+            appendLog("게임 설치에는 실행 중인 Shizuku와 Mobile Patcher 권한이 필요합니다.");
             updateGameActionAvailability();
             return;
         }
@@ -275,6 +280,7 @@ public final class MainActivity extends Activity {
         }
 
         setBusy(true, "게임 APK를 다운로드하는 중입니다.");
+        appendLog("게임 APK 다운로드 시작: " + index.downloadUrl);
         executor.execute(() -> {
             try {
                 File apk = downloadFile("astral-party-latest.apk");
@@ -287,7 +293,10 @@ public final class MainActivity extends Activity {
                     apk.delete();
                     throw new IllegalStateException("게임 APK SHA-256 검증에 실패했습니다.");
                 }
+                appendLog("게임 APK 다운로드 및 SHA-256 검증 완료: " + apk.length() + " bytes");
                 verifyApkPackage(apk, DistributionIndex.PACKAGE_NAME, index.gameVersion);
+                appendLog("게임 APK 패키지 검증 완료: " + DistributionIndex.PACKAGE_NAME
+                        + " / " + index.gameVersion);
                 runOnUiThread(() -> installGameWithShizuku(apk));
             } catch (Exception error) {
                 runOnUiThread(() -> setBusy(false, null));
@@ -315,7 +324,7 @@ public final class MainActivity extends Activity {
 
         pendingGameInstall = apk;
         installerServiceBinding = true;
-        detailStatus.setText("Shizuku 설치 서비스에 연결하는 중입니다.");
+        appendLog("Shizuku 설치 서비스에 연결하는 중입니다.");
         try {
             Shizuku.bindUserService(installerServiceArgs, installerServiceConnection);
         } catch (RuntimeException error) {
@@ -333,12 +342,14 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        detailStatus.setText("Shizuku를 통해 게임을 설치하는 중입니다.");
+        appendLog("Shizuku를 통해 게임을 설치하는 중입니다. APK 크기: " + apk.length() + " bytes");
         executor.execute(() -> {
             try (ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(
                     apk, ParcelFileDescriptor.MODE_READ_ONLY)) {
-                service.installGameApk(descriptor, apk.length());
+                String installResult = service.installGameApk(descriptor, apk.length());
+                appendLog("pm install 결과: " + installResult);
                 String installer = installedGameInstaller();
+                appendLog("설치 출처 확인 결과: " + installer);
                 if (!DistributionIndex.INSTALLER_PACKAGE.equals(installer)) {
                     throw new IllegalStateException(
                             "설치 출처 검증에 실패했습니다: " + installer);
@@ -373,7 +384,7 @@ public final class MainActivity extends Activity {
     private void requestSystemInstall(File apk) {
         if (!getPackageManager().canRequestPackageInstalls()) {
             pendingSystemInstall = apk;
-            detailStatus.setText("이 앱의 '알 수 없는 앱 설치' 권한을 허용한 뒤 다시 시도하세요.");
+            appendLog("이 앱의 '알 수 없는 앱 설치' 권한을 허용한 뒤 다시 시도하세요.");
             Intent intent = new Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                     Uri.parse("package:" + getPackageName()));
@@ -442,7 +453,7 @@ public final class MainActivity extends Activity {
     private void launchGame() {
         Intent intent = getPackageManager().getLaunchIntentForPackage(DistributionIndex.PACKAGE_NAME);
         if (intent == null) {
-            detailStatus.setText("게임 실행 Activity를 찾지 못했습니다.");
+            appendLog("게임 실행 Activity를 찾지 못했습니다.");
             return;
         }
         startActivity(intent);
@@ -451,7 +462,7 @@ public final class MainActivity extends Activity {
     private void openPackage(String packageName) {
         Intent intent = getPackageManager().getLaunchIntentForPackage(packageName);
         if (intent == null) {
-            detailStatus.setText("앱을 열 수 없습니다: " + packageName);
+            appendLog("앱을 열 수 없습니다: " + packageName);
             return;
         }
         startActivity(intent);
@@ -466,15 +477,42 @@ public final class MainActivity extends Activity {
         gameAction.setEnabled(!busy && latestGame != null && isShizukuReady());
         refresh.setEnabled(!busy);
         if (detail != null) {
-            detailStatus.setText(detail);
+            appendLog(detail);
         }
     }
 
     private void showError(String prefix, Exception error) {
+        String message = error.getMessage();
+        StringBuilder details = new StringBuilder(prefix)
+                .append('\n')
+                .append(error.getClass().getName());
+        if (message != null && !message.trim().isEmpty()) {
+            details.append(": ").append(message.trim());
+        }
+        String stackTrace = Log.getStackTraceString(error);
+        if (stackTrace != null && !stackTrace.trim().isEmpty()) {
+            details.append('\n').append(stackTrace.trim());
+        }
+        appendLog(details.toString());
+    }
+
+    private void appendLog(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return;
+        }
         runOnUiThread(() -> {
-            String message = error.getMessage();
-            detailStatus.setText(
-                    message == null || message.trim().isEmpty() ? prefix : prefix + "\n" + message);
+            String timestamp = DateFormat.format("HH:mm:ss", System.currentTimeMillis()).toString();
+            String existing = detailStatus.getText().toString();
+            if (getString(R.string.log_empty).equals(existing)) {
+                existing = "";
+            }
+            String next = existing
+                    + (existing.isEmpty() ? "" : "\n\n")
+                    + "[" + timestamp + "] " + message.trim();
+            if (next.length() > MAX_LOG_CHARS) {
+                next = next.substring(next.length() - MAX_LOG_CHARS);
+            }
+            detailStatus.setText(next);
         });
     }
 }
