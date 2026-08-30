@@ -38,7 +38,7 @@ public final class MainActivity extends Activity {
     private static final String GAME_INDEX_URL =
             "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/android-apk-index.json";
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
-    private static final int INSTALLER_USER_SERVICE_VERSION = 1;
+    private static final int INSTALLER_USER_SERVICE_VERSION = 2;
     private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer";
     private static final int MAX_LOG_CHARS = 24 * 1024;
 
@@ -348,6 +348,11 @@ public final class MainActivity extends Activity {
                     apk, ParcelFileDescriptor.MODE_READ_ONLY)) {
                 String installResult = service.installGameApk(descriptor, apk.length());
                 appendLog("pm install 결과: " + installResult);
+                if (installResult == null || installResult.trim().isEmpty()) {
+                    throw new IllegalStateException(
+                            "Shizuku 설치 서비스가 빈 결과를 반환했습니다. "
+                                    + "UserService/AIDL 버전 불일치 가능성이 있습니다.");
+                }
                 String installer = installedGameInstaller();
                 appendLog("설치 출처 확인 결과: " + installer);
                 if (!DistributionIndex.INSTALLER_PACKAGE.equals(installer)) {
