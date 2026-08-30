@@ -41,10 +41,10 @@ public final class MainActivity extends Activity {
     private static final String PATCHER_INDEX_URL =
             "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/mobile-patcher-index.json";
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
-    private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer-v4";
+    private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer-v5";
     private static final String INSTALLER_SERVICE_DESCRIPTOR =
             "io.github.maynut02.astralpatcher.IInstallerService";
-    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/4";
+    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/5";
     private static final int INSTALL_VERIFY_ATTEMPTS = 10;
     private static final long INSTALL_VERIFY_DELAY_MS = 200;
     private static final int MAX_LOG_CHARS = 24 * 1024;

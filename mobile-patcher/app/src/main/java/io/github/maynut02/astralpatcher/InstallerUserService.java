@@ -2,10 +2,12 @@ package io.github.maynut02.astralpatcher;
 
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
+import android.system.Os;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
@@ -15,7 +17,8 @@ public final class InstallerUserService extends IInstallerService.Stub {
     private static final int MAX_STATUS_OUTPUT_CHARS = 512;
     private static final long INSTALL_TIMEOUT_SECONDS = 180;
     private static final long OUTPUT_READER_JOIN_TIMEOUT_MS = 5_000;
-    private static final String SERVICE_INFO = "AstralInstallerService/4";
+    private static final File INSTALL_STAGING_DIR = new File("/data/local/tmp");
+    private static final String SERVICE_INFO = "AstralInstallerService/5";
 
     private boolean installing;
     private long installSequence;
@@ -53,35 +56,13 @@ public final class InstallerUserService extends IInstallerService.Stub {
         Process process = null;
         Thread outputReader = null;
         ByteArrayOutputStream commandOutput = new ByteArrayOutputStream();
+        File stagedApk = null;
         long written = 0;
         try {
-            process = new ProcessBuilder(
-                    "/system/bin/pm",
-                    "install",
-                    "-r",
-                    "-i",
-                    DistributionIndex.INSTALLER_PACKAGE,
-                    "--pkg",
-                    DistributionIndex.PACKAGE_NAME,
-                    "-S",
-                    Long.toString(size),
-                    "-")
-                    .redirectErrorStream(true)
-                    .start();
-
-            Process runningProcess = process;
-            outputReader = new Thread(
-                    () -> readCommandOutput(runningProcess.getInputStream(), commandOutput),
-                    "pm-install-output");
-            outputReader.start();
-
-            synchronized (this) {
-                lastInstallStatus = "streaming id=" + installId + " expected=" + size;
-            }
-
+            stagedApk = File.createTempFile("astral-patcher-", ".apk", INSTALL_STAGING_DIR);
             try (ParcelFileDescriptor.AutoCloseInputStream input =
                          new ParcelFileDescriptor.AutoCloseInputStream(apk);
-                 OutputStream output = process.getOutputStream()) {
+                 FileOutputStream output = new FileOutputStream(stagedApk)) {
                 byte[] buffer = new byte[BUFFER_SIZE];
                 int read;
                 while ((read = input.read(buffer)) != -1) {
@@ -101,8 +82,32 @@ public final class InstallerUserService extends IInstallerService.Stub {
                         "APK stream size mismatch: expected " + size + ", wrote " + written);
             }
 
+            // PackageManager runs outside the shell process, so the staged APK must be readable.
+            Os.chmod(stagedApk.getAbsolutePath(), 0644);
             synchronized (this) {
-                lastInstallStatus = "finishing id=" + installId + " written=" + written;
+                lastInstallStatus = "staged id=" + installId
+                        + " written=" + written
+                        + " path=" + stagedApk.getAbsolutePath();
+            }
+
+            process = new ProcessBuilder(
+                    "/system/bin/pm",
+                    "install",
+                    "-r",
+                    "-i",
+                    DistributionIndex.INSTALLER_PACKAGE,
+                    stagedApk.getAbsolutePath())
+                    .redirectErrorStream(true)
+                    .start();
+
+            Process runningProcess = process;
+            outputReader = new Thread(
+                    () -> readCommandOutput(runningProcess.getInputStream(), commandOutput),
+                    "pm-install-output");
+            outputReader.start();
+
+            synchronized (this) {
+                lastInstallStatus = "installing id=" + installId + " written=" + written;
             }
 
             if (!process.waitFor(INSTALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
@@ -125,6 +130,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
             synchronized (this) {
                 lastInstallStatus = "success id=" + installId
                         + " written=" + written
+                        + " exit=" + exitCode
                         + " output=" + statusOutput(normalizedResult);
             }
             return normalizedResult;
@@ -132,12 +138,22 @@ public final class InstallerUserService extends IInstallerService.Stub {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            if (process != null) {
+            if (process != null && process.isAlive()) {
                 process.destroyForcibly();
             }
+            if (outputReader != null && outputReader.isAlive()) {
+                try {
+                    outputReader.join(OUTPUT_READER_JOIN_TIMEOUT_MS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            String processStatus = processStatus(process, commandOutput);
             synchronized (this) {
                 lastInstallStatus = "failed id=" + installId
-                        + " written=" + written + " " + failureStatus(error);
+                        + " written=" + written
+                        + " " + failureStatus(error)
+                        + " " + processStatus;
             }
             throw remoteException(error);
         } finally {
@@ -147,6 +163,9 @@ public final class InstallerUserService extends IInstallerService.Stub {
                 } catch (InterruptedException error) {
                     Thread.currentThread().interrupt();
                 }
+            }
+            if (stagedApk != null && stagedApk.exists()) {
+                stagedApk.delete();
             }
             synchronized (this) {
                 installing = false;
@@ -184,6 +203,21 @@ public final class InstallerUserService extends IInstallerService.Stub {
         String message = error.getMessage();
         return error.getClass().getSimpleName() + ": "
                 + statusOutput(message == null ? "<no message>" : message);
+    }
+
+    private static String processStatus(Process process, ByteArrayOutputStream output) {
+        String exit = "running";
+        if (process == null) {
+            exit = "not-started";
+        } else if (!process.isAlive()) {
+            try {
+                exit = Integer.toString(process.exitValue());
+            } catch (IllegalThreadStateException ignored) {
+                exit = "running";
+            }
+        }
+        String result = new String(output.toByteArray(), StandardCharsets.UTF_8).trim();
+        return "pmExit=" + exit + " pmOutput=" + statusOutput(result);
     }
 
     private static String statusOutput(String value) {
