@@ -21,11 +21,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
     private static final String SERVICE_INFO = "AstralInstallerService/5";
 
     private boolean installing;
-    private long installSequence;
     private String lastInstallStatus = "idle";
-
-    public InstallerUserService() {
-    }
 
     @Override
     public synchronized String getServiceInfo() {
@@ -37,7 +33,6 @@ public final class InstallerUserService extends IInstallerService.Stub {
 
     @Override
     public String installGameApk(ParcelFileDescriptor apk, long size) throws RemoteException {
-        final long installId;
         synchronized (this) {
             if (installing) {
                 throw remoteException(new IllegalStateException("An installation is already in progress."));
@@ -49,8 +44,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
                 throw remoteException(new IllegalArgumentException("APK size must be positive."));
             }
             installing = true;
-            installId = ++installSequence;
-            lastInstallStatus = "starting id=" + installId + " expected=" + size;
+            lastInstallStatus = "starting expected=" + size;
         }
 
         Process process = null;
@@ -85,9 +79,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
             // PackageManager runs outside the shell process, so the staged APK must be readable.
             Os.chmod(stagedApk.getAbsolutePath(), 0644);
             synchronized (this) {
-                lastInstallStatus = "staged id=" + installId
-                        + " written=" + written
-                        + " path=" + stagedApk.getAbsolutePath();
+                lastInstallStatus = "staged written=" + written;
             }
 
             process = new ProcessBuilder(
@@ -107,7 +99,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
             outputReader.start();
 
             synchronized (this) {
-                lastInstallStatus = "installing id=" + installId + " written=" + written;
+                lastInstallStatus = "installing written=" + written;
             }
 
             if (!process.waitFor(INSTALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
@@ -128,8 +120,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
 
             String normalizedResult = result.isEmpty() ? "Success (exit=0)" : result;
             synchronized (this) {
-                lastInstallStatus = "success id=" + installId
-                        + " written=" + written
+                lastInstallStatus = "success written=" + written
                         + " exit=" + exitCode
                         + " output=" + statusOutput(normalizedResult);
             }
@@ -150,8 +141,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
             }
             String processStatus = processStatus(process, commandOutput);
             synchronized (this) {
-                lastInstallStatus = "failed id=" + installId
-                        + " written=" + written
+                lastInstallStatus = "failed written=" + written
                         + " " + failureStatus(error)
                         + " " + processStatus;
             }

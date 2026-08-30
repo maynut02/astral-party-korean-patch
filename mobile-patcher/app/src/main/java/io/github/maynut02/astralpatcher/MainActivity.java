@@ -92,6 +92,7 @@ public final class MainActivity extends Activity {
                 }
             } catch (Exception error) {
                 installerServiceBinding = false;
+                deleteDownloadedGameApk(pendingGameInstall);
                 pendingGameInstall = null;
                 setBusy(false, null);
                 showError("Shizuku 설치 서비스 연결에 실패했습니다.", error);
@@ -113,6 +114,11 @@ public final class MainActivity extends Activity {
         public void onServiceDisconnected(ComponentName name) {
             installerService = null;
             installerServiceBinding = false;
+            if (pendingGameInstall != null) {
+                deleteDownloadedGameApk(pendingGameInstall);
+                pendingGameInstall = null;
+                setBusy(false, null);
+            }
             appendLog("Shizuku 설치 서비스 연결이 종료되었습니다.");
         }
     };
@@ -191,7 +197,7 @@ public final class MainActivity extends Activity {
         runOnUiThread(() -> {
             updateShizukuUi();
             updateInstalledGameUi();
-            updateGameActionAvailability();
+            updateActionAvailability();
         });
         fetchLatestGameIndex();
         fetchLatestMobilePatcherIndex();
@@ -240,7 +246,7 @@ public final class MainActivity extends Activity {
                     String installed = installedGameVersion();
                     gameStatus.setText((installed == null ? "설치되지 않음" : "설치됨: " + installed)
                             + "\n최신 한국어판: " + index.gameVersion);
-                    updateGameActionAvailability();
+                    updateActionAvailability();
                 });
             } catch (Exception error) {
                 latestGame = null;
@@ -368,7 +374,7 @@ public final class MainActivity extends Activity {
     private void downloadLatestGame() {
         if (!isShizukuReady()) {
             appendLog("게임 설치에는 실행 중인 Shizuku와 Mobile Patcher 권한이 필요합니다.");
-            updateGameActionAvailability();
+            updateActionAvailability();
             return;
         }
 
@@ -381,8 +387,8 @@ public final class MainActivity extends Activity {
         setBusy(true, "게임 APK를 다운로드하는 중입니다.");
         appendLog("게임 APK 다운로드 시작: " + index.downloadUrl);
         executor.execute(() -> {
+            File apk = downloadFile("astral-party-latest.apk");
             try {
-                File apk = downloadFile("astral-party-latest.apk");
                 String actualHash = HttpClient.download(
                         apk,
                         index.downloadUrl,
@@ -402,6 +408,7 @@ public final class MainActivity extends Activity {
                         apk, index.gameVersion, apkInfo.getLongVersionCode());
                 runOnUiThread(() -> installGameWithShizuku(request));
             } catch (Exception error) {
+                deleteFile(apk);
                 runOnUiThread(() -> setBusy(false, null));
                 showError("게임 APK 다운로드에 실패했습니다.", error);
             }
@@ -410,8 +417,9 @@ public final class MainActivity extends Activity {
 
     private void installGameWithShizuku(GameInstallRequest request) {
         if (!isShizukuReady()) {
+            deleteDownloadedGameApk(request);
             setBusy(false, "Shizuku 연결 또는 권한이 해제되어 게임을 설치할 수 없습니다.");
-            updateGameActionAvailability();
+            updateActionAvailability();
             return;
         }
 
@@ -433,6 +441,7 @@ public final class MainActivity extends Activity {
         } catch (RuntimeException error) {
             installerServiceBinding = false;
             pendingGameInstall = null;
+            deleteDownloadedGameApk(request);
             setBusy(false, null);
             showError("Shizuku 설치 서비스 연결에 실패했습니다.", error);
         }
@@ -441,6 +450,7 @@ public final class MainActivity extends Activity {
     private void installGameWithBoundService(GameInstallRequest request) {
         IInstallerService service = installerService;
         if (service == null) {
+            deleteDownloadedGameApk(request);
             setBusy(false, "Shizuku 설치 서비스가 연결되지 않았습니다.");
             return;
         }
@@ -465,14 +475,8 @@ public final class MainActivity extends Activity {
                     installResult = service.installGameApk(descriptor, apk.length());
                 }
                 appendLog("pm install 결과: " + installResult);
-                String completedServiceInfo = service.getServiceInfo();
-                appendLog("Shizuku 설치 서비스 완료 상태: " + completedServiceInfo);
 
-                String installer = verifyInstalledGame(request);
-                if (!DistributionIndex.INSTALLER_PACKAGE.equals(installer)) {
-                    throw new IllegalStateException(
-                            "설치 출처 검증에 실패했습니다: " + installer);
-                }
+                verifyInstalledGame(request);
                 runOnUiThread(() -> {
                     setBusy(false, "게임 설치 완료 · 설치 출처: Google Play");
                     refreshStatus();
@@ -486,16 +490,16 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> setBusy(false, null));
                 showError("Shizuku 게임 설치에 실패했습니다.", error);
             } finally {
+                deleteDownloadedGameApk(request);
                 runOnUiThread(this::releaseInstallerService);
             }
         });
     }
 
-    private String verifyInstalledGame(GameInstallRequest request) throws Exception {
+    private void verifyInstalledGame(GameInstallRequest request) throws Exception {
         String lastVersion = null;
         long lastVersionCode = -1;
         String lastInstaller = null;
-        PackageManager.NameNotFoundException lastNotFound = null;
 
         for (int attempt = 1; attempt <= INSTALL_VERIFY_ATTEMPTS; attempt++) {
             PackageInfo installedInfo = installedGamePackageInfo();
@@ -510,10 +514,10 @@ public final class MainActivity extends Activity {
                     if (request.expectedVersion.equals(lastVersion)
                             && request.expectedVersionCode == lastVersionCode
                             && DistributionIndex.INSTALLER_PACKAGE.equals(lastInstaller)) {
-                        return lastInstaller;
+                        return;
                     }
-                } catch (PackageManager.NameNotFoundException error) {
-                    lastNotFound = error;
+                } catch (PackageManager.NameNotFoundException ignored) {
+                    lastInstaller = null;
                 }
             }
 
@@ -522,20 +526,23 @@ public final class MainActivity extends Activity {
             }
         }
 
-        if (lastVersion == null && lastNotFound != null) {
-            throw lastNotFound;
-        }
-        if (!request.expectedVersion.equals(lastVersion)
-                || request.expectedVersionCode != lastVersionCode) {
-            throw new IllegalStateException(
-                    "설치된 게임 버전이 다릅니다: expected=" + request.expectedVersion
-                            + " (" + request.expectedVersionCode + ")"
-                            + ", actual=" + lastVersion + " (" + lastVersionCode + ")"
-                            + ", installer=" + lastInstaller);
-        }
         throw new IllegalStateException(
-                "게임 설치 상태 검증에 실패했습니다: version=" + lastVersion
+                "게임 설치 상태 검증에 실패했습니다: expected=" + request.expectedVersion
+                        + " (" + request.expectedVersionCode + ")"
+                        + ", actual=" + lastVersion + " (" + lastVersionCode + ")"
                         + ", installer=" + lastInstaller);
+    }
+
+    private static void deleteDownloadedGameApk(GameInstallRequest request) {
+        if (request != null) {
+            deleteFile(request.apk);
+        }
+    }
+
+    private static void deleteFile(File file) {
+        if (file != null && file.exists()) {
+            file.delete();
+        }
     }
 
     private void releaseInstallerService() {
@@ -683,10 +690,6 @@ public final class MainActivity extends Activity {
     private boolean isShizukuReady() {
         return Shizuku.pingBinder()
                 && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private void updateGameActionAvailability() {
-        gameAction.setEnabled(!busy && latestGame != null && isShizukuReady());
     }
 
     private void launchGame() {
