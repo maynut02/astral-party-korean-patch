@@ -30,6 +30,9 @@ patcher/target/
 # IDE / OS
 .vscode/
 .idea/
+.gradle/
+local.properties
+mobile-patcher/AstralMobilePatcher-v*.apk
 .DS_Store
 Thumbs.db
 

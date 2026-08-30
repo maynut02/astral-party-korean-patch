@@ -1,0 +1,120 @@
+name: Mobile Patcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Mobile Patcher version (for example 0.1.0)
+        required: true
+        default: 0.1.0
+        type: string
+
+concurrency:
+  group: mobile-patcher-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: mobile-patcher
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.13"
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Validate release version
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use major.minor.patch: $VERSION" >&2
+            exit 1
+          fi
+
+          TAG="mobile-patcher-v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Release already exists: $TAG" >&2
+            exit 1
+          fi
+
+      - name: Test and build signed release APK
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          test -n "$KEYSTORE_B64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+
+          umask 077
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/astral-mobile-patcher.keystore"
+          trap 'truncate -s 0 "$ANDROID_KEYSTORE_PATH"' EXIT
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          test -s "$ANDROID_KEYSTORE_PATH"
+
+          gradle :app:testDebugUnitTest :app:lintRelease :app:assembleRelease \
+            -PversionName="$VERSION"
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs \
+            app/build/outputs/apk/release/app-release.apk
+          cp app/build/outputs/apk/release/app-release.apk \
+            "AstralMobilePatcher-v${VERSION}.apk"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AstralMobilePatcher-v${{ inputs.version }}
+          path: mobile-patcher/AstralMobilePatcher-v${{ inputs.version }}.apk
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: AstralMobilePatcher-v${{ inputs.version }}
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="mobile-patcher-v${VERSION}"
+          gh release create "$TAG" \
+            "AstralMobilePatcher-v${VERSION}.apk" \
+            --target "$GITHUB_SHA" \
+            --title "Astral Mobile Patcher v${VERSION}" \
+            --notes "Android용 Astral Mobile Patcher 릴리즈입니다."

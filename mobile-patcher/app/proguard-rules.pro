@@ -1,0 +1,2 @@
+-keep class rikka.shizuku.** { *; }
+-dontwarn rikka.shizuku.**
