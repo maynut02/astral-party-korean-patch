@@ -1,3 +1,6 @@
 -keep class rikka.shizuku.** { *; }
 -dontwarn rikka.shizuku.**
 -keep class io.github.maynut02.astralpatcher.InstallerUserService { *; }
+-keep interface io.github.maynut02.astralpatcher.IInstallerService { *; }
+-keep class io.github.maynut02.astralpatcher.IInstallerService$Stub { *; }
+-keep class io.github.maynut02.astralpatcher.IInstallerService$Stub$Proxy { *; }

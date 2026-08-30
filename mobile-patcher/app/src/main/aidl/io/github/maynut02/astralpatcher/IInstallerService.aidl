@@ -4,5 +4,6 @@ import android.os.ParcelFileDescriptor;
 
 interface IInstallerService {
     String installGameApk(in ParcelFileDescriptor apk, long size) = 0;
+    String getServiceInfo() = 1;
     void destroy() = 16777114;
 }

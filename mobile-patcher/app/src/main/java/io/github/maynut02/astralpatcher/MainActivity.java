@@ -41,8 +41,10 @@ public final class MainActivity extends Activity {
     private static final String PATCHER_INDEX_URL =
             "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/mobile-patcher-index.json";
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
-    private static final int INSTALLER_USER_SERVICE_VERSION = 2;
     private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer";
+    private static final String INSTALLER_SERVICE_DESCRIPTOR =
+            "io.github.maynut02.astralpatcher.IInstallerService";
+    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/1";
     private static final int MAX_LOG_CHARS = 24 * 1024;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -79,6 +81,22 @@ public final class MainActivity extends Activity {
     private final ServiceConnection installerServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
+            try {
+                String descriptor = service.getInterfaceDescriptor();
+                appendLog("Shizuku 설치 서비스 Binder 확인: " + descriptor);
+                if (!INSTALLER_SERVICE_DESCRIPTOR.equals(descriptor)) {
+                    throw new IllegalStateException(
+                            "예상하지 못한 Binder 인터페이스입니다: " + descriptor);
+                }
+            } catch (Exception error) {
+                installerServiceBinding = false;
+                pendingGameInstall = null;
+                setBusy(false, null);
+                showError("Shizuku 설치 서비스 연결에 실패했습니다.", error);
+                releaseInstallerService();
+                return;
+            }
+
             installerService = IInstallerService.Stub.asInterface(service);
             installerServiceBinding = false;
             appendLog("Shizuku 설치 서비스에 연결되었습니다.");
@@ -120,7 +138,7 @@ public final class MainActivity extends Activity {
                 new ComponentName(this, InstallerUserService.class))
                 .daemon(false)
                 .tag(INSTALLER_USER_SERVICE_TAG)
-                .version(INSTALLER_USER_SERVICE_VERSION)
+                .version(BuildConfig.VERSION_CODE)
                 .processNameSuffix("installer");
 
         shizukuAction.setOnClickListener(view -> handleShizukuAction());
@@ -425,12 +443,17 @@ public final class MainActivity extends Activity {
         executor.execute(() -> {
             try (ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(
                     apk, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                String serviceInfo = service.getServiceInfo();
+                appendLog("Shizuku 설치 서비스 확인: " + serviceInfo);
+                if (serviceInfo == null || !serviceInfo.startsWith(INSTALLER_SERVICE_PROTOCOL)) {
+                    throw new IllegalStateException(
+                            "설치 서비스 프로토콜 확인에 실패했습니다: " + serviceInfo);
+                }
+
                 String installResult = service.installGameApk(descriptor, apk.length());
                 appendLog("pm install 결과: " + installResult);
                 if (installResult == null || installResult.trim().isEmpty()) {
-                    throw new IllegalStateException(
-                            "Shizuku 설치 서비스가 빈 결과를 반환했습니다. "
-                                    + "UserService/AIDL 버전 불일치 가능성이 있습니다.");
+                    throw new IllegalStateException("pm install이 빈 결과를 반환했습니다.");
                 }
                 String installer = installedGameInstaller();
                 appendLog("설치 출처 확인 결과: " + installer);

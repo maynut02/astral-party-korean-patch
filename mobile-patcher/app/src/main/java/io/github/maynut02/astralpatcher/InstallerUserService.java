@@ -11,8 +11,14 @@ import java.nio.charset.StandardCharsets;
 public final class InstallerUserService extends IInstallerService.Stub {
     private static final int BUFFER_SIZE = 64 * 1024;
     private static final int MAX_OUTPUT_BYTES = 64 * 1024;
+    private static final String SERVICE_INFO = "AstralInstallerService/1";
 
     public InstallerUserService() {
+    }
+
+    @Override
+    public String getServiceInfo() {
+        return SERVICE_INFO + " uid=" + android.os.Process.myUid();
     }
 
     @Override
