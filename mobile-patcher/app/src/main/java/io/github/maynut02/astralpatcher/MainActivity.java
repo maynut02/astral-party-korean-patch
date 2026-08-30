@@ -18,7 +18,11 @@ import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import androidx.core.graphics.Insets;
 import androidx.core.content.FileProvider;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import java.io.File;
 import java.util.concurrent.ExecutorService;
@@ -82,7 +86,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
+        applySystemBarInsets();
 
         shizukuStatus = findViewById(R.id.shizukuStatus);
         gameStatus = findViewById(R.id.gameStatus);
@@ -108,6 +114,17 @@ public final class MainActivity extends Activity {
         Shizuku.addBinderDeadListener(binderDeadListener);
         Shizuku.addRequestPermissionResultListener(permissionResultListener);
         refreshStatus();
+    }
+
+    private void applySystemBarInsets() {
+        View root = findViewById(R.id.mainScroll);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (view, windowInsets) -> {
+            Insets insets = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            view.setPadding(insets.left, insets.top, insets.right, insets.bottom);
+            return windowInsets;
+        });
+        ViewCompat.requestApplyInsets(root);
     }
 
     @Override
