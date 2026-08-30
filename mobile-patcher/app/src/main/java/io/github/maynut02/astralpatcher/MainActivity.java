@@ -17,6 +17,7 @@ import android.text.format.DateFormat;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
@@ -37,6 +38,8 @@ public final class MainActivity extends Activity {
             "https://api.github.com/repos/thedjchi/Shizuku/releases/latest";
     private static final String GAME_INDEX_URL =
             "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/android-apk-index.json";
+    private static final String PATCHER_INDEX_URL =
+            "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/mobile-patcher-index.json";
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
     private static final int INSTALLER_USER_SERVICE_VERSION = 2;
     private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer";
@@ -47,17 +50,23 @@ public final class MainActivity extends Activity {
     private TextView shizukuStatus;
     private TextView gameStatus;
     private TextView detailStatus;
+    private LinearLayout patcherUpdatePanel;
+    private TextView patcherUpdateStatus;
     private Button shizukuAction;
     private Button gameAction;
     private Button launchGame;
+    private Button patcherUpdateAction;
     private Button refresh;
     private ProgressBar progress;
+    private ProgressBar patcherUpdateProgress;
     private DistributionIndex latestGame;
+    private MobilePatcherRelease latestPatcher;
     private File pendingSystemInstall;
     private File pendingGameInstall;
     private IInstallerService installerService;
     private Shizuku.UserServiceArgs installerServiceArgs;
     private boolean installerServiceBinding;
+    private boolean busy;
 
     private final Shizuku.OnBinderReceivedListener binderReceivedListener = this::refreshStatus;
     private final Shizuku.OnBinderDeadListener binderDeadListener = this::refreshStatus;
@@ -98,11 +107,15 @@ public final class MainActivity extends Activity {
         shizukuStatus = findViewById(R.id.shizukuStatus);
         gameStatus = findViewById(R.id.gameStatus);
         detailStatus = findViewById(R.id.detailStatus);
+        patcherUpdatePanel = findViewById(R.id.patcherUpdatePanel);
+        patcherUpdateStatus = findViewById(R.id.patcherUpdateStatus);
         shizukuAction = findViewById(R.id.shizukuAction);
         gameAction = findViewById(R.id.gameAction);
         launchGame = findViewById(R.id.launchGame);
+        patcherUpdateAction = findViewById(R.id.patcherUpdateAction);
         refresh = findViewById(R.id.refresh);
         progress = findViewById(R.id.downloadProgress);
+        patcherUpdateProgress = findViewById(R.id.patcherUpdateProgress);
         installerServiceArgs = new Shizuku.UserServiceArgs(
                 new ComponentName(this, InstallerUserService.class))
                 .daemon(false)
@@ -113,6 +126,7 @@ public final class MainActivity extends Activity {
         shizukuAction.setOnClickListener(view -> handleShizukuAction());
         gameAction.setOnClickListener(view -> downloadLatestGame());
         launchGame.setOnClickListener(view -> launchGame());
+        patcherUpdateAction.setOnClickListener(view -> downloadLatestMobilePatcher());
         refresh.setOnClickListener(view -> refreshStatus());
 
         Shizuku.addBinderReceivedListenerSticky(binderReceivedListener);
@@ -160,6 +174,7 @@ public final class MainActivity extends Activity {
             updateGameActionAvailability();
         });
         fetchLatestGameIndex();
+        fetchLatestMobilePatcherIndex();
     }
 
     private void updateShizukuUi() {
@@ -211,6 +226,70 @@ public final class MainActivity extends Activity {
                 latestGame = null;
                 runOnUiThread(() -> gameAction.setEnabled(false));
                 showError("게임 배포 정보를 불러오지 못했습니다.", error);
+            }
+        });
+    }
+
+    private void fetchLatestMobilePatcherIndex() {
+        executor.execute(() -> {
+            try {
+                MobilePatcherRelease release = MobilePatcherRelease.parse(
+                        HttpClient.getText(PATCHER_INDEX_URL));
+                latestPatcher = release;
+                runOnUiThread(this::updatePatcherUpdateUi);
+            } catch (Exception error) {
+                latestPatcher = null;
+                runOnUiThread(() -> patcherUpdatePanel.setVisibility(View.GONE));
+                String message = error.getMessage();
+                appendLog("Mobile Patcher 업데이트 확인 실패"
+                        + (message == null || message.trim().isEmpty() ? "" : ": " + message.trim()));
+            }
+        });
+    }
+
+    private void updatePatcherUpdateUi() {
+        MobilePatcherRelease release = latestPatcher;
+        if (release == null || !release.isNewerThan(BuildConfig.VERSION_CODE)) {
+            patcherUpdatePanel.setVisibility(View.GONE);
+            return;
+        }
+
+        patcherUpdatePanel.setVisibility(View.VISIBLE);
+        patcherUpdateStatus.setText(
+                "현재 버전: " + BuildConfig.VERSION_NAME + "\n최신 버전: " + release.version);
+        patcherUpdateAction.setEnabled(!busy);
+    }
+
+    private void downloadLatestMobilePatcher() {
+        MobilePatcherRelease release = latestPatcher;
+        if (release == null || !release.isNewerThan(BuildConfig.VERSION_CODE)) {
+            fetchLatestMobilePatcherIndex();
+            return;
+        }
+
+        setUpdateBusy(true, "Mobile Patcher " + release.version + " APK를 다운로드하는 중입니다.");
+        appendLog("Mobile Patcher 업데이트 다운로드 시작: " + release.downloadUrl);
+        executor.execute(() -> {
+            try {
+                File apk = downloadFile("astral-mobile-patcher-latest.apk");
+                String actualHash = HttpClient.download(
+                        apk,
+                        release.downloadUrl,
+                        release.size,
+                        percent -> runOnUiThread(() -> patcherUpdateProgress.setProgress(percent)));
+                if (!release.sha256.equals(actualHash)) {
+                    apk.delete();
+                    throw new IllegalStateException("Mobile Patcher APK SHA-256 검증에 실패했습니다.");
+                }
+                verifyMobilePatcherApk(apk, release);
+                appendLog("Mobile Patcher " + release.version + " 다운로드 및 검증 완료");
+                runOnUiThread(() -> {
+                    setUpdateBusy(false, null);
+                    requestSystemInstall(apk);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> setUpdateBusy(false, null));
+                showError("Mobile Patcher 업데이트 다운로드에 실패했습니다.", error);
             }
         });
     }
@@ -419,6 +498,56 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void verifyMobilePatcherApk(File apk, MobilePatcherRelease release) throws Exception {
+        PackageInfo info = getPackageManager().getPackageArchiveInfo(
+                apk.getAbsolutePath(), PackageManager.GET_SIGNING_CERTIFICATES);
+        if (info == null || !getPackageName().equals(info.packageName)) {
+            throw new IllegalStateException("다운로드한 Mobile Patcher APK packageName이 예상과 다릅니다.");
+        }
+        if (!release.version.equals(info.versionName)) {
+            throw new IllegalStateException(
+                    "다운로드한 Mobile Patcher APK 버전이 배포 정보와 다릅니다: " + info.versionName);
+        }
+        if (info.getLongVersionCode() != release.versionCode) {
+            throw new IllegalStateException(
+                    "다운로드한 Mobile Patcher APK versionCode가 배포 정보와 다릅니다: "
+                            + info.getLongVersionCode());
+        }
+        if (info.getLongVersionCode() <= BuildConfig.VERSION_CODE) {
+            throw new IllegalStateException("현재 버전보다 새로운 Mobile Patcher APK가 아닙니다.");
+        }
+
+        PackageInfo current = getPackageManager().getPackageInfo(
+                getPackageName(), PackageManager.GET_SIGNING_CERTIFICATES);
+        if (!hasSameCurrentSigner(current, info)) {
+            throw new IllegalStateException("다운로드한 Mobile Patcher APK 서명이 현재 앱과 다릅니다.");
+        }
+    }
+
+    private static boolean hasSameCurrentSigner(PackageInfo first, PackageInfo second) {
+        if (first.signingInfo == null || second.signingInfo == null) {
+            return false;
+        }
+        android.content.pm.Signature[] firstSigners = first.signingInfo.getApkContentsSigners();
+        android.content.pm.Signature[] secondSigners = second.signingInfo.getApkContentsSigners();
+        if (firstSigners.length != secondSigners.length) {
+            return false;
+        }
+        for (android.content.pm.Signature signer : firstSigners) {
+            boolean matched = false;
+            for (android.content.pm.Signature candidate : secondSigners) {
+                if (signer.equals(candidate)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private File downloadFile(String name) {
         return new File(new File(getCacheDir(), "downloads"), name);
     }
@@ -452,7 +581,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateGameActionAvailability() {
-        gameAction.setEnabled(latestGame != null && isShizukuReady());
+        gameAction.setEnabled(!busy && latestGame != null && isShizukuReady());
     }
 
     private void launchGame() {
@@ -474,16 +603,39 @@ public final class MainActivity extends Activity {
     }
 
     private void setBusy(boolean busy, String detail) {
+        this.busy = busy;
         progress.setVisibility(busy ? View.VISIBLE : View.GONE);
+        patcherUpdateProgress.setVisibility(View.GONE);
         if (!busy) {
             progress.setProgress(0);
         }
-        shizukuAction.setEnabled(!busy);
-        gameAction.setEnabled(!busy && latestGame != null && isShizukuReady());
-        refresh.setEnabled(!busy);
+        updateActionAvailability();
         if (detail != null) {
             appendLog(detail);
         }
+    }
+
+    private void setUpdateBusy(boolean busy, String detail) {
+        this.busy = busy;
+        progress.setVisibility(View.GONE);
+        patcherUpdateProgress.setVisibility(busy ? View.VISIBLE : View.GONE);
+        if (!busy) {
+            patcherUpdateProgress.setProgress(0);
+        }
+        updateActionAvailability();
+        if (detail != null) {
+            appendLog(detail);
+        }
+    }
+
+    private void updateActionAvailability() {
+        shizukuAction.setEnabled(!busy);
+        gameAction.setEnabled(!busy && latestGame != null && isShizukuReady());
+        refresh.setEnabled(!busy);
+        MobilePatcherRelease release = latestPatcher;
+        patcherUpdateAction.setEnabled(!busy
+                && release != null
+                && release.isNewerThan(BuildConfig.VERSION_CODE));
     }
 
     private void showError(String prefix, Exception error) {

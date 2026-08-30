@@ -8,6 +8,8 @@
     <string name="shizuku_permission">Shizuku 권한 허용</string>
     <string name="game_install">최신 한국어판 다운로드</string>
     <string name="game_launch">게임 실행</string>
+    <string name="patcher_update_title">Mobile Patcher 업데이트</string>
+    <string name="patcher_update">업데이트 다운로드</string>
     <string name="refresh">새로고침</string>
     <string name="log_title">실행 로그</string>
     <string name="log_empty">아직 기록된 로그가 없습니다.</string>

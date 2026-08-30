@@ -30,3 +30,5 @@ gradle :app:assembleDebug
 Shizuku 자체는 Shizuku가 아직 실행될 수 없는 초기 부트스트랩 단계이므로 Android 시스템 설치 화면을 사용합니다. 게임 APK는 시스템 설치 화면을 사용하지 않으며, Windows AutoPatcher의 `adb install -r -i com.android.vending`과 같은 설치 출처를 남기도록 Shizuku shell 권한으로 설치합니다.
 
 GitHub Actions의 `Mobile Patcher` workflow는 기존 Android APK와 동일한 `ANDROID_KEYSTORE_*` secrets로 release APK를 서명하고 `mobile-patcher-v<version>` Release를 생성합니다. Workflow 실행 시 `patch`, `minor`, `major` 중 하나를 선택하면 기존 `mobile-patcher-v*` Release 중 가장 높은 SemVer를 기준으로 다음 버전을 자동 계산합니다. 기존 Release가 하나도 없으면 최초 버전은 `0.1.0`입니다.
+
+Release가 발행되면 workflow가 `distribution/mobile-patcher-index.json`도 함께 갱신합니다. Mobile Patcher는 앱 시작과 새로고침 시 이 인덱스를 확인하고 현재 `versionCode`보다 새 버전이 있으면 업데이트 패널을 표시합니다. 업데이트 APK는 고정된 GitHub Release URL, SHA-256, 파일 크기, packageName, versionName, versionCode와 현재 앱의 서명 인증서를 검증한 뒤 Android 시스템 설치 화면으로 전달합니다. 업데이트 확인 실패는 Shizuku 및 게임 설치 기능을 차단하지 않습니다.

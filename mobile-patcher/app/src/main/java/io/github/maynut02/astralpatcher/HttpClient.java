@@ -17,7 +17,7 @@ final class HttpClient {
         void onProgress(int percent);
     }
 
-    private static final String USER_AGENT = "AstralMobilePatcher/0.1";
+    private static final String USER_AGENT = "AstralMobilePatcher/" + BuildConfig.VERSION_NAME;
     private static final int MAX_TEXT_RESPONSE_BYTES = 1024 * 1024;
 
     private HttpClient() {}
