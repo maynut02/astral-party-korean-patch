@@ -1,2 +1,3 @@
 -keep class rikka.shizuku.** { *; }
 -dontwarn rikka.shizuku.**
+-keep class io.github.maynut02.astralpatcher.InstallerUserService { *; }

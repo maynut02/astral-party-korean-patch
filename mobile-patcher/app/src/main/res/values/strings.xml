@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Astral Mobile Patcher</string>
+    <string name="app_name">아스트랄 한글패치</string>
     <string name="title">Astral Party 한국어 패치</string>
     <string name="subtitle">Android 모바일 설치 도구</string>
     <string name="status_checking">상태를 확인하는 중입니다.</string>
