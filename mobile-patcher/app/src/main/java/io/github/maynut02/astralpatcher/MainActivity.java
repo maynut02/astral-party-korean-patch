@@ -11,7 +11,6 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
-import android.os.ParcelFileDescriptor;
 import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.util.Log;
@@ -28,6 +27,8 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -44,7 +45,8 @@ public final class MainActivity extends Activity {
     private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer";
     private static final String INSTALLER_SERVICE_DESCRIPTOR =
             "io.github.maynut02.astralpatcher.IInstallerService";
-    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/1";
+    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/2";
+    private static final int INSTALL_CHUNK_SIZE = 128 * 1024;
     private static final int MAX_LOG_CHARS = 24 * 1024;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -441,8 +443,8 @@ public final class MainActivity extends Activity {
 
         appendLog("Shizuku를 통해 게임을 설치하는 중입니다. APK 크기: " + apk.length() + " bytes");
         executor.execute(() -> {
-            try (ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(
-                    apk, ParcelFileDescriptor.MODE_READ_ONLY)) {
+            boolean installStarted = false;
+            try {
                 String serviceInfo = service.getServiceInfo();
                 appendLog("Shizuku 설치 서비스 확인: " + serviceInfo);
                 if (serviceInfo == null || !serviceInfo.startsWith(INSTALLER_SERVICE_PROTOCOL)) {
@@ -450,7 +452,21 @@ public final class MainActivity extends Activity {
                             "설치 서비스 프로토콜 확인에 실패했습니다: " + serviceInfo);
                 }
 
-                String installResult = service.installGameApk(descriptor, apk.length());
+                service.beginInstall(apk.length());
+                installStarted = true;
+                byte[] buffer = new byte[INSTALL_CHUNK_SIZE];
+                try (FileInputStream input = new FileInputStream(apk)) {
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        byte[] chunk = read == buffer.length
+                                ? buffer
+                                : Arrays.copyOf(buffer, read);
+                        service.writeInstallChunk(chunk);
+                    }
+                }
+
+                String installResult = service.finishInstall();
+                installStarted = false;
                 appendLog("pm install 결과: " + installResult);
                 if (installResult == null || installResult.trim().isEmpty()) {
                     throw new IllegalStateException("pm install이 빈 결과를 반환했습니다.");
@@ -466,6 +482,13 @@ public final class MainActivity extends Activity {
                     refreshStatus();
                 });
             } catch (Exception error) {
+                if (installStarted) {
+                    try {
+                        service.cancelInstall();
+                    } catch (Exception cancelError) {
+                        appendLog("Shizuku 설치 작업 취소 중 오류: " + cancelError.getMessage());
+                    }
+                }
                 runOnUiThread(() -> setBusy(false, null));
                 showError("Shizuku 게임 설치에 실패했습니다.", error);
             } finally {
