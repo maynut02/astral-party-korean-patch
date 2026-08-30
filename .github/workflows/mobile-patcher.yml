@@ -3,11 +3,15 @@ name: Mobile Patcher
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Mobile Patcher version (for example 0.1.0)
+      bump:
+        description: Version bump
         required: true
-        default: 0.1.0
-        type: string
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 concurrency:
   group: mobile-patcher-release
@@ -18,6 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     defaults:
       run:
         working-directory: mobile-patcher
@@ -40,27 +47,65 @@ jobs:
         shell: bash
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Validate release version
+      - name: Resolve next Mobile Patcher version
+        id: version
         shell: bash
         env:
-          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Version must use major.minor.patch: $VERSION" >&2
+
+          versions="$(
+            gh release list --limit 1000 --json tagName --jq '.[].tagName' \
+              | sed -nE 's/^mobile-patcher-v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' \
+              | sort -V
+          )"
+
+          if [[ -z "$versions" ]]; then
+            current="none"
+            version="0.1.0"
+          else
+            current="$(printf '%s\n' "$versions" | tail -n 1)"
+            IFS='.' read -r major minor patch <<< "$current"
+
+            case "$BUMP" in
+              patch)
+                patch=$((patch + 1))
+                ;;
+              minor)
+                minor=$((minor + 1))
+                patch=0
+                ;;
+              major)
+                major=$((major + 1))
+                minor=0
+                patch=0
+                ;;
+              *)
+                echo "Unsupported version bump: $BUMP" >&2
+                exit 1
+                ;;
+            esac
+
+            version="${major}.${minor}.${patch}"
+          fi
+
+          tag="mobile-patcher-v${version}"
+          if gh release view "$tag" >/dev/null 2>&1 || \
+             git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Release or tag already exists: $tag" >&2
             exit 1
           fi
 
-          TAG="mobile-patcher-v${VERSION}"
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Release already exists: $TAG" >&2
-            exit 1
-          fi
+          echo "Mobile Patcher version: ${current} -> ${version} (${BUMP})"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Test and build signed release APK
         shell: bash
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -90,8 +135,8 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AstralMobilePatcher-v${{ inputs.version }}
-          path: mobile-patcher/AstralMobilePatcher-v${{ inputs.version }}.apk
+          name: AstralMobilePatcher-v${{ steps.version.outputs.version }}
+          path: mobile-patcher/AstralMobilePatcher-v${{ steps.version.outputs.version }}.apk
 
   release:
     needs: build
@@ -103,16 +148,17 @@ jobs:
       - name: Download release artifact
         uses: actions/download-artifact@v5
         with:
-          name: AstralMobilePatcher-v${{ inputs.version }}
+          name: AstralMobilePatcher-v${{ needs.build.outputs.version }}
 
       - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
-          TAG="mobile-patcher-v${VERSION}"
           gh release create "$TAG" \
             "AstralMobilePatcher-v${VERSION}.apk" \
             --target "$GITHUB_SHA" \
