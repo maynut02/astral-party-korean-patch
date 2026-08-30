@@ -11,6 +11,7 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.ParcelFileDescriptor;
 import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.util.Log;
@@ -27,8 +28,6 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -42,11 +41,10 @@ public final class MainActivity extends Activity {
     private static final String PATCHER_INDEX_URL =
             "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/mobile-patcher-index.json";
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
-    private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer-v3";
+    private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer-v4";
     private static final String INSTALLER_SERVICE_DESCRIPTOR =
             "io.github.maynut02.astralpatcher.IInstallerService";
-    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/3";
-    private static final int INSTALL_CHUNK_SIZE = 128 * 1024;
+    private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/4";
     private static final int INSTALL_VERIFY_ATTEMPTS = 10;
     private static final long INSTALL_VERIFY_DELAY_MS = 200;
     private static final int MAX_LOG_CHARS = 24 * 1024;
@@ -450,7 +448,6 @@ public final class MainActivity extends Activity {
         File apk = request.apk;
         appendLog("Shizuku를 통해 게임을 설치하는 중입니다. APK 크기: " + apk.length() + " bytes");
         executor.execute(() -> {
-            boolean installStarted = false;
             try {
                 String serviceInfo = service.getServiceInfo();
                 appendLog("Shizuku 설치 서비스 확인: " + serviceInfo);
@@ -462,23 +459,12 @@ public final class MainActivity extends Activity {
                             "설치 서비스 프로토콜 확인에 실패했습니다: " + serviceInfo);
                 }
 
-                service.beginInstall(apk.length());
-                installStarted = true;
-                byte[] buffer = new byte[INSTALL_CHUNK_SIZE];
-                try (FileInputStream input = new FileInputStream(apk)) {
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        byte[] chunk = read == buffer.length
-                                ? buffer
-                                : Arrays.copyOf(buffer, read);
-                        service.writeInstallChunk(chunk);
-                    }
+                String installResult;
+                try (ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(
+                        apk, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                    installResult = service.installGameApk(descriptor, apk.length());
                 }
-                appendLog("게임 APK 데이터 전송 완료: " + apk.length() + " bytes");
-                appendLog("Shizuku 설치 서비스 전송 상태: " + service.getServiceInfo());
-
-                service.finishInstallV3();
-                installStarted = false;
+                appendLog("pm install 결과: " + installResult);
                 String completedServiceInfo = service.getServiceInfo();
                 appendLog("Shizuku 설치 서비스 완료 상태: " + completedServiceInfo);
 
@@ -496,13 +482,6 @@ public final class MainActivity extends Activity {
                     appendLog("실패 시 Shizuku 설치 서비스 상태: " + service.getServiceInfo());
                 } catch (Exception statusError) {
                     appendLog("실패 시 설치 서비스 상태 조회 실패: " + statusError.getMessage());
-                }
-                if (installStarted) {
-                    try {
-                        service.cancelInstall();
-                    } catch (Exception cancelError) {
-                        appendLog("Shizuku 설치 작업 취소 중 오류: " + cancelError.getMessage());
-                    }
                 }
                 runOnUiThread(() -> setBusy(false, null));
                 showError("Shizuku 게임 설치에 실패했습니다.", error);

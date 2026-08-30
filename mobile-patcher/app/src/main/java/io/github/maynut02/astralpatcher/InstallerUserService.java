@@ -1,5 +1,6 @@
 package io.github.maynut02.astralpatcher;
 
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 
 import java.io.ByteArrayOutputStream;
@@ -9,18 +10,15 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 public final class InstallerUserService extends IInstallerService.Stub {
+    private static final int BUFFER_SIZE = 128 * 1024;
     private static final int MAX_OUTPUT_BYTES = 64 * 1024;
     private static final int MAX_STATUS_OUTPUT_CHARS = 512;
     private static final long INSTALL_TIMEOUT_SECONDS = 180;
     private static final long OUTPUT_READER_JOIN_TIMEOUT_MS = 5_000;
-    private static final String SERVICE_INFO = "AstralInstallerService/3";
+    private static final String SERVICE_INFO = "AstralInstallerService/4";
 
-    private Process installProcess;
-    private OutputStream installInput;
-    private ByteArrayOutputStream installOutput;
-    private Thread installOutputReader;
-    private long expectedInstallBytes;
-    private long writtenInstallBytes;
+    private boolean installing;
+    private long installSequence;
     private String lastInstallStatus = "idle";
 
     public InstallerUserService() {
@@ -28,26 +26,36 @@ public final class InstallerUserService extends IInstallerService.Stub {
 
     @Override
     public synchronized String getServiceInfo() {
-        String state;
-        if (installProcess != null) {
-            state = "streaming expected=" + expectedInstallBytes + " written=" + writtenInstallBytes;
-        } else {
-            state = lastInstallStatus;
-        }
-        return SERVICE_INFO + " uid=" + android.os.Process.myUid() + " state=" + state;
+        return SERVICE_INFO
+                + " uid=" + android.os.Process.myUid()
+                + " pid=" + android.os.Process.myPid()
+                + " state=" + lastInstallStatus;
     }
 
     @Override
-    public synchronized void beginInstall(long size) throws RemoteException {
-        try {
+    public String installGameApk(ParcelFileDescriptor apk, long size) throws RemoteException {
+        final long installId;
+        synchronized (this) {
+            if (installing) {
+                throw remoteException(new IllegalStateException("An installation is already in progress."));
+            }
+            if (apk == null) {
+                throw remoteException(new IllegalArgumentException("APK file descriptor is missing."));
+            }
             if (size <= 0) {
-                throw new IllegalArgumentException("APK size must be positive.");
+                throw remoteException(new IllegalArgumentException("APK size must be positive."));
             }
-            if (installProcess != null) {
-                throw new IllegalStateException("An installation is already in progress.");
-            }
+            installing = true;
+            installId = ++installSequence;
+            lastInstallStatus = "starting id=" + installId + " expected=" + size;
+        }
 
-            Process process = new ProcessBuilder(
+        Process process = null;
+        Thread outputReader = null;
+        ByteArrayOutputStream commandOutput = new ByteArrayOutputStream();
+        long written = 0;
+        try {
+            process = new ProcessBuilder(
                     "/system/bin/pm",
                     "install",
                     "-r",
@@ -61,87 +69,44 @@ public final class InstallerUserService extends IInstallerService.Stub {
                     .redirectErrorStream(true)
                     .start();
 
-            OutputStream processInput = process.getOutputStream();
-            ByteArrayOutputStream commandOutput = new ByteArrayOutputStream();
-            Thread outputReader = new Thread(
-                    () -> readCommandOutput(process.getInputStream(), commandOutput),
+            Process runningProcess = process;
+            outputReader = new Thread(
+                    () -> readCommandOutput(runningProcess.getInputStream(), commandOutput),
                     "pm-install-output");
+            outputReader.start();
 
-            installProcess = process;
-            installInput = processInput;
-            installOutput = commandOutput;
-            expectedInstallBytes = size;
-            writtenInstallBytes = 0;
-            installOutputReader = outputReader;
-            lastInstallStatus = "starting expected=" + size;
-            installOutputReader.start();
-        } catch (Exception error) {
-            lastInstallStatus = failureStatus(error);
-            cancelInstallInternal();
-            throw remoteException(error);
-        }
-    }
-
-    @Override
-    public synchronized void writeInstallChunk(byte[] data) throws RemoteException {
-        try {
-            if (installProcess == null || installInput == null) {
-                throw new IllegalStateException("No installation is in progress.");
-            }
-            if (data == null || data.length == 0) {
-                throw new IllegalArgumentException("Install chunk is empty.");
-            }
-            long nextWritten = writtenInstallBytes + data.length;
-            if (nextWritten > expectedInstallBytes) {
-                throw new IllegalStateException(
-                        "APK stream exceeds expected size: expected " + expectedInstallBytes
-                                + ", attempted " + nextWritten);
-            }
-
-            installInput.write(data);
-            writtenInstallBytes = nextWritten;
-        } catch (Exception error) {
-            lastInstallStatus = failureStatus(error);
-            cancelInstallInternal();
-            throw remoteException(error);
-        }
-    }
-
-    @Override
-    public String finishInstall() throws RemoteException {
-        finishInstallV3();
-        return getServiceInfo();
-    }
-
-    @Override
-    public void finishInstallV3() throws RemoteException {
-        Process process = null;
-        Thread outputReader = null;
-        ByteArrayOutputStream commandOutput = null;
-        try {
             synchronized (this) {
-                if (installProcess == null || installInput == null) {
-                    throw new IllegalStateException("No installation is in progress.");
-                }
-                if (writtenInstallBytes != expectedInstallBytes) {
-                    throw new IllegalStateException(
-                            "APK stream size mismatch: expected " + expectedInstallBytes
-                                    + ", wrote " + writtenInstallBytes);
-                }
+                lastInstallStatus = "streaming id=" + installId + " expected=" + size;
+            }
 
-                installInput.flush();
-                installInput.close();
-                installInput = null;
-                lastInstallStatus = "finishing expected=" + expectedInstallBytes
-                        + " written=" + writtenInstallBytes;
+            try (ParcelFileDescriptor.AutoCloseInputStream input =
+                         new ParcelFileDescriptor.AutoCloseInputStream(apk);
+                 OutputStream output = process.getOutputStream()) {
+                byte[] buffer = new byte[BUFFER_SIZE];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                    written += read;
+                    if (written > size) {
+                        throw new IllegalStateException(
+                                "APK stream exceeds expected size: expected " + size
+                                        + ", wrote at least " + written);
+                    }
+                }
+                output.flush();
+            }
 
-                process = installProcess;
-                outputReader = installOutputReader;
-                commandOutput = installOutput;
+            if (written != size) {
+                throw new IllegalStateException(
+                        "APK stream size mismatch: expected " + size + ", wrote " + written);
+            }
+
+            synchronized (this) {
+                lastInstallStatus = "finishing id=" + installId + " written=" + written;
             }
 
             if (!process.waitFor(INSTALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroy();
+                process.destroyForcibly();
                 throw new IllegalStateException(
                         "pm install timed out after " + INSTALL_TIMEOUT_SECONDS + " seconds.");
             }
@@ -150,41 +115,43 @@ public final class InstallerUserService extends IInstallerService.Stub {
             }
 
             int exitCode = process.exitValue();
-            String result = new String(
-                    commandOutput.toByteArray(), StandardCharsets.UTF_8).trim();
+            String result = new String(commandOutput.toByteArray(), StandardCharsets.UTF_8).trim();
             if (exitCode != 0) {
                 throw new IllegalStateException(
-                        "pm install failed (exit=" + exitCode + "): " + result);
+                        "pm install failed (exit=" + exitCode + "): " + statusOutput(result));
             }
 
+            String normalizedResult = result.isEmpty() ? "Success (exit=0)" : result;
             synchronized (this) {
-                if (installProcess != process) {
-                    throw new IllegalStateException("Installation state changed before completion.");
-                }
-                lastInstallStatus = "success exit=" + exitCode + " output=" + statusOutput(result);
-                clearInstallState();
+                lastInstallStatus = "success id=" + installId
+                        + " written=" + written
+                        + " output=" + statusOutput(normalizedResult);
             }
+            return normalizedResult;
         } catch (Exception error) {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            if (process != null) {
+                process.destroyForcibly();
+            }
             synchronized (this) {
-                lastInstallStatus = failureStatus(error);
-                if (installProcess == process || process == null) {
-                    cancelInstallInternal();
-                }
+                lastInstallStatus = "failed id=" + installId
+                        + " written=" + written + " " + failureStatus(error);
             }
             throw remoteException(error);
+        } finally {
+            if (outputReader != null && outputReader.isAlive()) {
+                try {
+                    outputReader.join(OUTPUT_READER_JOIN_TIMEOUT_MS);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            synchronized (this) {
+                installing = false;
+            }
         }
-    }
-
-    @Override
-    public synchronized void cancelInstall() {
-        if (installProcess != null) {
-            lastInstallStatus = "cancelled expected=" + expectedInstallBytes
-                    + " written=" + writtenInstallBytes;
-        }
-        cancelInstallInternal();
     }
 
     private static void readCommandOutput(InputStream input, ByteArrayOutputStream output) {
@@ -204,30 +171,8 @@ public final class InstallerUserService extends IInstallerService.Stub {
 
     @Override
     public synchronized void destroy() {
-        cancelInstallInternal();
+        lastInstallStatus = "destroyed";
         System.exit(0);
-    }
-
-    private void cancelInstallInternal() {
-        if (installInput != null) {
-            try {
-                installInput.close();
-            } catch (Exception ignored) {
-            }
-        }
-        if (installProcess != null) {
-            installProcess.destroy();
-        }
-        clearInstallState();
-    }
-
-    private void clearInstallState() {
-        installProcess = null;
-        installInput = null;
-        installOutput = null;
-        installOutputReader = null;
-        expectedInstallBytes = 0;
-        writtenInstallBytes = 0;
     }
 
     private static RemoteException remoteException(Exception error) {
@@ -237,7 +182,7 @@ public final class InstallerUserService extends IInstallerService.Stub {
 
     private static String failureStatus(Exception error) {
         String message = error.getMessage();
-        return "failed " + error.getClass().getSimpleName() + ": "
+        return error.getClass().getSimpleName() + ": "
                 + statusOutput(message == null ? "<no message>" : message);
     }
 
