@@ -113,7 +113,7 @@ def render_android_patcher_notes(
             "",
             "## 파일 확인",
             "",
-            f"- 파일: `AstralAndroidPatcher.apk`",
+            "- 파일: `AstralAndroidPatcher.apk`",
             f"- 크기: `{size}` bytes",
             f"- SHA-256: `{sha256}`",
             "",
