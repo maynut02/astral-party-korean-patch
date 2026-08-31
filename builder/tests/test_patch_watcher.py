@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from tools.patch_watcher import (
     DISPATCH_RETRY_AFTER,
@@ -58,7 +58,7 @@ def test_processed_remote_fingerprint_does_not_dispatch() -> None:
 
 def test_recent_matching_dispatch_waits_for_patch_processing() -> None:
     state = _state()
-    now = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
     record = DispatchRecord(
         fingerprint=state.fingerprint,
         dispatched_at=now - DISPATCH_RETRY_AFTER + timedelta(minutes=1),
@@ -74,7 +74,7 @@ def test_recent_matching_dispatch_waits_for_patch_processing() -> None:
 
 def test_stale_matching_dispatch_is_retried() -> None:
     state = _state()
-    now = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
     record = DispatchRecord(
         fingerprint=state.fingerprint,
         dispatched_at=now - DISPATCH_RETRY_AFTER,
