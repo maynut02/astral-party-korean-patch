@@ -14,9 +14,9 @@
       "catalogHash": "e957842cd48cf573fe2cdb5109480c59",
       "channel": "release",
       "gameVersion": "3.2.0",
-      "manifestSha256": "a6c5693f4a786ca8163ec42593c302d80b7b635b484c1b290a79aa6a287c59c0",
-      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r116_p6/CN_STEAM_manifest.json",
-      "patchVersion": "v3.2.0_r116_p6",
+      "manifestSha256": "45e629b61b429924618b9616ddba43e50e62c6717bfe84aaea173a3b5757c9ee",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r116/CN_STEAM_manifest.json",
+      "patchVersion": "v3.2.0_r116",
       "revision": "116",
       "route": "CN_STEAM"
     },
@@ -44,9 +44,9 @@
       "catalogHash": "1a8b575cfbede4526512d9cbe5044ffe",
       "channel": "release",
       "gameVersion": "3.2.0",
-      "manifestSha256": "1a841b665a19d2ac47a0dab8c7cda29a81addd8d082bb3060c006d34b599b32f",
-      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r116_p6/INT_ANDROID_manifest.json",
-      "patchVersion": "v3.2.0_r116_p6",
+      "manifestSha256": "1712e3b95aeab2948d9a3be069373752464abf5315c0ebd2194316e6bbd25c66",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r116/INT_ANDROID_manifest.json",
+      "patchVersion": "v3.2.0_r116",
       "revision": "116",
       "route": "INT_ANDROID"
     },
@@ -64,9 +64,9 @@
       "catalogHash": "fd58ba01bbca5e5e389b5b73240df134",
       "channel": "release",
       "gameVersion": "3.2.0",
-      "manifestSha256": "25a2138b9dc6fd1d13256bca8bcff216fe0d6e97286a6282411f1a3e8ced6505",
-      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r116_p6/INT_STEAM_manifest.json",
-      "patchVersion": "v3.2.0_r116_p6",
+      "manifestSha256": "0a3d1ef46b43a7424dad4ad019929272590f85f856f440f997a090bedc54646c",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r116/INT_STEAM_manifest.json",
+      "patchVersion": "v3.2.0_r116",
       "revision": "116",
       "route": "INT_STEAM"
     }
