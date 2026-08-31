@@ -1,4 +1,4 @@
-package io.github.maynut02.astralpatcher;
+package com.maynutlab.astralpatcher;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;

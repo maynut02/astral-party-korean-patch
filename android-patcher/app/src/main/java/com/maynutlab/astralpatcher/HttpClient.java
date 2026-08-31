@@ -1,4 +1,4 @@
-package io.github.maynut02.astralpatcher;
+package com.maynutlab.astralpatcher;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;

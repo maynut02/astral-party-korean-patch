@@ -1,4 +1,4 @@
-package io.github.maynut02.astralpatcher;
+package com.maynutlab.astralpatcher;
 
 import android.app.Activity;
 import android.content.ComponentName;
@@ -43,7 +43,7 @@ public final class MainActivity extends Activity {
     private static final int SHIZUKU_PERMISSION_REQUEST = 1001;
     private static final String INSTALLER_USER_SERVICE_TAG = "astral-game-installer-v5";
     private static final String INSTALLER_SERVICE_DESCRIPTOR =
-            "io.github.maynut02.astralpatcher.IInstallerService";
+            "com.maynutlab.astralpatcher.IInstallerService";
     private static final String INSTALLER_SERVICE_PROTOCOL = "AstralInstallerService/5";
     private static final int INSTALL_VERIFY_ATTEMPTS = 10;
     private static final long INSTALL_VERIFY_DELAY_MS = 200;
@@ -67,6 +67,7 @@ public final class MainActivity extends Activity {
     private MobilePatcherRelease latestPatcher;
     private File pendingSystemInstall;
     private GameInstallRequest pendingGameInstall;
+    private boolean pendingProtocolInstall;
     private IInstallerService installerService;
     private Shizuku.UserServiceArgs installerServiceArgs;
     private boolean installerServiceBinding;
@@ -158,7 +159,34 @@ public final class MainActivity extends Activity {
         Shizuku.addBinderReceivedListenerSticky(binderReceivedListener);
         Shizuku.addBinderDeadListener(binderDeadListener);
         Shizuku.addRequestPermissionResultListener(permissionResultListener);
+        handleProtocolIntent(getIntent());
         refreshStatus();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (handleProtocolIntent(intent)) {
+            refreshStatus();
+        }
+    }
+
+    private boolean handleProtocolIntent(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())) {
+            return false;
+        }
+
+        Uri uri = intent.getData();
+        if (uri == null
+                || !"astralpatcher".equalsIgnoreCase(uri.getScheme())
+                || !"install-latest".equalsIgnoreCase(uri.getHost())) {
+            return false;
+        }
+
+        pendingProtocolInstall = true;
+        appendLog("외부 요청을 확인했습니다. 최신 INT APK를 확인한 뒤 설치합니다.");
+        return true;
     }
 
     private void applySystemBarInsets() {
@@ -247,6 +275,10 @@ public final class MainActivity extends Activity {
                     gameStatus.setText((installed == null ? "설치되지 않음" : "설치됨: " + installed)
                             + "\n최신 한국어판: " + index.gameVersion);
                     updateActionAvailability();
+                    if (pendingProtocolInstall && !busy && isShizukuReady()) {
+                        pendingProtocolInstall = false;
+                        downloadLatestGame();
+                    }
                 });
             } catch (Exception error) {
                 latestGame = null;

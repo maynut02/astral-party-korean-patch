@@ -1,4 +1,4 @@
-package io.github.maynut02.astralpatcher;
+package com.maynutlab.astralpatcher;
 
 import org.json.JSONException;
 import org.json.JSONObject;

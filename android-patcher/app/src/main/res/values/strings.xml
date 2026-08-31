@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">아스트랄 한글패치</string>
-    <string name="title">Astral Party 한국어 패치</string>
+    <string name="app_name">아스트랄 파티 한글패치</string>
+    <string name="title">아스트랄 파티 한글패치</string>
     <string name="status_checking">상태를 확인하는 중입니다.</string>
     <string name="shizuku_install">Shizuku 다운로드 및 설치</string>
     <string name="shizuku_open">Shizuku 열기</string>

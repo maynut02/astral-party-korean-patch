@@ -20,11 +20,11 @@ fun versionCodeFrom(version: String): Int {
 }
 
 android {
-    namespace = "io.github.maynut02.astralpatcher"
+    namespace = "com.maynutlab.astralpatcher"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.maynut02.astralpatcher"
+        applicationId = "com.maynutlab.astralpatcher"
         minSdk = 30
         targetSdk = 36
         versionCode = versionCodeFrom(appVersionName)
