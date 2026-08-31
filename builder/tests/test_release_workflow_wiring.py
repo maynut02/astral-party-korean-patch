@@ -45,4 +45,4 @@ def test_android_release_uses_generated_notes_file() -> None:
     assert "--notes-file .work/android-release-notes.md" in text
     assert "int-apk-v" in text
     assert 'INT_APK v$GAME_VERSION' in text
-    assert "AstralPartyPatch.apk" in text
+    assert "AstralPartyKorean.apk" in text

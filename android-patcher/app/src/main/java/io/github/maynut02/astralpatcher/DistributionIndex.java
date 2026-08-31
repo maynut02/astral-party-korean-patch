@@ -36,7 +36,7 @@ final class DistributionIndex {
         String gameVersion = root.getString("gameVersion");
         String downloadUrl = root.getString("downloadUrl");
         String expectedUrl = "https://github.com/maynut02/astral-party-korean-patch/releases/download/"
-                + "int-apk-v" + gameVersion + "/AstralPartyPatch.apk";
+                + "int-apk-v" + gameVersion + "/AstralPartyKorean.apk";
         if (!downloadUrl.equals(expectedUrl)) {
             throw new JSONException("신뢰하지 않는 게임 APK 다운로드 주소입니다.");
         }

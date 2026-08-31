@@ -13,7 +13,7 @@ public final class DistributionIndexTest {
                   "schemaVersion": 1,
                   "packageName": "com.feimo.astralpartyjpn",
                   "gameVersion": "3.2.0",
-                  "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/int-apk-v3.2.0/AstralPartyPatch.apk",
+                  "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/int-apk-v3.2.0/AstralPartyKorean.apk",
                   "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "size": 1234,
                   "installerPackageName": "com.android.vending"
@@ -33,7 +33,7 @@ public final class DistributionIndexTest {
                   "schemaVersion": 1,
                   "packageName": "com.feimo.astralpartyjpn",
                   "gameVersion": "3.2.0",
-                  "downloadUrl": "https://example.test/AstralPartyPatch.apk",
+                  "downloadUrl": "https://example.test/AstralPartyKorean.apk",
                   "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "size": 1234,
                   "installerPackageName": "com.android.vending"

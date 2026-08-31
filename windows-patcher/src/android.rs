@@ -106,7 +106,7 @@ impl AndroidApkIndex {
             return Err(AndroidError::InvalidIndex("invalid APK SHA-256".into()));
         }
         let expected_url = format!(
-            "{}/int-apk-v{}/AstralPartyPatch.apk",
+            "{}/int-apk-v{}/AstralPartyKorean.apk",
             release_base_url.trim_end_matches('/'),
             self.game_version
         );
@@ -1269,7 +1269,7 @@ mod tests {
             schema_version: 1,
             package_name: ANDROID_PACKAGE.into(),
             game_version: "3.2.0".into(),
-            download_url: "https://github.com/example/repo/releases/download/int-apk-v3.2.0/AstralPartyPatch.apk".into(),
+            download_url: "https://github.com/example/repo/releases/download/int-apk-v3.2.0/AstralPartyKorean.apk".into(),
             sha256: "a".repeat(64),
             size: 123,
             installer_package_name: PLAY_INSTALLER_PACKAGE.into(),

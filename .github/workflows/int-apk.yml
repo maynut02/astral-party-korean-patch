@@ -221,13 +221,13 @@ jobs:
             find .work/lspatch-final -maxdepth 1 -type f -printf '%f\n' >&2 || true
             exit 1
           fi
-          cp "${PATCHED_APKS[0]}" output/android/AstralPartyPatch.apk
+          cp "${PATCHED_APKS[0]}" output/android/AstralPartyKorean.apk
           python3 - <<'PYMETA'
           import json
           from pathlib import Path
 
           source = Path('.work/android-input/korean-pre-lspatch.apk.json')
-          target = Path('output/android/AstralPartyPatch.apk.json')
+          target = Path('output/android/AstralPartyKorean.apk.json')
           metadata = json.loads(source.read_text(encoding='utf-8'))
           metadata['output'] = str(target.with_suffix(''))
           target.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
@@ -236,14 +236,14 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
             --verbose \
             --print-certs \
-            output/android/AstralPartyPatch.apk
+            output/android/AstralPartyKorean.apk
 
       - name: Read APK metadata
         id: apk
         shell: bash
         run: |
           set -euo pipefail
-          APK=output/android/AstralPartyPatch.apk
+          APK=output/android/AstralPartyKorean.apk
           META="$APK.json"
           GAME_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["baseVersionName"])' "$META")"
           if [ -z "$GAME_VERSION" ] || [ "${GAME_VERSION,,}" = "unknown" ]; then
@@ -298,7 +298,7 @@ jobs:
             git push origin ":refs/tags/$TAG"
           fi
           gh release create "$TAG" \
-            output/android/AstralPartyPatch.apk \
+            output/android/AstralPartyKorean.apk \
             --target "$GITHUB_SHA" \
             --title "INT_APK v$GAME_VERSION" \
             --notes-file .work/android-release-notes.md
@@ -313,7 +313,7 @@ jobs:
         run: |
           set -euo pipefail
           INDEX="$RUNNER_TEMP/android-apk-index.json"
-          DOWNLOAD_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/AstralPartyPatch.apk"
+          DOWNLOAD_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/AstralPartyKorean.apk"
           python3 - "$INDEX" "$GAME_VERSION" "$DOWNLOAD_URL" "$SHA256" "$SIZE" <<'PYINDEX'
           import json
           import sys
