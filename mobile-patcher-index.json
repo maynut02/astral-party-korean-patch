@@ -1,7 +1,7 @@
 {
-  "version": "0.2.0",
-  "versionCode": 2000,
-  "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/android-patcher-v0.2.0/AstralAndroidPatcher.apk",
-  "sha256": "b4efafe90d0b25a0187025c1c7cb1c20c578297cf22d9be3ac7f223943d6fcd9",
-  "size": 843047
+  "version": "0.3.0",
+  "versionCode": 3000,
+  "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/android-patcher-v0.3.0/AstralAndroidPatcher.apk",
+  "sha256": "e21baedde61ce62935e710cfff0a949ea1021f9c1daab7b3b683fa4cce3727d3",
+  "size": 843767
 }
