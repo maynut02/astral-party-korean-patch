@@ -101,7 +101,7 @@ def _readme(route: str, manifest: dict[str, object]) -> str:
 
 [참고]
 - 이 압축파일은 수동 설치용입니다.
-- 자동 설치/업데이트 및 원본 복구가 필요하면 AstralAutoPatcher 사용을 권장합니다.
+- 자동 설치/업데이트 및 원본 복구가 필요하면 WindowsPatcher 사용을 권장합니다.
 """
 
 

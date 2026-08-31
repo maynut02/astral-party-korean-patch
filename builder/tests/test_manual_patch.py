@@ -82,7 +82,7 @@ def test_builds_manual_zip_with_install_ready_tree(
         readme = archive.read("설치방법.txt").decode("utf-8")
         assert locallow in readme
         assert executable in readme
-        assert "AstralAutoPatcher" in readme
+        assert "WindowsPatcher" in readme
 
 
 def test_rejects_android_manual_package(tmp_path: Path) -> None:

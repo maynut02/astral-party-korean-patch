@@ -1,0 +1,234 @@
+name: WindowsPatcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: windows-patcher-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows-patcher
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      ASTRAL_PATCH_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
+      ASTRAL_PATCHER_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/patcher-index.json
+      ASTRAL_PATCHER_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
+      ASTRAL_ANDROID_APK_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/android-apk-index.json
+      ASTRAL_ANDROID_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Resolve next WindowsPatcher version
+        id: version
+        shell: pwsh
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $versions = gh release list --limit 1000 --json tagName --jq '.[].tagName' |
+            ForEach-Object {
+              if ($_ -match '^windows-patcher-v(\d+)\.(\d+)\.(\d+)$') {
+                [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+              }
+            }
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to read existing WindowsPatcher releases.'
+          }
+
+          $candidates = @($versions)
+
+          $indexJson = gh api `
+            -H 'Accept: application/vnd.github.raw+json' `
+            "repos/$env:GITHUB_REPOSITORY/contents/patcher-index.json?ref=distribution" 2>$null
+          $indexStatus = $LASTEXITCODE
+          if ($indexStatus -eq 0 -and $indexJson) {
+            $indexVersion = ($indexJson | ConvertFrom-Json).version
+            if ($indexVersion -match '^\d+\.\d+\.\d+$') {
+              $candidates += [version]$indexVersion
+            }
+          }
+
+          $cargo = Get-Content 'Cargo.toml' -Raw
+          $cargoMatch = [regex]::Match(
+            $cargo,
+            '(?ms)^\[package\].*?^version\s*=\s*"([^"]+)"'
+          )
+          if (-not $cargoMatch.Success) {
+            throw 'Could not read the Cargo package version.'
+          }
+          $candidates += [version]$cargoMatch.Groups[1].Value
+          $current = $candidates | Sort-Object -Descending | Select-Object -First 1
+
+          switch ($env:BUMP) {
+            'patch' { $next = [version]::new($current.Major, $current.Minor, $current.Build + 1) }
+            'minor' { $next = [version]::new($current.Major, $current.Minor + 1, 0) }
+            'major' { $next = [version]::new($current.Major + 1, 0, 0) }
+            default { throw "Unsupported version bump: $env:BUMP" }
+          }
+
+          $version = $next.ToString(3)
+          $cargo = Get-Content 'Cargo.toml' -Raw
+          $cargo = [regex]::Replace(
+            $cargo,
+            '(?ms)(^\[package\].*?^version\s*=\s*)"[^"]+"',
+            "`$1`"$version`"",
+            1
+          )
+          Set-Content -Path 'Cargo.toml' -Value $cargo -Encoding utf8NoBOM -NoNewline
+
+          $lock = Get-Content 'Cargo.lock' -Raw
+          $lock = [regex]::Replace(
+            $lock,
+            '(?ms)(^\[\[package\]\]\r?\nname = "astral-auto-patcher"\r?\nversion = )"[^"]+"',
+            "`$1`"$version`"",
+            1
+          )
+          Set-Content -Path 'Cargo.lock' -Value $lock -Encoding utf8NoBOM -NoNewline
+
+          if ((Get-Content 'Cargo.toml' -Raw) -notmatch "(?m)^version\s*=\s*`"$([regex]::Escape($version))`"$") {
+            throw 'Failed to update Cargo.toml version.'
+          }
+          if ((Get-Content 'Cargo.lock' -Raw) -notmatch "(?ms)^\[\[package\]\]\r?\nname = `"astral-auto-patcher`"\r?\nversion = `"$([regex]::Escape($version))`"") {
+            throw 'Failed to update Cargo.lock version.'
+          }
+
+          Write-Host "WindowsPatcher version: $current -> $version ($env:BUMP)"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=windows-patcher-v$version" >> $env:GITHUB_OUTPUT
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Rust tests
+        run: cargo test --locked --all-targets --all-features
+      - name: Rust clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Build portable EXE
+        run: cargo build --locked --release --bin AstralAutoPatcher
+      - name: Verify EXE
+        id: executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $builtExe = Get-Item 'target/release/AstralAutoPatcher.exe'
+          if ($builtExe.Length -le 0) {
+            throw 'AstralAutoPatcher.exe is empty.'
+          }
+          $releaseExe = Join-Path $env:RUNNER_TEMP 'AstralWindowsPatcher.exe'
+          Copy-Item $builtExe.FullName $releaseExe
+          $exe = Get-Item $releaseExe
+          $sha256 = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
+          "size=$($exe.Length)" >> $env:GITHUB_OUTPUT
+          Write-Host "Executable: $($exe.Name)"
+          Write-Host "SHA-256: $sha256"
+      - name: Upload portable patcher artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: AstralWindowsPatcher-${{ steps.version.outputs.version }}-windows-x64
+          path: ${{ steps.executable.outputs.path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Write release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.executable.outputs.sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python ../tools/workflow/release_notes.py windows-patcher `
+            --output "$env:RUNNER_TEMP/windows-patcher-release-notes.md" `
+            --version "$env:VERSION" `
+            --sha256 "$env:SHA256" `
+            --repository "$env:GITHUB_REPOSITORY" `
+            --run-id "$env:GITHUB_RUN_ID" `
+            --run-number "$env:GITHUB_RUN_NUMBER"
+
+      - name: Publish immutable WindowsPatcher release
+        shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          EXE: ${{ steps.executable.outputs.path }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release $env:TAG already exists; patcher releases are immutable."
+          }
+          git ls-remote --exit-code --tags origin "refs/tags/$env:TAG" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tag $env:TAG already exists; patcher release tags are immutable."
+          }
+          gh release create $env:TAG `
+            $env:EXE `
+            --target $env:GITHUB_SHA `
+            --title "WindowsPatcher v$env:VERSION" `
+            --notes-file "$env:RUNNER_TEMP/windows-patcher-release-notes.md"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to publish patcher release $env:TAG."
+          }
+
+      - name: Update WindowsPatcher distribution index
+        shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.executable.outputs.sha256 }}
+          SIZE: ${{ steps.executable.outputs.size }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $indexPath = Join-Path $env:RUNNER_TEMP 'patcher-index.json'
+          $metadata = [ordered]@{
+            schemaVersion = 1
+            version = $env:VERSION
+            downloadUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:TAG/AstralWindowsPatcher.exe"
+            sha256 = $env:SHA256
+            size = [int64]$env:SIZE
+          }
+          $metadata | ConvertTo-Json | Set-Content -Path $indexPath -Encoding utf8NoBOM
+          python ../tools/distribution/publish_file.py `
+            --source $indexPath `
+            --path patcher-index.json `
+            --message "chore: update WindowsPatcher distribution index"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to publish patcher-index.json to the distribution branch.'
+          }
+
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view patcher-index *> $null
+          $legacyIndexExists = $LASTEXITCODE -eq 0
+          if ($legacyIndexExists) {
+            gh release upload patcher-index $indexPath --clobber
+            if ($LASTEXITCODE -ne 0) {
+              Write-Warning 'Failed to mirror the legacy patcher-index release.'
+            }
+          }
+          $global:LASTEXITCODE = 0

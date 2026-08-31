@@ -40,8 +40,8 @@ def test_patch_notes_reject_unknown_route() -> None:
         )
 
 
-def test_autopatcher_notes_are_concise_and_include_hash_and_run() -> None:
-    text = MODULE.render_autopatcher_notes(
+def test_windows_patcher_notes_are_concise_and_include_hash_and_run() -> None:
+    text = MODULE.render_windows_patcher_notes(
         version="0.8.7",
         sha256="a" * 64,
         repository="owner/repo",
@@ -49,9 +49,27 @@ def test_autopatcher_notes_are_concise_and_include_hash_and_run() -> None:
         run_number="2",
     )
     assert "Windows x64" in text
-    assert "AstralAutoPatcher.exe" in text
+    assert "AstralWindowsPatcher.exe" in text
     assert "a" * 64 in text
     assert "/actions/runs/10" in text
+
+
+def test_android_patcher_notes_include_requirements_and_artifact_details() -> None:
+    text = MODULE.render_android_patcher_notes(
+        version="0.1.0",
+        version_code="1000",
+        sha256="c" * 64,
+        size="123456",
+        repository="owner/repo",
+        run_id="12",
+        run_number="4",
+    )
+    assert "Android 11" in text
+    assert "Shizuku" in text
+    assert "AstralAndroidPatcher.apk" in text
+    assert "123456" in text
+    assert "c" * 64 in text
+    assert "/actions/runs/12" in text
 
 
 def test_android_notes_include_install_and_restart_guidance() -> None:
@@ -62,6 +80,7 @@ def test_android_notes_include_install_and_restart_guidance() -> None:
         run_id="11",
         run_number="3",
     )
-    assert "AstralAutoPatcher" in text
+    assert "AndroidPatcher" in text
+    assert "WindowsPatcher" in text
     assert "다시 실행" in text
     assert "b" * 64 in text

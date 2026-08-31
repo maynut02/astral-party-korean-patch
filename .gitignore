@@ -8,7 +8,7 @@ build/
 *.egg-info/
 
 # Rust
-patcher/target/
+windows-patcher/target/
 
 # Environment / secrets
 .env
@@ -32,7 +32,7 @@ patcher/target/
 .idea/
 .gradle/
 local.properties
-mobile-patcher/AstralMobilePatcher-v*.apk
+android-patcher/AstralAndroidPatcher.apk
 .DS_Store
 Thumbs.db
 
