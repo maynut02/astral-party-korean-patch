@@ -56,6 +56,8 @@ def test_patch_workflow_has_no_github_cron_and_pre_is_change_driven() -> None:
     triggers = workflow[True] if True in workflow else workflow["on"]
     assert "schedule" not in triggers
     assert "workflow_dispatch" in triggers
+    assert "game_version" in triggers["workflow_dispatch"]["inputs"]
+    assert "inputs.game_version" in workflow["env"]["GAME_VERSION"]
     jobs = workflow["jobs"]
     aggregate_script = next(
         step["run"]

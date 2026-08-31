@@ -28,7 +28,25 @@ Android판은 Windows의 `WindowsPatcher` 또는 Android의 `AndroidPatcher`를 
 - `routes/` — route별 게임/번역/리소스 설정
 - `resources/` — 패치 생성에 필요한 route별 리소스
 - `schemas/` — release/manifest 설정 스키마
+- `tools/patch_watcher.py` — 자체 서버에서 게임 revision/hash를 감시하고 변경 시 Patch workflow를 호출하는 경량 watcher
 - `.github/workflows/` — CI 및 릴리즈 자동화
+
+## Patch watcher
+
+`database/migrations/0005_patch_watcher.sql` 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 `release` 모드로 실행합니다.
+
+```sql
+UPDATE patch_watch_config
+SET game_version = '3.3.0', updated_at = now()
+WHERE singleton = true;
+```
+
+서버에서는 `DATABASE_URL`과 repository Actions 실행 권한이 있는 `GITHUB_TOKEN`만 필요합니다. Builder 전체를 설치할 필요 없이 아래처럼 PostgreSQL 드라이버 하나만 설치하고 watcher를 5분 주기로 실행하면 됩니다. 동일 변경의 workflow가 아직 DB에 처리되지 않은 경우 30분 뒤 한 번 더 dispatch할 수 있습니다.
+
+```bash
+python -m pip install -r tools/patch_watcher_requirements.txt
+python tools/patch_watcher.py
+```
 
 ## 개발
 

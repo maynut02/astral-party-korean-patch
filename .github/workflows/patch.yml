@@ -11,6 +11,10 @@ on:
         options:
           - release
           - pre
+      game_version:
+        description: Game version override supplied by the patch watcher
+        required: false
+        type: string
 
 concurrency:
   group: patch-pipeline
@@ -20,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  GAME_VERSION: ${{ vars.GAME_VERSION || '3.2.0' }}
+  GAME_VERSION: ${{ inputs.game_version || vars.GAME_VERSION || '3.2.0' }}
   RELEASE_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
 
 jobs:
