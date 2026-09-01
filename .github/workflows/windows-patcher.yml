@@ -32,8 +32,6 @@ jobs:
       ASTRAL_PATCH_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
       ASTRAL_PATCHER_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/patcher-index.json
       ASTRAL_PATCHER_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
-      ASTRAL_ANDROID_APK_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/android-apk-index.json
-      ASTRAL_ANDROID_RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6

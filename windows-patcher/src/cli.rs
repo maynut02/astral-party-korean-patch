@@ -30,12 +30,6 @@ const FALLBACK_PATCHER_INDEX_URL: &str = "https://raw.githubusercontent.com/mayn
 #[cfg(windows)]
 const FALLBACK_PATCHER_RELEASE_BASE_URL: &str =
     "https://github.com/maynut02/astral-party-korean-patch/releases/download";
-#[cfg(windows)]
-const FALLBACK_ANDROID_APK_INDEX_URL: &str = "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/android-apk-index.json";
-#[cfg(windows)]
-const FALLBACK_ANDROID_RELEASE_BASE_URL: &str =
-    "https://github.com/maynut02/astral-party-korean-patch/releases/download";
-
 #[derive(Debug, Error)]
 pub enum CliError {
     #[error(transparent)]
@@ -77,20 +71,6 @@ fn patcher_release_base_url() -> &'static str {
 }
 
 #[cfg(windows)]
-fn android_apk_index_url() -> &'static str {
-    option_env!("ASTRAL_ANDROID_APK_INDEX_URL")
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(FALLBACK_ANDROID_APK_INDEX_URL)
-}
-
-#[cfg(windows)]
-fn android_release_base_url() -> &'static str {
-    option_env!("ASTRAL_ANDROID_RELEASE_BASE_URL")
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(FALLBACK_ANDROID_RELEASE_BASE_URL)
-}
-
-#[cfg(windows)]
 fn load_initial_settings(paths: &PatcherPaths) -> Result<AppSettings, CliError> {
     let mut settings = AppSettings::load(&paths.settings_path)?;
     settings.auto_detect_missing();
@@ -126,7 +106,7 @@ pub fn run() -> Result<(), CliError> {
     }
 
     let migration = migrate_legacy_state(&paths)?;
-    if !migration.moved.is_empty() || !migration.discarded_legacy_cache.is_empty() {
+    if !migration.moved.is_empty() {
         for item in &migration.moved {
             logging::info(format!(
                 "migrated legacy state: {} -> {}",
@@ -134,16 +114,9 @@ pub fn run() -> Result<(), CliError> {
                 item.destination.display()
             ));
         }
-        for path in &migration.discarded_legacy_cache {
-            logging::info(format!(
-                "discarded superseded legacy Android cache: {}",
-                path.display()
-            ));
-        }
         startup_notices.push(format!(
-            "기존 로컬 상태를 새 저장 구조로 정리했습니다. 이동 {}개, 이전 캐시 정리 {}개",
-            migration.moved.len(),
-            migration.discarded_legacy_cache.len()
+            "기존 로컬 상태를 새 저장 구조로 정리했습니다. 이동 {}개",
+            migration.moved.len()
         ));
     }
 
@@ -201,8 +174,6 @@ pub fn run() -> Result<(), CliError> {
         startup_notice,
         RemoteEndpoints {
             patch_release_index: release_index_url(),
-            android_apk_index: android_apk_index_url(),
-            android_release_base: android_release_base_url(),
         },
     )?;
     logging::info("WindowsPatcher exited normally");

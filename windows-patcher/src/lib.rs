@@ -1,4 +1,3 @@
-pub mod android;
 pub mod cli;
 pub mod game;
 pub mod install;

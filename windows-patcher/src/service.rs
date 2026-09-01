@@ -66,7 +66,6 @@ pub struct StateMigrationItem {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StateMigrationReport {
     pub moved: Vec<StateMigrationItem>,
-    pub discarded_legacy_cache: Vec<PathBuf>,
 }
 
 impl PatcherPaths {
@@ -93,10 +92,6 @@ impl PatcherPaths {
         self.route_state_slug(route.slug())
     }
 
-    pub fn android_state_root(&self) -> PathBuf {
-        self.routes_root.join("int-android")
-    }
-
     fn route_state_slug(&self, slug: &str) -> RouteStatePaths {
         let root = self.routes_root.join(slug);
         RouteStatePaths {
@@ -120,7 +115,6 @@ impl RouteStatePaths {
 pub fn migrate_legacy_state(paths: &PatcherPaths) -> Result<StateMigrationReport, ServiceError> {
     let int_state = paths.route_state(GameRoute::IntSteam);
     let cn_state = paths.route_state(GameRoute::CnSteam);
-    let android_root = paths.android_state_root();
 
     // CN legacy backup/staging lived below the INT legacy directories. Move those children first
     // so the remaining parent directories contain only INT state when they are migrated.
@@ -166,20 +160,6 @@ pub fn migrate_legacy_state(paths: &PatcherPaths) -> Result<StateMigrationReport
         move_legacy_path(&source, &destination, &mut report)?;
     }
 
-    // Android APKs and managed Platform-Tools are disposable caches. v0.8.6 already wrote the
-    // APK to routes/int-android while older cache directories could still remain at the root.
-    // Prefer the new cache if both exist instead of blocking startup.
-    migrate_disposable_cache(
-        &paths.state_root.join("android"),
-        &android_root,
-        &mut report,
-    )?;
-    migrate_disposable_cache(
-        &paths.state_root.join("tools"),
-        &android_root.join("tools"),
-        &mut report,
-    )?;
-
     Ok(report)
 }
 
@@ -200,26 +180,6 @@ fn move_legacy_path(
         destination: destination.to_owned(),
     });
     Ok(())
-}
-
-fn migrate_disposable_cache(
-    source: &Path,
-    destination: &Path,
-    report: &mut StateMigrationReport,
-) -> Result<(), ServiceError> {
-    if !source.exists() {
-        return Ok(());
-    }
-    if destination.exists() {
-        if source.is_dir() {
-            fs::remove_dir_all(source)?;
-        } else {
-            fs::remove_file(source)?;
-        }
-        report.discarded_legacy_cache.push(source.to_owned());
-        return Ok(());
-    }
-    move_legacy_path(source, destination, report)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -666,22 +626,16 @@ mod tests {
         assert_eq!(cn.ownership_path, cn.root.join("installed.json"));
         assert_eq!(cn.backup_root, cn.root.join("backup"));
         assert_eq!(cn.staging_root, cn.root.join("staging"));
-        assert_eq!(
-            paths.android_state_root(),
-            paths.routes_root.join("int-android")
-        );
         assert!(!int.root.starts_with(&cn.root));
         assert!(!cn.root.starts_with(&int.root));
     }
 
     #[test]
-    fn migrates_legacy_route_and_android_state_without_cross_contamination() {
+    fn migrates_legacy_route_state_without_cross_contamination() {
         let temp = tempdir().unwrap();
         let paths = PatcherPaths::below(temp.path().join("state"));
         fs::create_dir_all(paths.state_root.join("backup/cn-steam")).unwrap();
         fs::create_dir_all(paths.state_root.join("staging/cn-steam")).unwrap();
-        fs::create_dir_all(paths.state_root.join("android/apk")).unwrap();
-        fs::create_dir_all(paths.state_root.join("tools/platform-tools")).unwrap();
         fs::write(paths.state_root.join("installed.json"), b"int").unwrap();
         fs::write(paths.state_root.join("installed-cn-steam.json"), b"cn").unwrap();
         fs::write(paths.state_root.join("backup/int.dat"), b"int-backup").unwrap();
@@ -696,15 +650,9 @@ mod tests {
             b"cn-stage",
         )
         .unwrap();
-        fs::write(paths.state_root.join("android/apk/game.apk"), b"apk").unwrap();
-        fs::write(
-            paths.state_root.join("tools/platform-tools/adb.exe"),
-            b"adb",
-        )
-        .unwrap();
 
         let report = migrate_legacy_state(&paths).unwrap();
-        assert_eq!(report.moved.len(), 8);
+        assert_eq!(report.moved.len(), 6);
         let int = paths.route_state(GameRoute::IntSteam);
         let cn = paths.route_state(GameRoute::CnSteam);
         assert_eq!(fs::read(&int.ownership_path).unwrap(), b"int");
@@ -721,40 +669,6 @@ mod tests {
         assert_eq!(
             fs::read(cn.staging_root.join("cn.dat")).unwrap(),
             b"cn-stage"
-        );
-        assert_eq!(
-            fs::read(paths.android_state_root().join("apk/game.apk")).unwrap(),
-            b"apk"
-        );
-        assert_eq!(
-            fs::read(
-                paths
-                    .android_state_root()
-                    .join("tools/platform-tools/adb.exe")
-            )
-            .unwrap(),
-            b"adb"
-        );
-    }
-
-    #[test]
-    fn migration_discards_old_android_cache_when_v086_cache_already_exists() {
-        let temp = tempdir().unwrap();
-        let paths = PatcherPaths::below(temp.path().join("state"));
-        fs::create_dir_all(paths.state_root.join("android/apk")).unwrap();
-        fs::write(paths.state_root.join("android/apk/old.apk"), b"old").unwrap();
-        fs::create_dir_all(paths.android_state_root().join("apk")).unwrap();
-        fs::write(paths.android_state_root().join("apk/new.apk"), b"new").unwrap();
-
-        let report = migrate_legacy_state(&paths).unwrap();
-        assert_eq!(
-            report.discarded_legacy_cache,
-            vec![paths.state_root.join("android")]
-        );
-        assert!(!paths.state_root.join("android").exists());
-        assert_eq!(
-            fs::read(paths.android_state_root().join("apk/new.apk")).unwrap(),
-            b"new"
         );
     }
 
