@@ -91,6 +91,53 @@ class PatchProtocolTest {
         )
     }
 
+    @Test
+    fun parsesPatchDiagnosticsWithJournalSnapshot() {
+        val transactionId = "12345678-1234-1234-1234-123456789abc"
+        val diagnostics = PatchProtocol.parsePatchDiagnostics(
+            """
+            {
+              "schemaVersion": 1,
+              "serviceInfo": "AstralPatchService/3 uid=2000 pid=1234",
+              "transactionId": "$transactionId",
+              "events": [
+                {
+                  "timestampMs": 1700000000000,
+                  "elapsedRealtimeNanos": 123456789,
+                  "pid": 1234,
+                  "uid": 2000,
+                  "thread": "Binder:1234_1",
+                  "transactionId": "$transactionId",
+                  "stage": "journal_written",
+                  "detail": "journalExists=true journalBytes=80 journalEntries=1"
+                }
+              ],
+              "transaction": {
+                "exists": true,
+                "path": "/storage/emulated/0/Android/data/game/files/.astral/transactions/$transactionId",
+                "catalogExists": true,
+                "catalogBytes": 32,
+                "journalExists": true,
+                "journalBytes": 80,
+                "journalEntries": 1,
+                "journalReadError": "",
+                "previousFiles": 1,
+                "stagingFiles": 1
+              },
+              "diagnosticsFileExists": true,
+              "diagnosticsFileBytes": 1024,
+              "readError": ""
+            }
+            """.trimIndent(),
+            transactionId,
+        )
+
+        assertEquals("journal_written", diagnostics.events.single().stage)
+        assertEquals(1234, diagnostics.events.single().pid)
+        assertEquals(1, diagnostics.transaction.journalEntries)
+        assertTrue(diagnostics.transaction.journalExists)
+    }
+
     private fun indexJson(): String = """
         {
           "schemaVersion": 1,

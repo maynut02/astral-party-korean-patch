@@ -60,6 +60,39 @@ data class PatchTargetInspection(
         get() = total > 0 && ready == total && missing == 0 && incompatible == 0
 }
 
+data class PatchDiagnosticEvent(
+    val timestampMs: Long,
+    val elapsedRealtimeNanos: Long,
+    val pid: Int,
+    val uid: Int,
+    val thread: String,
+    val stage: String,
+    val detail: String,
+)
+
+data class PatchTransactionSnapshot(
+    val exists: Boolean,
+    val path: String,
+    val catalogExists: Boolean,
+    val catalogBytes: Long,
+    val journalExists: Boolean,
+    val journalBytes: Long,
+    val journalEntries: Int,
+    val journalReadError: String,
+    val previousFiles: Int,
+    val stagingFiles: Int,
+)
+
+data class PatchDiagnostics(
+    val serviceInfo: String,
+    val transactionId: String,
+    val events: List<PatchDiagnosticEvent>,
+    val transaction: PatchTransactionSnapshot,
+    val diagnosticsFileExists: Boolean,
+    val diagnosticsFileBytes: Long,
+    val readError: String,
+)
+
 object PatchProtocol {
     fun parseInspection(json: String): CatalogIdentity {
         val root = JSONObject(json)
@@ -210,6 +243,69 @@ object PatchProtocol {
         return result
     }
 
+    fun parsePatchDiagnostics(json: String, expectedTransactionId: String): PatchDiagnostics {
+        require(expectedTransactionId.matches(Regex("^[0-9a-f-]{36}$"))) {
+            "transaction ID가 올바르지 않습니다."
+        }
+        val root = JSONObject(json)
+        require(root.getInt("schemaVersion") == 1) { "지원하지 않는 patch 진단 결과입니다." }
+        require(root.getString("transactionId") == expectedTransactionId) {
+            "patch 진단 transaction ID가 다릅니다."
+        }
+        val rawEvents = root.getJSONArray("events")
+        require(rawEvents.length() <= MAX_DIAGNOSTIC_EVENTS) { "patch 진단 이벤트가 너무 많습니다." }
+        val events = buildList {
+            for (index in 0 until rawEvents.length()) {
+                val event = rawEvents.getJSONObject(index)
+                require(event.getString("transactionId") == expectedTransactionId) {
+                    "patch 진단 이벤트의 transaction ID가 다릅니다."
+                }
+                add(
+                    PatchDiagnosticEvent(
+                        timestampMs = event.getLong("timestampMs").also { require(it > 0) },
+                        elapsedRealtimeNanos = event.getLong("elapsedRealtimeNanos").also { require(it >= 0) },
+                        pid = event.getInt("pid").also { require(it > 0) },
+                        uid = event.getInt("uid").also { require(it >= 0) },
+                        thread = limitedText(event.getString("thread"), 128, "진단 thread"),
+                        stage = limitedText(event.getString("stage"), 128, "진단 stage"),
+                        detail = limitedText(event.optString("detail"), MAX_DIAGNOSTIC_DETAIL_CHARS, "진단 detail"),
+                    )
+                )
+            }
+        }
+        val rawTransaction = root.getJSONObject("transaction")
+        val transaction = PatchTransactionSnapshot(
+            exists = rawTransaction.getBoolean("exists"),
+            path = limitedText(rawTransaction.getString("path"), MAX_DIAGNOSTIC_DETAIL_CHARS, "transaction path"),
+            catalogExists = rawTransaction.getBoolean("catalogExists"),
+            catalogBytes = rawTransaction.getLong("catalogBytes"),
+            journalExists = rawTransaction.getBoolean("journalExists"),
+            journalBytes = rawTransaction.getLong("journalBytes"),
+            journalEntries = rawTransaction.getInt("journalEntries"),
+            journalReadError = limitedText(
+                rawTransaction.optString("journalReadError"),
+                MAX_DIAGNOSTIC_DETAIL_CHARS,
+                "journal 오류",
+            ),
+            previousFiles = rawTransaction.getInt("previousFiles"),
+            stagingFiles = rawTransaction.getInt("stagingFiles"),
+        )
+        require(
+            transaction.catalogBytes >= 0 && transaction.journalBytes >= 0 &&
+                transaction.journalEntries >= -1 && transaction.previousFiles >= 0 &&
+                transaction.stagingFiles >= 0
+        ) { "patch transaction 진단 값이 올바르지 않습니다." }
+        return PatchDiagnostics(
+            serviceInfo = limitedText(root.getString("serviceInfo"), 256, "service info"),
+            transactionId = expectedTransactionId,
+            events = events,
+            transaction = transaction,
+            diagnosticsFileExists = root.getBoolean("diagnosticsFileExists"),
+            diagnosticsFileBytes = root.getLong("diagnosticsFileBytes").also { require(it >= 0) },
+            readError = limitedText(root.optString("readError"), MAX_DIAGNOSTIC_DETAIL_CHARS, "진단 읽기 오류"),
+        )
+    }
+
     fun safeRelativePath(value: String): String {
         val normalized = value.replace('\\', '/')
         require(
@@ -241,9 +337,16 @@ object PatchProtocol {
         return value
     }
 
+    private fun limitedText(value: String, maxLength: Int, label: String): String {
+        require(value.length <= maxLength) { "$label 길이가 허용 범위를 초과합니다." }
+        return value
+    }
+
     private const val MAX_PATCH_FILES = 2_048
     private const val MAX_RELATIVE_PATH_CHARS = 1_024
     private const val MAX_INSPECTION_REQUEST_BYTES = 256 * 1_024
+    private const val MAX_DIAGNOSTIC_EVENTS = 512
+    private const val MAX_DIAGNOSTIC_DETAIL_CHARS = 4_096
 }
 
 object TrustedUrls {

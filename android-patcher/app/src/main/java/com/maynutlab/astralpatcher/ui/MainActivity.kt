@@ -170,7 +170,7 @@ private class PatchController(private val activity: MainActivity) {
         ComponentName(activity, PatchUserService::class.java)
     )
         .daemon(false)
-        .tag("astral-cache-patcher-v2")
+        .tag("astral-cache-patcher-v3")
         .version(BuildConfig.VERSION_CODE)
         .processNameSuffix("patch")
 
@@ -378,21 +378,52 @@ private class PatchController(private val activity: MainActivity) {
         executor.execute {
             val transactionId = UUID.randomUUID().toString()
             var transactionStarted = false
+            var diagnosticsCursor = 0
             val payloads = mutableListOf<File>()
             try {
+                val serviceInfo = patchService.getServiceInfo()
+                appendLog(
+                    "[CLIENT] patch 시작 · app=${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE}) " +
+                        "transaction=$transactionId"
+                )
+                appendLog("[CLIENT] service=$serviceInfo")
+                appendLog(
+                    "[CLIENT] manifest · patch=${targetManifest.patchVersion} " +
+                        "game=${targetManifest.gameVersion} revision=${targetManifest.revision} " +
+                        "catalog=${targetManifest.catalogHash} files=${targetManifest.files.size}"
+                )
                 val readiness = PatchProtocol.parseTargetInspection(
                     patchService.inspectPatchTargets(
                         PatchProtocol.createTargetInspectionRequest(targetManifest)
                     )
                 )
+                appendLog(
+                    "[CLIENT] 리소스 사전검사 · total=${readiness.total} ready=${readiness.ready} " +
+                        "missing=${readiness.missing} incompatible=${readiness.incompatible}"
+                )
                 require(readiness.isReady) {
                     "게임 리소스가 변경되었거나 필요한 파일이 없습니다. 새로고침 후 다시 시도해 주세요."
                 }
-                patchService.beginPatch(transactionId, targetCatalog.catalogHash)
+                appendLog("[CLIENT] beginPatch 호출 · transaction=$transactionId")
                 transactionStarted = true
+                patchService.beginPatch(transactionId, targetCatalog.catalogHash)
+                appendLog("[CLIENT] beginPatch 반환")
+                diagnosticsCursor = appendServiceDiagnostics(
+                    patchService,
+                    transactionId,
+                    diagnosticsCursor,
+                    includeSnapshot = true,
+                )
                 targetManifest.files.forEachIndexed { index, item ->
+                    val fileLabel = "${index + 1}/${targetManifest.files.size}"
+                    appendLog(
+                        "[CLIENT] 파일 $fileLabel 다운로드 시작 · path=${item.relativePath} " +
+                            "downloadBytes=${item.downloadSize} payloadBytes=${item.payloadSize} " +
+                            "payloadSha256=${item.payloadSha256} sourceBytes=${item.sourceSize} " +
+                            "sourceSha256=${item.sourceSha256}"
+                    )
                     updateBusy(
-                        "파일 ${index + 1}/${targetManifest.files.size} 다운로드 및 검증",
+                        "파일 $fileLabel 다운로드 및 검증",
                         index.toFloat() / targetManifest.files.size,
                     )
                     val payload = PatchHttpClient.downloadPayload(
@@ -401,13 +432,15 @@ private class PatchController(private val activity: MainActivity) {
                         index,
                     ) { percent ->
                         val overall = (index + percent / 100f) / targetManifest.files.size
-                        updateBusy("파일 ${index + 1}/${targetManifest.files.size} 다운로드", overall)
+                        updateBusy("파일 $fileLabel 다운로드", overall)
                     }
                     payloads += payload
+                    appendLog("[CLIENT] 파일 $fileLabel 다운로드 검증 완료 · localBytes=${payload.length()}")
                     updateBusy(
-                        "파일 ${index + 1}/${targetManifest.files.size} 적용",
+                        "파일 $fileLabel 적용",
                         (index + 0.95f) / targetManifest.files.size,
                     )
+                    appendLog("[CLIENT] 파일 $fileLabel applyFile 호출 · path=${item.relativePath}")
                     ParcelFileDescriptor.open(payload, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
                         patchService.applyFile(
                             transactionId,
@@ -419,7 +452,15 @@ private class PatchController(private val activity: MainActivity) {
                             item.relativePath,
                         )
                     }
+                    appendLog("[CLIENT] 파일 $fileLabel applyFile 반환")
+                    diagnosticsCursor = appendServiceDiagnostics(
+                        patchService,
+                        transactionId,
+                        diagnosticsCursor,
+                        includeSnapshot = true,
+                    )
                 }
+                appendLog("[CLIENT] commitPatch 호출")
                 patchService.commitPatch(
                     transactionId,
                     targetManifest.gameVersion,
@@ -427,13 +468,40 @@ private class PatchController(private val activity: MainActivity) {
                     targetManifest.patchVersion,
                 )
                 transactionStarted = false
+                appendLog("[CLIENT] commitPatch 반환")
+                diagnosticsCursor = appendServiceDiagnostics(
+                    patchService,
+                    transactionId,
+                    diagnosticsCursor,
+                    includeSnapshot = true,
+                )
                 main.post {
                     appendLog("${targetManifest.patchVersion} 적용을 완료했습니다.")
                     setIdle()
                     refresh()
                 }
             } catch (error: Exception) {
-                if (transactionStarted) runCatching { patchService.rollbackPatch(transactionId) }
+                appendLog("[CLIENT] patch 예외 · ${describeError(error)}")
+                diagnosticsCursor = appendServiceDiagnostics(
+                    patchService,
+                    transactionId,
+                    diagnosticsCursor,
+                    includeSnapshot = true,
+                )
+                if (transactionStarted) {
+                    appendLog("[CLIENT] rollbackPatch 호출")
+                    runCatching { patchService.rollbackPatch(transactionId) }
+                        .onSuccess { appendLog("[CLIENT] rollbackPatch 반환") }
+                        .onFailure { rollbackError ->
+                            appendLog("[CLIENT] rollbackPatch 예외 · ${describeError(rollbackError)}")
+                        }
+                    appendServiceDiagnostics(
+                        patchService,
+                        transactionId,
+                        diagnosticsCursor,
+                        includeSnapshot = true,
+                    )
+                }
                 showError("한글패치 적용에 실패했습니다.", error)
             } finally {
                 payloads.forEach(File::delete)
@@ -483,7 +551,7 @@ private class PatchController(private val activity: MainActivity) {
             var inspected: CatalogIdentity? = null
             var checkingTargets = false
             try {
-                require(patchService.getServiceInfo().startsWith("AstralPatchService/2 ")) {
+                require(patchService.getServiceInfo().startsWith("AstralPatchService/3 ")) {
                     "지원하지 않는 patch 서비스입니다."
                 }
                 val catalogIdentity = PatchProtocol.parseInspection(patchService.inspectGame())
@@ -704,6 +772,61 @@ private class PatchController(private val activity: MainActivity) {
         state = state.copy(busy = false, progressLabel = null, progress = 0f)
     }
 
+    private fun appendServiceDiagnostics(
+        patchService: IPatchService,
+        transactionId: String,
+        cursor: Int,
+        includeSnapshot: Boolean,
+    ): Int = runCatching {
+        val diagnostics = PatchProtocol.parsePatchDiagnostics(
+            patchService.getPatchDiagnostics(transactionId),
+            transactionId,
+        )
+        val start = cursor.takeIf { it in 0..diagnostics.events.size } ?: 0
+        if (start == 0) {
+            appendLog(
+                "[SERVICE] ${diagnostics.serviceInfo} · diagnosticsFile=" +
+                    "${diagnostics.diagnosticsFileExists}/${diagnostics.diagnosticsFileBytes}bytes"
+            )
+        }
+        diagnostics.events.drop(start).forEach { event ->
+            val eventTime = SimpleDateFormat("HH:mm:ss.SSS", Locale.KOREA)
+                .format(Date(event.timestampMs))
+            val detail = event.detail.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()
+            appendLog(
+                "[SERVICE $eventTime pid=${event.pid} uid=${event.uid} thread=${event.thread}] " +
+                    "${event.stage}$detail"
+            )
+        }
+        if (diagnostics.readError.isNotBlank()) {
+            appendLog("[SERVICE] 진단 파일 읽기 오류 · ${diagnostics.readError}")
+        }
+        if (includeSnapshot) {
+            val transaction = diagnostics.transaction
+            appendLog(
+                "[SERVICE] transaction snapshot · exists=${transaction.exists} " +
+                    "path=${transaction.path} catalog=${transaction.catalogExists}/${transaction.catalogBytes}bytes " +
+                    "journal=${transaction.journalExists}/${transaction.journalBytes}bytes/" +
+                    "${transaction.journalEntries}entries previous=${transaction.previousFiles}files " +
+                    "staging=${transaction.stagingFiles}files"
+            )
+            if (transaction.journalReadError.isNotBlank()) {
+                appendLog("[SERVICE] journal 읽기 오류 · ${transaction.journalReadError}")
+            }
+        }
+        diagnostics.events.size
+    }.getOrElse { error ->
+        appendLog("[CLIENT] 서비스 진단 회수 실패 · ${describeError(error)}")
+        cursor
+    }
+
+    private fun describeError(error: Throwable): String =
+        generateSequence(error) { it.cause }
+            .take(8)
+            .joinToString(" <- ") { cause ->
+                "${cause.javaClass.name}: ${cause.message.orEmpty()}"
+            }
+
     private fun showError(prefix: String, error: Throwable) {
         main.post {
             appendLog("$prefix ${error.message ?: error.javaClass.simpleName}")
@@ -715,7 +838,7 @@ private class PatchController(private val activity: MainActivity) {
         if (message.isBlank()) return
         val action = {
             val timestamp = SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(Date())
-            state = state.copy(logs = (state.logs + "[$timestamp] ${message.trim()}").takeLast(60))
+            state = state.copy(logs = (state.logs + "[$timestamp] ${message.trim()}").takeLast(300))
         }
         if (Looper.myLooper() == Looper.getMainLooper()) action() else main.post(action)
     }
