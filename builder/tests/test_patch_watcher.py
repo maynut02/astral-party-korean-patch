@@ -7,7 +7,9 @@ from tools.patch_watcher import (
     DispatchRecord,
     RemoteState,
     _dispatch_due,
+    _is_route_baseline,
     _needs_processing,
+    _route_status,
 )
 
 
@@ -85,4 +87,65 @@ def test_stale_matching_dispatch_is_retried() -> None:
         previous_observed=state.fingerprint,
         last_dispatched=record,
         now=now,
+    )
+
+
+def test_route_status_is_unchanged_when_remote_state_is_processed() -> None:
+    state = _state()
+    changed, dispatch_due, status = _route_status(
+        state,
+        processed=state.fingerprint,
+        previous_observed=None,
+        last_dispatched=None,
+        now=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+    )
+    assert (changed, dispatch_due, status) == (False, False, "unchanged")
+
+
+def test_route_status_waits_for_recent_matching_dispatch() -> None:
+    state = _state()
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+    record = DispatchRecord(
+        fingerprint=state.fingerprint,
+        dispatched_at=now - timedelta(minutes=1),
+    )
+    changed, dispatch_due, status = _route_status(
+        state,
+        processed=None,
+        previous_observed=state.fingerprint,
+        last_dispatched=record,
+        now=now,
+    )
+    assert (changed, dispatch_due, status) == (
+        True,
+        False,
+        "waiting_processing",
+    )
+
+
+def test_route_status_marks_new_remote_state_for_dispatch() -> None:
+    state = _state(revision="117", catalog_hash="b" * 32)
+    changed, dispatch_due, status = _route_status(
+        state,
+        processed=("3.2.0", "116", "a" * 32),
+        previous_observed=("3.2.0", "116", "a" * 32),
+        last_dispatched=None,
+        now=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+    )
+    assert (changed, dispatch_due, status) == (True, True, "change_detected")
+
+
+def test_route_without_any_history_is_treated_as_baseline() -> None:
+    assert _is_route_baseline(
+        processed=None,
+        previous_observed=None,
+        last_dispatched=None,
+    )
+
+
+def test_route_with_existing_observation_is_not_baseline() -> None:
+    assert not _is_route_baseline(
+        processed=None,
+        previous_observed=("3.2.0", "116", "a" * 32),
+        last_dispatched=None,
     )

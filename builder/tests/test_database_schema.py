@@ -14,6 +14,7 @@ def test_database_migrations_are_complete_and_parseable() -> None:
         "0003_user_game_profile_constraints.sql",
         "0004_translation_changes_creator_status_index.sql",
         "0005_patch_watcher.sql",
+        "0006_patch_watch_runs.sql",
     ]
 
     for migration in migrations:
@@ -26,6 +27,19 @@ def test_patch_watcher_schema_keeps_runtime_version_and_route_state() -> None:
     assert "game_version text NOT NULL" in sql
     assert "CREATE TABLE patch_watch_routes" in sql
     assert "last_dispatched_catalog_hash" in sql
+
+
+def test_patch_watcher_run_schema_records_runs_routes_and_status_indexes() -> None:
+    sql = (MIGRATIONS / "0006_patch_watch_runs.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE patch_watch_runs" in sql
+    assert "'partial_failure'" in sql
+    assert "'skipped_locked'" in sql
+    assert "workflow_dispatched boolean NOT NULL DEFAULT false" in sql
+    assert "CREATE TABLE patch_watch_run_routes" in sql
+    assert "PRIMARY KEY (run_id, route)" in sql
+    assert "'waiting_processing'" in sql
+    assert "patch_watch_runs_started_idx" in sql
+    assert "patch_watch_run_routes_route_started_idx" in sql
 
 
 def test_schema_separates_source_history_pending_changes_and_production_translations() -> None:
