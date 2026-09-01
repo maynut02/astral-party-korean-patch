@@ -906,6 +906,7 @@ private fun PatchManagerScreen(
     onRestore: () -> Unit,
     onLaunch: () -> Unit,
 ) {
+    val context = LocalContext.current
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
@@ -915,7 +916,11 @@ private fun PatchManagerScreen(
                     Text("아스트랄 파티 한글패치", fontWeight = FontWeight.SemiBold)
                 },
                 actions = {
-                    IconButton(onClick = onRefresh, enabled = !state.busy) {
+                    IconButton(
+                        onClick = onRefresh,
+                        enabled = !state.busy,
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_refresh_24),
                             contentDescription = "새로고침",
@@ -1043,7 +1048,34 @@ private fun PatchManagerScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("실행 기록", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "실행 기록",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(
+                            onClick = {
+                                val clipboard = activityClipboardManager(context)
+                                clipboard.setPrimaryClip(
+                                    android.content.ClipData.newPlainText(
+                                        "실행 기록",
+                                        state.logs.joinToString("\n\n"),
+                                    )
+                                )
+                            },
+                            enabled = state.logs.isNotEmpty(),
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_content_copy_24),
+                                contentDescription = "실행 기록 복사",
+                            )
+                        }
+                    }
                     HorizontalDivider()
                     SelectionContainer {
                         Text(
@@ -1071,7 +1103,11 @@ private fun StatusCard(
         modifier = Modifier.fillMaxWidth(),
         onClick = { onClick?.invoke() },
         enabled = onClick != null,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            disabledContentColor = MaterialTheme.colorScheme.onSurface,
+        ),
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -1095,6 +1131,9 @@ private fun StatusCard(
         }
     }
 }
+
+private fun activityClipboardManager(context: android.content.Context): android.content.ClipboardManager =
+    context.getSystemService(android.content.ClipboardManager::class.java)
 
 @Composable
 private fun AstralMaterialTheme(content: @Composable () -> Unit) {
