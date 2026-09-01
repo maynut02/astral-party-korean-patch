@@ -32,22 +32,42 @@ object PatchHttpClient {
         return ShizukuReleaseProtocol.parseLatest(json)
     }
 
+    fun getLatestMobilePatcherRelease(): MobilePatcherRelease {
+        TrustedUrls.requireMobilePatcherIndex(MOBILE_PATCHER_INDEX_URL)
+        val json = getBytes(MOBILE_PATCHER_INDEX_URL, MAX_METADATA_BYTES).toString(Charsets.UTF_8)
+        return MobilePatcherReleaseProtocol.parse(json)
+    }
+
     fun downloadShizukuApk(
         cacheDir: File,
         release: ShizukuRelease,
         onProgress: (Int) -> Unit,
     ): File {
         TrustedUrls.requireShizukuReleaseAsset(release.downloadUrl)
-        val root = File(cacheDir, "downloads").apply { mkdirs() }
-        val target = File(root, "shizuku-latest.apk")
-        target.delete()
-        try {
-            downloadTo(target, release.downloadUrl, release.size, release.sha256, onProgress)
-            return target
-        } catch (error: Exception) {
-            target.delete()
-            throw error
-        }
+        return downloadVerifiedApk(
+            cacheDir,
+            "shizuku-latest.apk",
+            release.downloadUrl,
+            release.size,
+            release.sha256,
+            onProgress,
+        )
+    }
+
+    fun downloadMobilePatcherApk(
+        cacheDir: File,
+        release: MobilePatcherRelease,
+        onProgress: (Int) -> Unit,
+    ): File {
+        TrustedUrls.requireReleaseAsset(release.downloadUrl)
+        return downloadVerifiedApk(
+            cacheDir,
+            "astral-android-patcher-${release.version}.apk",
+            release.downloadUrl,
+            release.size,
+            release.sha256,
+            onProgress,
+        )
     }
 
     fun downloadPayload(
@@ -91,6 +111,26 @@ object PatchHttpClient {
             }
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private fun downloadVerifiedApk(
+        cacheDir: File,
+        fileName: String,
+        url: String,
+        size: Long,
+        sha256: String,
+        onProgress: (Int) -> Unit,
+    ): File {
+        val root = File(cacheDir, "downloads").apply { mkdirs() }
+        val target = File(root, fileName)
+        target.delete()
+        try {
+            downloadTo(target, url, size, sha256, onProgress)
+            return target
+        } catch (error: Exception) {
+            target.delete()
+            throw error
         }
     }
 

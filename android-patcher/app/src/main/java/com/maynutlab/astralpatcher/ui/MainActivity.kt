@@ -3,6 +3,7 @@ package com.maynutlab.astralpatcher.ui
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
@@ -66,6 +67,7 @@ import com.maynutlab.astralpatcher.IPatchService
 import com.maynutlab.astralpatcher.R
 import com.maynutlab.astralpatcher.core.CatalogIdentity
 import com.maynutlab.astralpatcher.core.GAME_PACKAGE
+import com.maynutlab.astralpatcher.core.MobilePatcherRelease
 import com.maynutlab.astralpatcher.core.PatchHttpClient
 import com.maynutlab.astralpatcher.core.PatchManifest
 import com.maynutlab.astralpatcher.core.PatchProtocol
@@ -91,6 +93,7 @@ class MainActivity : ComponentActivity() {
                 PatchManagerScreen(
                     state = controller.state,
                     onRefresh = controller::refresh,
+                    onUpdate = controller::updatePatcher,
                     onShizuku = controller::handleShizuku,
                     onGame = controller::handleGame,
                     onPatch = controller::applyPatch,
@@ -125,6 +128,7 @@ private data class PatchUiState(
     val releaseStatus: String = "확인 중",
     val patchVersion: String? = null,
     val installedPatchVersion: String? = null,
+    val availablePatcherVersion: String? = null,
     val busy: Boolean = false,
     val progress: Float = 0f,
     val progressLabel: String? = null,
@@ -146,13 +150,18 @@ private enum class StatusIndicator {
 private class PatchController(private val activity: MainActivity) {
     private val main = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
+    private val updateExecutor = Executors.newSingleThreadExecutor()
     private var service: IPatchService? = null
     private var binding = false
     private var catalog: CatalogIdentity? = null
     private var manifest: PatchManifest? = null
-    private var pendingSystemInstall: File? = null
+    @Volatile
+    private var latestPatcher: MobilePatcherRelease? = null
+    private var pendingSystemInstall: PendingInstall? = null
     @Volatile
     private var inspecting = false
+    @Volatile
+    private var updateChecking = false
 
     var state by mutableStateOf(PatchUiState())
         private set
@@ -206,13 +215,14 @@ private class PatchController(private val activity: MainActivity) {
         }
         service = null
         executor.shutdownNow()
+        updateExecutor.shutdownNow()
     }
 
     fun resume() {
         val pending = pendingSystemInstall
         if (pending != null && activity.packageManager.canRequestPackageInstalls()) {
             pendingSystemInstall = null
-            openSystemInstaller(pending)
+            openSystemInstaller(pending.apk)
         } else if (!state.busy) {
             refresh()
         }
@@ -261,7 +271,10 @@ private class PatchController(private val activity: MainActivity) {
         )
         catalog = null
         manifest = null
-        if (!gameReady || !permissionGranted) return
+        checkPatcherUpdate()
+        if (!gameReady || !permissionGranted) {
+            return
+        }
         if (service == null) {
             bindPatchService()
             return
@@ -274,7 +287,11 @@ private class PatchController(private val activity: MainActivity) {
         when {
             !isPackageInstalled(SHIZUKU_PACKAGE) -> {
                 val pending = pendingSystemInstall
-                if (pending?.isFile == true) requestSystemInstall(pending) else installShizuku()
+                if (pending?.target == InstallTarget.SHIZUKU && pending.apk.isFile) {
+                    requestSystemInstall(pending.apk, InstallTarget.SHIZUKU)
+                } else {
+                    installShizuku()
+                }
             }
             !Shizuku.pingBinder() -> openPackage(SHIZUKU_PACKAGE)
             Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED -> {
@@ -299,7 +316,7 @@ private class PatchController(private val activity: MainActivity) {
 
     private fun installShizuku() {
         setBusy("최신 Shizuku 안정 버전을 확인하는 중", 0f)
-        executor.execute {
+        updateExecutor.execute {
             var apk: File? = null
             try {
                 val latest = PatchHttpClient.getLatestShizukuRelease()
@@ -312,11 +329,43 @@ private class PatchController(private val activity: MainActivity) {
                 main.post {
                     appendLog("Shizuku ${latest.version} APK 다운로드 및 검증을 완료했습니다.")
                     setIdle()
-                    requestSystemInstall(downloadedApk)
+                    requestSystemInstall(downloadedApk, InstallTarget.SHIZUKU)
                 }
             } catch (error: Exception) {
                 apk?.delete()
                 showError("Shizuku 다운로드에 실패했습니다.", error)
+            }
+        }
+    }
+
+    fun updatePatcher() {
+        if (state.busy) return
+        val pending = pendingSystemInstall
+        if (pending?.target == InstallTarget.PATCHER && pending.apk.isFile) {
+            requestSystemInstall(pending.apk, InstallTarget.PATCHER)
+            return
+        }
+        val target = latestPatcher?.takeIf { it.isNewerThan(BuildConfig.VERSION_CODE) } ?: return
+        setBusy("Android 패처 ${target.version} 다운로드", 0f)
+        updateExecutor.execute {
+            var apk: File? = null
+            try {
+                val downloadedApk = PatchHttpClient.downloadMobilePatcherApk(
+                    activity.cacheDir,
+                    target,
+                ) { percent ->
+                    updateBusy("Android 패처 ${target.version} 다운로드", percent / 100f)
+                }
+                apk = downloadedApk
+                verifyMobilePatcherApk(downloadedApk, target)
+                main.post {
+                    appendLog("Android 패처 ${target.version} APK 다운로드 및 검증을 완료했습니다.")
+                    setIdle()
+                    requestSystemInstall(downloadedApk, InstallTarget.PATCHER)
+                }
+            } catch (error: Exception) {
+                apk?.delete()
+                showError("Android 패처 업데이트 다운로드에 실패했습니다.", error)
             }
         }
     }
@@ -520,6 +569,32 @@ private class PatchController(private val activity: MainActivity) {
         }
     }
 
+    private fun checkPatcherUpdate() {
+        if (updateChecking) return
+        updateChecking = true
+        updateExecutor.execute {
+            try {
+                val latest = PatchHttpClient.getLatestMobilePatcherRelease()
+                val available = latest.takeIf { it.isNewerThan(BuildConfig.VERSION_CODE) }
+                latestPatcher = available
+                main.post {
+                    state = state.copy(availablePatcherVersion = available?.version)
+                }
+            } catch (error: Exception) {
+                latestPatcher = null
+                main.post {
+                    state = state.copy(availablePatcherVersion = null)
+                    appendLog(
+                        "Android 패처 업데이트 확인에 실패했습니다. " +
+                            (error.message ?: error.javaClass.simpleName)
+                    )
+                }
+            } finally {
+                updateChecking = false
+            }
+        }
+    }
+
     private fun isResourceNotReady(error: Throwable): Boolean =
         generateSequence(error) { it.cause }
             .mapNotNull(Throwable::message)
@@ -546,9 +621,43 @@ private class PatchController(private val activity: MainActivity) {
         }
     }
 
-    private fun requestSystemInstall(apk: File) {
+    @Suppress("DEPRECATION")
+    private fun verifyMobilePatcherApk(apk: File, release: MobilePatcherRelease) {
+        val archive = activity.packageManager.getPackageArchiveInfo(
+            apk.absolutePath,
+            PackageManager.GET_SIGNING_CERTIFICATES,
+        )
+        require(archive?.packageName == activity.packageName) {
+            "다운로드한 APK packageName이 현재 Android 패처와 다릅니다."
+        }
+        require(archive.versionName == release.version) {
+            "다운로드한 Android 패처 버전이 index와 다릅니다."
+        }
+        require(archive.longVersionCode == release.versionCode.toLong()) {
+            "다운로드한 Android 패처 versionCode가 index와 다릅니다."
+        }
+        require(archive.longVersionCode > BuildConfig.VERSION_CODE.toLong()) {
+            "현재 버전보다 새로운 Android 패처가 아닙니다."
+        }
+        val installed = activity.packageManager.getPackageInfo(
+            activity.packageName,
+            PackageManager.GET_SIGNING_CERTIFICATES,
+        )
+        require(hasSameCurrentSigners(installed, archive)) {
+            "다운로드한 Android 패처 APK 서명이 현재 앱과 다릅니다."
+        }
+    }
+
+    private fun hasSameCurrentSigners(first: PackageInfo, second: PackageInfo): Boolean {
+        val firstSigners = first.signingInfo?.apkContentsSigners ?: return false
+        val secondSigners = second.signingInfo?.apkContentsSigners ?: return false
+        return firstSigners.size == secondSigners.size &&
+            firstSigners.all { signer -> secondSigners.any(signer::equals) }
+    }
+
+    private fun requestSystemInstall(apk: File, target: InstallTarget) {
         if (!activity.packageManager.canRequestPackageInstalls()) {
-            pendingSystemInstall = apk
+            pendingSystemInstall = PendingInstall(apk, target)
             appendLog("이 앱의 '알 수 없는 앱 설치' 권한을 허용해 주세요.")
             activity.startActivity(
                 Intent(
@@ -624,12 +733,19 @@ private class PatchController(private val activity: MainActivity) {
 }
 
 private data class GameInstall(val version: String, val installedFromPlay: Boolean)
+private data class PendingInstall(val apk: File, val target: InstallTarget)
+
+private enum class InstallTarget {
+    SHIZUKU,
+    PATCHER,
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PatchManagerScreen(
     state: PatchUiState,
     onRefresh: () -> Unit,
+    onUpdate: () -> Unit,
     onShizuku: () -> Unit,
     onGame: () -> Unit,
     onPatch: () -> Unit,
@@ -693,6 +809,41 @@ private fun PatchManagerScreen(
                 state.releaseStatus,
                 if (state.patchVersion != null) StatusIndicator.ACTIVE else StatusIndicator.INACTIVE,
             )
+
+            state.availablePatcherVersion?.let { version ->
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    ),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Android 패처 $version 업데이트",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                "새 버전을 다운로드하고 설치할 수 있습니다.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = onUpdate,
+                            enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            shape = RoundedCornerShape(16.dp),
+                        ) {
+                            Text("업데이트 설치")
+                        }
+                    }
+                }
+            }
 
             if (state.busy) {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
