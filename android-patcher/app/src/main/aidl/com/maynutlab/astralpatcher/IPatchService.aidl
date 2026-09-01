@@ -23,5 +23,6 @@ interface IPatchService {
     ) = 4;
     void rollbackPatch(String transactionId) = 5;
     String restorePatch() = 6;
+    String inspectPatchTargets(String requirementsJson) = 7;
     void destroy() = 16777114;
 }

@@ -26,6 +26,30 @@ object PatchHttpClient {
     fun getManifest(release: ReleaseEntry): ByteArray =
         getBytes(release.manifestUrl, MAX_METADATA_BYTES)
 
+    fun getLatestShizukuRelease(): ShizukuRelease {
+        TrustedUrls.requireShizukuApi(SHIZUKU_RELEASE_API)
+        val json = getBytes(SHIZUKU_RELEASE_API, MAX_METADATA_BYTES).toString(Charsets.UTF_8)
+        return ShizukuReleaseProtocol.parseLatest(json)
+    }
+
+    fun downloadShizukuApk(
+        cacheDir: File,
+        release: ShizukuRelease,
+        onProgress: (Int) -> Unit,
+    ): File {
+        TrustedUrls.requireShizukuReleaseAsset(release.downloadUrl)
+        val root = File(cacheDir, "downloads").apply { mkdirs() }
+        val target = File(root, "shizuku-latest.apk")
+        target.delete()
+        try {
+            downloadTo(target, release.downloadUrl, release.size, release.sha256, onProgress)
+            return target
+        } catch (error: Exception) {
+            target.delete()
+            throw error
+        }
+    }
+
     fun downloadPayload(
         cacheDir: File,
         item: PatchFile,

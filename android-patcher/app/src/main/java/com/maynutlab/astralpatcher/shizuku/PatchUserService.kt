@@ -25,11 +25,11 @@ class PatchUserService : IPatchService.Stub() {
     private val stateFile = File(stateRoot, "state.json")
 
     override fun getServiceInfo(): String =
-        "AstralPatchService/1 uid=${android.os.Process.myUid()} pid=${android.os.Process.myPid()}"
+        "AstralPatchService/2 uid=${android.os.Process.myUid()} pid=${android.os.Process.myPid()}"
 
     @Synchronized
     override fun inspectGame(): String {
-        require(filesRoot.isDirectory) { "원본 게임의 외부 files 디렉터리를 찾지 못했습니다." }
+        require(filesRoot.isDirectory) { "Astral Party의 외부 files 디렉터리를 찾지 못했습니다." }
         require(addressablesRoot.isDirectory) { "게임을 먼저 실행해 리소스를 다운로드해 주세요." }
         require(bundleRoot.isDirectory) { "Addressables bundle cache를 찾지 못했습니다." }
         recoverInterruptedTransactions()
@@ -45,6 +45,76 @@ class PatchUserService : IPatchService.Stub() {
                     ?.optString("patchVersion")
                     .orEmpty(),
             )
+            .toString()
+    }
+
+    @Synchronized
+    override fun inspectPatchTargets(requirementsJson: String): String {
+        recoverInterruptedTransactions()
+        require(requirementsJson.toByteArray(Charsets.UTF_8).size <= MAX_INSPECTION_REQUEST_BYTES) {
+            "리소스 검사 요청이 허용 크기를 초과합니다."
+        }
+        val request = JSONObject(requirementsJson)
+        require(request.getInt("schemaVersion") == 1) { "지원하지 않는 리소스 검사 요청입니다." }
+        val catalogHash = requireCatalogHash(request.getString("catalogHash"))
+        require(discoverCatalog().second == catalogHash) { "게임 catalog가 patch manifest와 다릅니다." }
+        require(request.getString("patchVersion").isNotBlank()) { "patch version이 비어 있습니다." }
+        val files = request.getJSONArray("files")
+        require(files.length() in 1..MAX_PATCH_FILES) { "검사할 patch 파일 수가 올바르지 않습니다." }
+
+        var ready = 0
+        var missing = 0
+        var incompatible = 0
+        var patchedWithoutBackup = 0
+        for (index in 0 until files.length()) {
+            val item = files.getJSONObject(index)
+            val relativePath = PatchProtocol.safeRelativePath(item.getString("path"))
+            val sourceSize = requirePositive(item.getLong("sourceSize"), "원본 파일 크기")
+            val sourceSha = requireSha256(item.getString("sourceSha256"))
+            val payloadSize = requirePositive(item.getLong("payloadSize"), "patch 파일 크기")
+            val payloadSha = requireSha256(item.getString("payloadSha256"))
+            val target = findExistingBundle(relativePath)
+            if (target == null) {
+                missing += 1
+                continue
+            }
+
+            val actualPath = target.relativeTo(bundleRoot).invariantSeparatorsPath
+            val backup = File(File(backupsRoot, catalogHash), actualPath)
+            val backupExists = backup.isFile
+            val backupMatches = backupExists &&
+                backup.length() == sourceSize &&
+                sha256(backup) == sourceSha
+
+            if (backupExists && !backupMatches) {
+                incompatible += 1
+            } else if (backupMatches) {
+                ready += 1
+            } else {
+                val targetLength = target.length()
+                val targetHash = if (targetLength == sourceSize || targetLength == payloadSize) {
+                    sha256(target)
+                } else {
+                    null
+                }
+                val sourceMatches = targetLength == sourceSize && targetHash == sourceSha
+                val payloadMatches = targetLength == payloadSize && targetHash == payloadSha
+                if (sourceMatches) {
+                    ready += 1
+                } else {
+                    if (payloadMatches) patchedWithoutBackup += 1
+                    incompatible += 1
+                }
+            }
+        }
+
+        return JSONObject()
+            .put("schemaVersion", 1)
+            .put("total", files.length())
+            .put("ready", ready)
+            .put("missing", missing)
+            .put("incompatible", incompatible)
+            .put("patchedWithoutBackup", patchedWithoutBackup)
             .toString()
     }
 
@@ -201,6 +271,11 @@ class PatchUserService : IPatchService.Stub() {
     private fun transactionRoot(transactionId: String): File = safePath(transactionsRoot, transactionId)
 
     private fun resolveExistingBundle(relativePath: String): File {
+        return findExistingBundle(relativePath)
+            ?: error("게임이 아직 필요한 리소스를 다운로드하지 않았습니다: $relativePath")
+    }
+
+    private fun findExistingBundle(relativePath: String): File? {
         val exact = safePath(bundleRoot, relativePath)
         if (exact.isFile) return exact
         val alternate = when {
@@ -212,7 +287,7 @@ class PatchUserService : IPatchService.Stub() {
             val candidate = safePath(bundleRoot, alternate)
             if (candidate.isFile) return candidate
         }
-        error("게임이 아직 필요한 리소스를 다운로드하지 않았습니다: $relativePath")
+        return null
     }
 
     private fun receiveVerified(
@@ -368,6 +443,11 @@ class PatchUserService : IPatchService.Stub() {
     private fun requireCatalogHash(value: String): String = requireHex(value, 32, "catalog hash")
     private fun requireSha256(value: String): String = requireHex(value, 64, "SHA-256")
 
+    private fun requirePositive(value: Long, label: String): Long {
+        require(value > 0) { "$label 값이 올바르지 않습니다." }
+        return value
+    }
+
     private fun requireHex(value: String, length: Int, label: String): String {
         val normalized = value.lowercase(Locale.ROOT)
         require(normalized.length == length && normalized.all { it in '0'..'9' || it in 'a'..'f' }) {
@@ -378,6 +458,8 @@ class PatchUserService : IPatchService.Stub() {
 
     companion object {
         private const val BUFFER_SIZE = 128 * 1024
+        private const val MAX_PATCH_FILES = 2_048
+        private const val MAX_INSPECTION_REQUEST_BYTES = 256 * 1024
     }
 }
 

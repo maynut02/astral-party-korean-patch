@@ -3,6 +3,7 @@ package com.maynutlab.astralpatcher.core
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.MessageDigest
 
@@ -57,6 +58,37 @@ class PatchProtocolTest {
     @Test(expected = IllegalArgumentException::class)
     fun rejectsForeignReleaseHosts() {
         TrustedUrls.requireReleaseAsset("https://example.test/payload.gz")
+    }
+
+    @Test
+    fun createsAndParsesTargetInspectionProtocol() {
+        val bytes = manifestJson().toByteArray()
+        val manifest = PatchProtocol.parseManifest(
+            bytes,
+            ReleaseEntry(
+                "3.2.0",
+                "116",
+                "b".repeat(32),
+                "v3.2.0_r116",
+                trustedUrl("INT_ANDROID_manifest.json"),
+                sha256(bytes),
+            ),
+        )
+        val request = org.json.JSONObject(PatchProtocol.createTargetInspectionRequest(manifest))
+        assertEquals("b".repeat(32), request.getString("catalogHash"))
+        assertEquals(1, request.getJSONArray("files").length())
+
+        val result = PatchProtocol.parseTargetInspection(
+            """{"schemaVersion":1,"total":1,"ready":1,"missing":0,"incompatible":0}"""
+        )
+        assertTrue(result.isReady)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsInconsistentTargetInspectionCounts() {
+        PatchProtocol.parseTargetInspection(
+            """{"schemaVersion":1,"total":2,"ready":1,"missing":0,"incompatible":0}"""
+        )
     }
 
     private fun indexJson(): String = """

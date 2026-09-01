@@ -6,10 +6,13 @@ import java.security.MessageDigest
 import java.util.Locale
 
 const val GAME_PACKAGE = "com.feimo.astralpartyjpn"
+const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 const val PATCH_ROUTE = "INT_ANDROID"
 const val PATCH_CHANNEL = "release"
 const val RELEASE_INDEX_URL =
     "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/release-index.json"
+const val SHIZUKU_RELEASE_API =
+    "https://api.github.com/repos/thedjchi/Shizuku/releases/latest"
 
 data class CatalogIdentity(
     val gameVersion: String,
@@ -44,6 +47,16 @@ data class PatchManifest(
     val catalogHash: String,
     val files: List<PatchFile>,
 )
+
+data class PatchTargetInspection(
+    val total: Int,
+    val ready: Int,
+    val missing: Int,
+    val incompatible: Int,
+) {
+    val isReady: Boolean
+        get() = total > 0 && ready == total && missing == 0 && incompatible == 0
+}
 
 object PatchProtocol {
     fun parseInspection(json: String): CatalogIdentity {
@@ -108,6 +121,7 @@ object PatchProtocol {
 
         val rawFiles = root.getJSONArray("files")
         require(rawFiles.length() > 0) { "patch 파일이 없습니다." }
+        require(rawFiles.length() <= MAX_PATCH_FILES) { "patch 파일 수가 허용 범위를 초과합니다." }
         val identities = mutableSetOf<String>()
         val files = buildList {
             for (index in 0 until rawFiles.length()) {
@@ -148,9 +162,59 @@ object PatchProtocol {
         )
     }
 
+    fun createTargetInspectionRequest(manifest: PatchManifest): String {
+        require(manifest.files.isNotEmpty() && manifest.files.size <= MAX_PATCH_FILES) {
+            "검사할 patch 파일 수가 올바르지 않습니다."
+        }
+        val files = org.json.JSONArray()
+        manifest.files.forEach { item ->
+            files.put(
+                JSONObject()
+                    .put("path", safeRelativePath(item.relativePath))
+                    .put("sourceSize", item.sourceSize)
+                    .put("sourceSha256", item.sourceSha256)
+                    .put("payloadSize", item.payloadSize)
+                    .put("payloadSha256", item.payloadSha256)
+            )
+        }
+        val request = JSONObject()
+            .put("schemaVersion", 1)
+            .put("catalogHash", manifest.catalogHash)
+            .put("patchVersion", manifest.patchVersion)
+            .put("files", files)
+            .toString()
+        require(request.toByteArray(Charsets.UTF_8).size <= MAX_INSPECTION_REQUEST_BYTES) {
+            "리소스 검사 요청이 허용 크기를 초과합니다."
+        }
+        return request
+    }
+
+    fun parseTargetInspection(json: String): PatchTargetInspection {
+        val root = JSONObject(json)
+        require(root.getInt("schemaVersion") == 1) { "지원하지 않는 리소스 검사 결과입니다." }
+        val result = PatchTargetInspection(
+            total = root.getInt("total"),
+            ready = root.getInt("ready"),
+            missing = root.getInt("missing"),
+            incompatible = root.getInt("incompatible"),
+        )
+        require(result.total in 1..MAX_PATCH_FILES) { "리소스 검사 대상 수가 올바르지 않습니다." }
+        require(result.ready >= 0 && result.missing >= 0 && result.incompatible >= 0) {
+            "리소스 검사 결과에 음수 값이 있습니다."
+        }
+        require(result.ready + result.missing + result.incompatible == result.total) {
+            "리소스 검사 결과 합계가 올바르지 않습니다."
+        }
+        return result
+    }
+
     fun safeRelativePath(value: String): String {
         val normalized = value.replace('\\', '/')
-        require(normalized.isNotBlank() && !normalized.startsWith('/')) {
+        require(
+            normalized.isNotBlank() &&
+                normalized.length <= MAX_RELATIVE_PATH_CHARS &&
+                !normalized.startsWith('/')
+        ) {
             "안전하지 않은 Addressables 경로입니다."
         }
         require(normalized.split('/').all { it.isNotBlank() && it != "." && it != ".." }) {
@@ -174,10 +238,15 @@ object PatchProtocol {
         require(value > 0) { "$label 값이 올바르지 않습니다." }
         return value
     }
+
+    private const val MAX_PATCH_FILES = 2_048
+    private const val MAX_RELATIVE_PATH_CHARS = 1_024
+    private const val MAX_INSPECTION_REQUEST_BYTES = 256 * 1_024
 }
 
 object TrustedUrls {
     private const val REPOSITORY_PATH = "/maynut02/astral-party-korean-patch/"
+    private const val SHIZUKU_RELEASE_PATH = "/thedjchi/Shizuku/releases/download/"
 
     fun requireIndex(value: String) {
         require(value == RELEASE_INDEX_URL) { "신뢰하지 않는 release index 주소입니다." }
@@ -192,10 +261,28 @@ object TrustedUrls {
         require(uri.rawQuery == null && uri.rawFragment == null) { "patch URL에 query나 fragment를 사용할 수 없습니다." }
     }
 
+    fun requireShizukuApi(value: String) {
+        require(value == SHIZUKU_RELEASE_API) { "신뢰하지 않는 Shizuku API 주소입니다." }
+    }
+
+    fun requireShizukuReleaseAsset(value: String) {
+        val uri = parseHttps(value)
+        require(uri.host.equals("github.com", ignoreCase = true)) {
+            "신뢰하지 않는 Shizuku 다운로드 host입니다."
+        }
+        require(uri.path.startsWith(SHIZUKU_RELEASE_PATH)) {
+            "신뢰하지 않는 Shizuku 다운로드 경로입니다."
+        }
+        require(uri.rawQuery == null && uri.rawFragment == null) {
+            "Shizuku 다운로드 URL에 query나 fragment를 사용할 수 없습니다."
+        }
+    }
+
     fun isTrustedRedirect(value: String): Boolean {
         val uri = runCatching { parseHttps(value) }.getOrNull() ?: return false
         val host = uri.host.lowercase(Locale.ROOT)
         return host == "github.com" ||
+            host == "api.github.com" ||
             host == "release-assets.githubusercontent.com" ||
             host.endsWith(".githubusercontent.com")
     }
