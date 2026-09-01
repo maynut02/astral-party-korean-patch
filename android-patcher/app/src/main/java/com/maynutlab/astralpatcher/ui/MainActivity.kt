@@ -123,9 +123,10 @@ private data class PatchUiState(
     val shizukuReady: Boolean = false,
     val shizukuActionLabel: String = "설정",
     val resourceStatus: String = "확인 중",
-    val resourceIndicator: StatusIndicator = StatusIndicator.INACTIVE,
+    val resourceIndicator: StatusIndicator = StatusIndicator.IN_PROGRESS,
     val resourceNeedsDownload: Boolean = false,
     val releaseStatus: String = "확인 중",
+    val releaseIndicator: StatusIndicator = StatusIndicator.IN_PROGRESS,
     val patchVersion: String? = null,
     val installedPatchVersion: String? = null,
     val availablePatcherVersion: String? = null,
@@ -142,9 +143,10 @@ private data class PatchUiState(
 }
 
 private enum class StatusIndicator {
-    INACTIVE,
-    ACTIVE,
-    WARNING,
+    PENDING,
+    IN_PROGRESS,
+    COMPLETED,
+    ERROR,
 }
 
 private class PatchController(private val activity: MainActivity) {
@@ -260,12 +262,17 @@ private class PatchController(private val activity: MainActivity) {
             },
             resourceStatus = if (gameReady && permissionGranted) "게임 리소스를 확인 중" else "대기 중",
             resourceIndicator = if (gameReady && permissionGranted) {
-                StatusIndicator.ACTIVE
+                StatusIndicator.IN_PROGRESS
             } else {
-                StatusIndicator.INACTIVE
+                StatusIndicator.PENDING
             },
             resourceNeedsDownload = false,
             releaseStatus = if (gameReady && permissionGranted) "정식 패치를 확인 중" else "대기 중",
+            releaseIndicator = if (gameReady && permissionGranted) {
+                StatusIndicator.IN_PROGRESS
+            } else {
+                StatusIndicator.PENDING
+            },
             patchVersion = null,
             installedPatchVersion = null,
         )
@@ -374,6 +381,7 @@ private class PatchController(private val activity: MainActivity) {
         val targetManifest = manifest ?: return
         val targetCatalog = catalog ?: return
         val patchService = service ?: return
+        state = state.copy(releaseIndicator = StatusIndicator.IN_PROGRESS)
         setBusy("패치 정보를 검증하는 중", 0f)
         executor.execute {
             val transactionId = UUID.randomUUID().toString()
@@ -511,6 +519,7 @@ private class PatchController(private val activity: MainActivity) {
                     refresh()
                 }
             } catch (error: Exception) {
+                main.post { state = state.copy(releaseIndicator = StatusIndicator.ERROR) }
                 appendLog("[CLIENT] patch 예외 · ${describeError(error)}")
                 diagnosticsCursor = appendServiceDiagnostics(
                     patchService,
@@ -542,6 +551,7 @@ private class PatchController(private val activity: MainActivity) {
 
     fun restorePatch() {
         val patchService = service ?: return
+        state = state.copy(releaseIndicator = StatusIndicator.IN_PROGRESS)
         setBusy("원본 리소스를 복원하는 중", 0f)
         executor.execute {
             try {
@@ -552,6 +562,7 @@ private class PatchController(private val activity: MainActivity) {
                     refresh()
                 }
             } catch (error: Exception) {
+                main.post { state = state.copy(releaseIndicator = StatusIndicator.ERROR) }
                 showError("원본 복원에 실패했습니다.", error)
             }
         }
@@ -595,9 +606,10 @@ private class PatchController(private val activity: MainActivity) {
                     main.post {
                         state = state.copy(
                             resourceStatus = "검사할 정식 패치가 없습니다",
-                            resourceIndicator = StatusIndicator.INACTIVE,
+                            resourceIndicator = StatusIndicator.PENDING,
                             resourceNeedsDownload = false,
                             releaseStatus = "현재 게임과 일치하는 정식 패치 없음",
+                            releaseIndicator = StatusIndicator.PENDING,
                             patchVersion = null,
                             installedPatchVersion = catalogIdentity.installedPatchVersion,
                         )
@@ -627,13 +639,24 @@ private class PatchController(private val activity: MainActivity) {
                                 "필요한 게임 리소스 ${targetInspection.missing}개가 없습니다"
                             else -> "게임 리소스 ${targetInspection.incompatible}개가 현재 패치와 다릅니다"
                         },
-                        resourceIndicator = if (ready) StatusIndicator.ACTIVE else StatusIndicator.WARNING,
+                        resourceIndicator = when {
+                            ready -> StatusIndicator.COMPLETED
+                            targetInspection.incompatible > 0 -> StatusIndicator.ERROR
+                            else -> StatusIndicator.PENDING
+                        },
                         resourceNeedsDownload = !ready,
                         releaseStatus = when {
                             !ready -> "${resolved.patchVersion} · 게임 리소스 필요"
                             resolved.patchVersion == catalogIdentity.installedPatchVersion ->
                                 "${resolved.patchVersion} 적용 완료"
                             else -> "${resolved.patchVersion} 적용 가능"
+                        },
+                        releaseIndicator = when {
+                            !ready && targetInspection.incompatible > 0 -> StatusIndicator.ERROR
+                            !ready -> StatusIndicator.PENDING
+                            resolved.patchVersion == catalogIdentity.installedPatchVersion ->
+                                StatusIndicator.COMPLETED
+                            else -> StatusIndicator.PENDING
                         },
                         patchVersion = resolved.patchVersion.takeIf { ready },
                         installedPatchVersion = catalogIdentity.installedPatchVersion,
@@ -649,12 +672,21 @@ private class PatchController(private val activity: MainActivity) {
                             currentCatalog != null && !checkingTargets -> "패치 대상 리소스를 확인할 수 없음"
                             else -> "게임 리소스를 확인할 수 없음"
                         },
-                        resourceIndicator = StatusIndicator.WARNING,
+                        resourceIndicator = if (needsDownload) {
+                            StatusIndicator.PENDING
+                        } else {
+                            StatusIndicator.ERROR
+                        },
                         resourceNeedsDownload = needsDownload,
                         releaseStatus = if (currentCatalog != null && !checkingTargets) {
                             "정식 패치 정보를 확인할 수 없음"
                         } else {
                             "게임 리소스 확인 필요"
+                        },
+                        releaseIndicator = if (needsDownload) {
+                            StatusIndicator.PENDING
+                        } else {
+                            StatusIndicator.ERROR
                         },
                         patchVersion = null,
                         installedPatchVersion = currentCatalog?.installedPatchVersion,
@@ -946,13 +978,21 @@ private fun PatchManagerScreen(
             StatusCard(
                 "Astral Party",
                 state.gameStatus,
-                if (state.gameReady) StatusIndicator.ACTIVE else StatusIndicator.INACTIVE,
+                when {
+                    state.gameStatus == "확인 중" -> StatusIndicator.IN_PROGRESS
+                    state.gameReady -> StatusIndicator.COMPLETED
+                    else -> StatusIndicator.PENDING
+                },
                 onGame,
             )
             StatusCard(
                 "Shizuku",
                 state.shizukuStatus,
-                if (state.shizukuReady) StatusIndicator.ACTIVE else StatusIndicator.INACTIVE,
+                when {
+                    state.shizukuStatus == "확인 중" -> StatusIndicator.IN_PROGRESS
+                    state.shizukuReady -> StatusIndicator.COMPLETED
+                    else -> StatusIndicator.PENDING
+                },
                 onShizuku,
                 state.shizukuActionLabel,
             )
@@ -966,7 +1006,7 @@ private fun PatchManagerScreen(
             StatusCard(
                 "한글패치",
                 state.releaseStatus,
-                if (state.patchVersion != null) StatusIndicator.ACTIVE else StatusIndicator.INACTIVE,
+                state.releaseIndicator,
             )
 
             state.availablePatcherVersion?.let { version ->
@@ -1116,9 +1156,10 @@ private fun StatusCard(
         ) {
             Surface(
                 color = when (indicator) {
-                    StatusIndicator.INACTIVE -> MaterialTheme.colorScheme.outline
-                    StatusIndicator.ACTIVE -> MaterialTheme.colorScheme.primary
-                    StatusIndicator.WARNING -> Color(0xFFFFB300)
+                    StatusIndicator.PENDING -> Color(0xFFFFB300)
+                    StatusIndicator.IN_PROGRESS -> MaterialTheme.colorScheme.primary
+                    StatusIndicator.COMPLETED -> Color(0xFF43A047)
+                    StatusIndicator.ERROR -> MaterialTheme.colorScheme.error
                 },
                 shape = RoundedCornerShape(50),
                 modifier = Modifier.height(12.dp),
