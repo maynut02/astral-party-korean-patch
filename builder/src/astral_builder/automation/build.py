@@ -169,6 +169,7 @@ def build_patch(
     work_dir: str | Path,
     output_dir: str | Path,
     asset_base_url: str,
+    source_asset_base_url: str,
     patch_version: str,
     channel: DistributionChannel,
     git_commit: str | None = None,
@@ -200,8 +201,10 @@ def build_patch(
     work = Path(work_dir)
     output = Path(output_dir)
     releases = output / "assets"
+    originals = output / "originals"
     payloads = work / "payloads"
     releases.mkdir(parents=True, exist_ok=True)
+    originals.mkdir(parents=True, exist_ok=True)
     payloads.mkdir(parents=True, exist_ok=True)
 
     catalog_download = source_client.download_catalog(
@@ -232,6 +235,7 @@ def build_patch(
     patch_lang_bundle(lang_item.path, lang_out, snapshot, asset_name=lang_name, channel=channel)
     validate_file(lang_out)
     lang_transport = _package_payload(lang_out, releases, lang_release_name)
+    lang_source_transport = _package_payload(lang_item.path, originals, lang_release_name)
     manifest_files.append(
         ManifestFile.from_paths(
             lang_out,
@@ -240,6 +244,8 @@ def build_patch(
             path=lang_item.resolved.cache_relative_path,
             download_url=_download_url(asset_base_url, lang_transport.name),
             source=lang_item.path,
+            source_transport=lang_source_transport,
+            source_download_url=_download_url(source_asset_base_url, lang_source_transport.name),
         )
     )
 
@@ -266,6 +272,7 @@ def build_patch(
     )
     validate_file(str_out)
     str_transport = _package_payload(str_out, releases, str_release_name)
+    str_source_transport = _package_payload(str_item.path, originals, str_release_name)
     manifest_files.append(
         ManifestFile.from_paths(
             str_out,
@@ -274,6 +281,8 @@ def build_patch(
             path=str_item.resolved.cache_relative_path,
             download_url=_download_url(asset_base_url, str_transport.name),
             source=str_item.path,
+            source_transport=str_source_transport,
+            source_download_url=_download_url(source_asset_base_url, str_source_transport.name),
         )
     )
 
@@ -303,6 +312,7 @@ def build_patch(
     )
     validate_file(tmp_out)
     tmp_transport = _package_payload(tmp_out, releases, tmp_release_name)
+    tmp_source_transport = _package_payload(tmp_item.path, originals, tmp_release_name)
     manifest_files.append(
         ManifestFile.from_paths(
             tmp_out,
@@ -311,6 +321,8 @@ def build_patch(
             path=tmp_item.resolved.cache_relative_path,
             download_url=_download_url(asset_base_url, tmp_transport.name),
             source=tmp_item.path,
+            source_transport=tmp_source_transport,
+            source_download_url=_download_url(source_asset_base_url, tmp_source_transport.name),
         )
     )
 
@@ -331,6 +343,9 @@ def build_patch(
         )
         validate_file(legacy_out)
         legacy_transport = _package_payload(legacy_out, releases, legacy_release_name)
+        legacy_source_transport = _package_payload(
+            Path(legacy_data_path), originals, legacy_release_name
+        )
         manifest_files.append(
             ManifestFile.from_paths(
                 legacy_out,
@@ -339,6 +354,10 @@ def build_patch(
                 path="data.unity3d",
                 download_url=_download_url(asset_base_url, legacy_transport.name),
                 source=legacy_data_path,
+                source_transport=legacy_source_transport,
+                source_download_url=_download_url(
+                    source_asset_base_url, legacy_source_transport.name
+                ),
             )
         )
 

@@ -32,6 +32,7 @@ class PatchProtocolTest {
         assertEquals(1, parsed.files.size)
         assertEquals("bundle/${"d".repeat(32)}/__data", parsed.files.single().relativePath)
         assertEquals("1".repeat(64), parsed.files.single().sourceSha256)
+        assertEquals("2".repeat(64), parsed.files.single().sourceDownloadSha256)
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -196,6 +197,9 @@ class PatchProtocolTest {
               "compression": "gzip",
               "sha256": "${"f".repeat(64)}",
               "size": 200,
+              "sourceDownloadUrl": "${trustedUrl("original.gz")}",
+              "sourceDownloadSha256": "${"2".repeat(64)}",
+              "sourceDownloadSize": 90,
               "sourceSha256": "${"1".repeat(64)}",
               "sourceSize": 180
             }

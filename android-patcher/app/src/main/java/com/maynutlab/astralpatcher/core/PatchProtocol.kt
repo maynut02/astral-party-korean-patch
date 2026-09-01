@@ -38,6 +38,9 @@ data class PatchFile(
     val downloadSize: Long,
     val payloadSha256: String,
     val payloadSize: Long,
+    val sourceDownloadUrl: String,
+    val sourceDownloadSha256: String,
+    val sourceDownloadSize: Long,
     val sourceSha256: String,
     val sourceSize: Long,
 )
@@ -175,6 +178,8 @@ object PatchProtocol {
                 require(identities.add(path)) { "중복된 patch 경로입니다: $path" }
                 val downloadUrl = item.getString("downloadUrl")
                 TrustedUrls.requireReleaseAsset(downloadUrl)
+                val sourceDownloadUrl = item.getString("sourceDownloadUrl")
+                TrustedUrls.requireReleaseAsset(sourceDownloadUrl)
                 add(
                     PatchFile(
                         relativePath = path,
@@ -185,6 +190,13 @@ object PatchProtocol {
                         downloadSize = positive(item.getLong("downloadSize"), "download size"),
                         payloadSha256 = requireHex(item.getString("sha256"), 64, "payload SHA-256"),
                         payloadSize = positive(item.getLong("size"), "payload size"),
+                        sourceDownloadUrl = sourceDownloadUrl,
+                        sourceDownloadSha256 = requireHex(
+                            item.getString("sourceDownloadSha256"), 64, "source download SHA-256"
+                        ),
+                        sourceDownloadSize = positive(
+                            item.getLong("sourceDownloadSize"), "source download size"
+                        ),
                         sourceSha256 = requireHex(
                             item.getString("sourceSha256"), 64, "source SHA-256"
                         ),

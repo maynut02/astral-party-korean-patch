@@ -380,6 +380,7 @@ private class PatchController(private val activity: MainActivity) {
             var transactionStarted = false
             var diagnosticsCursor = 0
             val payloads = mutableListOf<File>()
+            val originals = mutableListOf<File>()
             try {
                 val serviceInfo = patchService.getServiceInfo()
                 appendLog(
@@ -416,6 +417,25 @@ private class PatchController(private val activity: MainActivity) {
                 )
                 targetManifest.files.forEachIndexed { index, item ->
                     val fileLabel = "${index + 1}/${targetManifest.files.size}"
+                    val original = PatchHttpClient.downloadOriginal(
+                        activity.cacheDir,
+                        item,
+                        index,
+                    ) { percent ->
+                        val overall = (index + percent / 200f) / targetManifest.files.size
+                        updateBusy("원본 파일 $fileLabel 다운로드", overall)
+                    }
+                    originals += original
+                    ParcelFileDescriptor.open(original, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                        patchService.stageOriginal(
+                            transactionId,
+                            descriptor,
+                            item.sourceSize,
+                            item.sourceSha256,
+                            item.relativePath,
+                        )
+                    }
+                    appendLog("[CLIENT] 파일 $fileLabel 릴리즈 원본 검증 및 보관 완료")
                     appendLog(
                         "[CLIENT] 파일 $fileLabel 다운로드 시작 · path=${item.relativePath} " +
                             "downloadBytes=${item.downloadSize} payloadBytes=${item.payloadSize} " +
@@ -515,6 +535,7 @@ private class PatchController(private val activity: MainActivity) {
                 showError("한글패치 적용에 실패했습니다.", error)
             } finally {
                 payloads.forEach(File::delete)
+                originals.forEach(File::delete)
             }
         }
     }

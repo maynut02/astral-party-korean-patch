@@ -143,6 +143,41 @@ class PatchUserService : IPatchService.Stub() {
     }
 
     @Synchronized
+    override fun stageOriginal(
+        transactionId: String,
+        original: ParcelFileDescriptor,
+        sourceSize: Long,
+        sourceSha256: String,
+        relativePath: String,
+    ) {
+        val safeId = requireTransactionId(transactionId)
+        diagnosticOperation(safeId, "stage_original", "path=$relativePath sourceSize=$sourceSize") {
+            val expectedSize = requirePositive(sourceSize, "원본 파일 크기")
+            val expectedSha = requireSha256(sourceSha256)
+            val safeRelative = PatchProtocol.safeRelativePath(relativePath)
+            val transaction = activeTransaction(safeId)
+            val catalogHash = requireCatalogHash(File(transaction, "catalog.txt").readText().trim())
+            val target = resolveExistingBundle(safeRelative)
+            val actualPath = target.relativeTo(bundleRoot).invariantSeparatorsPath
+
+            val permanentBackup = File(File(backupsRoot, catalogHash), actualPath)
+            if (permanentBackup.isFile) {
+                verifyFile(permanentBackup, expectedSize, expectedSha, "보관된 원본")
+                original.close()
+                appendDiagnostic(safeId, "release_original_reused", "path=$actualPath")
+                return@diagnosticOperation
+            }
+
+            verifyFile(target, expectedSize, expectedSha, "게임 원본")
+            val staged = File(transaction, "originals/$actualPath")
+            receiveVerified(original, staged, expectedSize, expectedSha, safeId)
+            copyVerified(staged, permanentBackup, safeId, "release_original_backup")
+            staged.delete()
+            appendDiagnostic(safeId, "release_original_stored", "path=$actualPath bytes=$expectedSize")
+        }
+    }
+
+    @Synchronized
     override fun applyFile(
         transactionId: String,
         payload: ParcelFileDescriptor,
@@ -179,14 +214,9 @@ class PatchUserService : IPatchService.Stub() {
                 require(actualPath !in applied) { "같은 파일을 두 번 적용할 수 없습니다: $actualPath" }
 
                 val permanentBackup = File(File(backupsRoot, catalogHash), actualPath)
-                if (permanentBackup.isFile) {
-                    verifyFile(permanentBackup, sourceSize, expectedSourceSha, "보관된 원본")
-                    appendDiagnostic(safeId, "backup_verified", "path=$actualPath 기존 원본 backup 사용")
-                } else {
-                    verifyFile(target, sourceSize, expectedSourceSha, "게임 원본")
-                    copyVerified(target, permanentBackup, safeId, "permanent_backup")
-                    appendDiagnostic(safeId, "backup_created", "path=$actualPath bytes=$sourceSize")
-                }
+                require(permanentBackup.isFile) { "릴리즈 원본 backup이 준비되지 않았습니다." }
+                verifyFile(permanentBackup, sourceSize, expectedSourceSha, "보관된 릴리즈 원본")
+                appendDiagnostic(safeId, "backup_verified", "path=$actualPath 릴리즈 원본 backup 사용")
                 val previous = File(transaction, "previous/$actualPath")
                 copyVerified(target, previous, safeId, "transaction_previous")
                 appendDiagnostic(safeId, "previous_saved", "path=$actualPath bytes=${previous.length()}")

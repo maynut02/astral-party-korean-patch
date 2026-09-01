@@ -15,6 +15,7 @@ def test_database_migrations_are_complete_and_parseable() -> None:
         "0004_translation_changes_creator_status_index.sql",
         "0005_patch_watcher.sql",
         "0006_patch_watch_runs.sql",
+        "0007_editor_comments.sql",
     ]
 
     for migration in migrations:

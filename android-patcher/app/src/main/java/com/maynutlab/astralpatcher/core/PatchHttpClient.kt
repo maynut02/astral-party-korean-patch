@@ -93,6 +93,35 @@ object PatchHttpClient {
         }
     }
 
+    fun downloadOriginal(
+        cacheDir: File,
+        item: PatchFile,
+        ordinal: Int,
+        onProgress: (Int) -> Unit,
+    ): File {
+        val root = File(cacheDir, "patch-originals").apply { mkdirs() }
+        val transport = File(root, "$ordinal.transport")
+        val payload = File(root, "$ordinal.original")
+        transport.delete()
+        payload.delete()
+        try {
+            downloadTo(
+                transport,
+                item.sourceDownloadUrl,
+                item.sourceDownloadSize,
+                item.sourceDownloadSha256,
+                onProgress,
+            )
+            gunzipVerified(transport, payload, item.sourceSize, item.sourceSha256)
+            return payload
+        } catch (error: Exception) {
+            payload.delete()
+            throw error
+        } finally {
+            transport.delete()
+        }
+    }
+
     private fun getBytes(value: String, maxBytes: Int): ByteArray {
         val connection = open(value)
         try {

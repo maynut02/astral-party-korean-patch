@@ -51,6 +51,39 @@ def test_patch_workflow_keeps_only_pre_release_mutable() -> None:
     assert "immutable release tag already exists" in publish_script
 
 
+def test_patch_workflow_builds_against_immutable_original_releases() -> None:
+    jobs = _workflow()["jobs"]
+    steam_build = next(
+        step["run"]
+        for step in jobs["build-steam"]["steps"]
+        if step.get("name") == "Build and validate"
+    )
+    android_build = next(
+        step["run"]
+        for step in jobs["build-android"]["steps"]
+        if step.get("name") == "Build and validate"
+    )
+    original_publish = next(
+        step["run"]
+        for step in jobs["publish"]["steps"]
+        if step.get("name") == "Publish immutable original releases"
+    )
+
+    assert "--source-asset-base-url" in steam_build
+    assert "--source-asset-base-url" in android_build
+    assert 'source_tag="original-${{ matrix.route }}-' in steam_build
+    assert 'source_tag="original-INT_ANDROID-' in android_build
+    assert (
+        'original_tag="original-${route}-${game_version}_r${revision_number}"'
+        in original_publish
+    )
+    assert 'if gh release view "$original_tag"' in original_publish
+    assert "reusing immutable original release" in original_publish
+    assert 'gh release create "$original_tag"' in original_publish
+    assert "--clobber" not in original_publish
+    assert "immutable original release is incomplete" in original_publish
+
+
 def test_patch_workflow_has_no_github_cron_and_pre_is_change_driven() -> None:
     workflow = _workflow()
     triggers = workflow[True] if True in workflow else workflow["on"]

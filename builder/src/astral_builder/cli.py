@@ -52,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--work-dir", default=".work/build")
     build.add_argument("--output-dir", default="output/patch")
     build.add_argument("--asset-base-url", required=True)
+    build.add_argument("--source-asset-base-url", required=True)
     build.add_argument("--patch-version", required=True)
     build.add_argument("--github-run-id")
     build.add_argument("--git-commit")
@@ -192,6 +193,7 @@ def _run_build(args: argparse.Namespace) -> int:
             work_dir=args.work_dir,
             output_dir=args.output_dir,
             asset_base_url=args.asset_base_url,
+            source_asset_base_url=args.source_asset_base_url,
             patch_version=args.patch_version,
             github_run_id=args.github_run_id,
             git_commit=args.git_commit,

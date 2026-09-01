@@ -9,11 +9,11 @@ Google Play 원본 Astral Party를 유지하면서 외부 Addressables 캐시에
 3. Shizuku UserService가 게임의 `com.unity.addressables` catalog version/hash를 읽습니다.
 4. 고정된 `release-index.json`에서 정확히 일치하는 `INT_ANDROID` 정식 패치를 찾습니다.
 5. 검증된 manifest에 기록된 모든 patch 대상 원본 파일의 존재 여부, 크기, SHA-256을 먼저 확인합니다.
-6. 사용자가 적용을 시작하면 모든 gzip/payload의 크기와 SHA-256을 검증합니다.
-7. 게임을 종료하고 기존 cache 파일을 영구 backup과 transaction backup에 저장합니다.
-8. LANG, STR, TMP 폰트 bundle을 원자적으로 교체합니다.
-9. 중간 실패 시 transaction backup으로 자동 rollback합니다.
-10. 사용자는 앱에서 원본 파일을 복원할 수 있습니다.
+6. 동일한 게임 버전과 revision에 고정된 원본 Release에서 복원용 gzip을 내려받고 압축 파일과 원본 payload를 모두 검증합니다.
+7. 검증된 Release 원본을 영구 restore copy로 저장하고, 현재 게임 파일은 transaction rollback용 임시 copy만 생성합니다.
+8. patch gzip/payload의 크기와 SHA-256을 검증한 뒤 LANG, STR, TMP 폰트 bundle을 원자적으로 교체합니다.
+9. 중간 실패 시 transaction rollback copy로 자동 복구합니다.
+10. 사용자는 검증된 Release 원본을 기준으로 원본 파일을 복원할 수 있습니다.
 
 게임 APK 다운로드, APK 재서명, LSPatch, `pm install`, 설치 출처 위장은 사용하지 않습니다. APK 내부 `assets/bin/Data/data.unity3d`의 legacy 폰트는 원본 상태로 유지합니다.
 

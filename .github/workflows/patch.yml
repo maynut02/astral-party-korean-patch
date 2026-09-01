@@ -396,23 +396,29 @@ jobs:
         env:
           INT_STEAM_REVISION_ID: ${{ needs.state.outputs.int_steam_revision_id }}
           CN_STEAM_REVISION_ID: ${{ needs.state.outputs.cn_steam_revision_id }}
+          INT_STEAM_REVISION: ${{ needs.state.outputs.int_steam_revision }}
+          CN_STEAM_REVISION: ${{ needs.state.outputs.cn_steam_revision }}
         run: |
           set -euo pipefail
           case '${{ matrix.route }}' in
-            INT_STEAM) REVISION_ID="$INT_STEAM_REVISION_ID" ;;
-            CN_STEAM) REVISION_ID="$CN_STEAM_REVISION_ID" ;;
+            INT_STEAM) REVISION_ID="$INT_STEAM_REVISION_ID"; REVISION="$INT_STEAM_REVISION" ;;
+            CN_STEAM) REVISION_ID="$CN_STEAM_REVISION_ID"; REVISION="$CN_STEAM_REVISION" ;;
             *) echo 'unsupported Steam route' >&2; exit 1 ;;
           esac
           root='output/patch/${{ matrix.slug }}'
           work='.work/build-${{ matrix.slug }}'
           output_file='.work/build-output.env'
           asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
+          revision_number="${REVISION#r}"
+          source_tag="original-${{ matrix.route }}-${{ needs.plan.outputs.game_version }}_r${revision_number}"
+          source_asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${source_tag}"
           astral-builder build \
             --revision-id "$REVISION_ID" \
             --route-config '${{ matrix.config }}' \
             --work-dir "$work" \
             --output-dir "$root" \
             --asset-base-url "$asset_base" \
+            --source-asset-base-url "$source_asset_base" \
             --patch-version '${{ needs.plan.outputs.patch_version }}' \
             --github-run-id "$GITHUB_RUN_ID" \
             --git-commit "$GITHUB_SHA" \
@@ -426,6 +432,8 @@ jobs:
           mkdir -p output/release
           cp "$root/manifest.json" 'output/release/${{ matrix.route }}_manifest.json'
           cp "$root"/assets/* output/release/
+          mkdir -p 'output/originals/${{ matrix.route }}'
+          cp "$root"/originals/* 'output/originals/${{ matrix.route }}/'
           python tools/workflow/manual_patch.py \
             --manifest "$root/manifest.json" \
             --payloads-dir "$work/payloads" \
@@ -438,6 +446,14 @@ jobs:
         with:
           name: patch-build-${{ matrix.slug }}
           path: output/release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload route originals
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-originals-${{ matrix.slug }}
+          path: output/originals/${{ matrix.route }}/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -466,12 +482,17 @@ jobs:
           root=output/patch/int_android
           output_file=.work/build-output.env
           asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
+          revision='${{ needs.state.outputs.int_android_revision }}'
+          revision_number="${revision#r}"
+          source_tag="original-INT_ANDROID-${{ needs.plan.outputs.game_version }}_r${revision_number}"
+          source_asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${source_tag}"
           astral-builder build \
             --revision-id '${{ needs.state.outputs.int_android_revision_id }}' \
             --route-config routes/int_android.yaml \
             --work-dir .work/build-int_android \
             --output-dir "$root" \
             --asset-base-url "$asset_base" \
+            --source-asset-base-url "$source_asset_base" \
             --patch-version '${{ needs.plan.outputs.patch_version }}' \
             --github-run-id "$GITHUB_RUN_ID" \
             --git-commit "$GITHUB_SHA" \
@@ -484,6 +505,8 @@ jobs:
           mkdir -p output/release
           cp "$root/manifest.json" output/release/INT_ANDROID_manifest.json
           cp "$root"/assets/* output/release/
+          mkdir -p output/originals/INT_ANDROID
+          cp "$root"/originals/* output/originals/INT_ANDROID/
           build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
           test -n "$build_id"
           printf '%s\n' "$build_id" > output/release/INT_ANDROID_build_id.txt
@@ -492,6 +515,14 @@ jobs:
         with:
           name: patch-build-int_android
           path: output/release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload route originals
+        uses: actions/upload-artifact@v7
+        with:
+          name: patch-originals-int_android
+          path: output/originals/INT_ANDROID/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -513,12 +544,88 @@ jobs:
           pattern: patch-build-*
           path: output/release
           merge-multiple: true
+      - name: Download INT_STEAM originals
+        uses: actions/download-artifact@v7
+        with:
+          name: patch-originals-int_steam
+          path: output/originals/INT_STEAM
+      - name: Download CN_STEAM originals
+        uses: actions/download-artifact@v7
+        with:
+          name: patch-originals-cn_steam
+          path: output/originals/CN_STEAM
+      - name: Download INT_ANDROID originals
+        uses: actions/download-artifact@v7
+        with:
+          name: patch-originals-int_android
+          path: output/originals/INT_ANDROID
       - name: Verify complete release set
         run: |
           set -euo pipefail
           for route in INT_STEAM CN_STEAM INT_ANDROID; do
             test -s "output/release/${route}_manifest.json"
             test -s "output/release/${route}_build_id.txt"
+            test -d "output/originals/${route}"
+          done
+      - name: Publish immutable original releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          for route in INT_STEAM CN_STEAM INT_ANDROID; do
+            manifest="output/release/${route}_manifest.json"
+            original_dir="output/originals/${route}"
+            game_version="$(jq -r '.game.version' "$manifest")"
+            revision="$(jq -r '.game.revision' "$manifest")"
+            revision_number="${revision#r}"
+            original_tag="original-${route}-${game_version}_r${revision_number}"
+            source_prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/${original_tag}/"
+
+            mapfile -t expected_assets < <(
+              jq -r '.files[].sourceDownloadUrl // empty | split("/")[-1]' "$manifest" | sort -u
+            )
+            test "${#expected_assets[@]}" -gt 0
+            jq -e --arg prefix "$source_prefix" \
+              'all(.files[]; (.sourceDownloadUrl | type == "string") and (.sourceDownloadUrl | startswith($prefix)))' \
+              "$manifest" >/dev/null
+
+            upload_args=()
+            for asset in "${expected_assets[@]}"; do
+              test -n "$asset"
+              test -s "$original_dir/$asset"
+              upload_args+=("$original_dir/$asset")
+            done
+
+            if gh release view "$original_tag" >/dev/null 2>&1; then
+              existing_assets="$(mktemp)"
+              gh release view "$original_tag" --json assets --jq '.assets[].name' > "$existing_assets"
+              for asset in "${expected_assets[@]}"; do
+                if ! grep -Fxq "$asset" "$existing_assets"; then
+                  echo "immutable original release is incomplete: $original_tag missing $asset" >&2
+                  exit 1
+                fi
+              done
+              rm -f "$existing_assets"
+              echo "reusing immutable original release: $original_tag"
+              continue
+            fi
+
+            if git ls-remote --exit-code --tags origin "refs/tags/$original_tag" >/dev/null 2>&1; then
+              echo "immutable original tag exists without a GitHub Release: $original_tag" >&2
+              exit 1
+            fi
+
+            gh release create "$original_tag" \
+              --draft \
+              --target "$GITHUB_SHA" \
+              --title "$original_tag" \
+              --notes "Immutable original files for ${route} ${game_version} revision ${revision_number}."
+            cleanup_original() {
+              gh release delete "$original_tag" --yes --cleanup-tag >/dev/null 2>&1 || true
+            }
+            trap cleanup_original ERR
+            gh release upload "$original_tag" "${upload_args[@]}"
+            gh release edit "$original_tag" --draft=false
+            trap - ERR
           done
       - name: Write release notes
         shell: bash

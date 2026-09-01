@@ -39,6 +39,8 @@ def test_parser_exposes_build_command() -> None:
             "routes/int_steam.yaml",
             "--asset-base-url",
             "https://example.test/release",
+            "--source-asset-base-url",
+            "https://example.test/originals",
             "--patch-version",
             "v1",
             "--github-run-id",

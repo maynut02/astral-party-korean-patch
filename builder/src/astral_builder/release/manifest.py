@@ -75,6 +75,9 @@ class ManifestFile:
     compression: Compression
     sha256: str
     size: int
+    source_download_url: str | None = None
+    source_download_sha256: str | None = None
+    source_download_size: int | None = None
     source_sha256: str | None = None
     source_size: int | None = None
 
@@ -90,10 +93,15 @@ class ManifestFile:
         operation: Operation = "replace",
         compression: Compression = "gzip",
         source: str | Path | None = None,
+        source_transport: str | Path | None = None,
+        source_download_url: str | None = None,
     ) -> ManifestFile:
         payload_sha256, payload_size = _hash_and_size(payload)
         download_sha256, download_size = _hash_and_size(transport)
         source_sha256, source_size = _hash_and_size(source) if source is not None else (None, None)
+        source_download_sha256, source_download_size = (
+            _hash_and_size(source_transport) if source_transport is not None else (None, None)
+        )
         return cls(
             target=target,
             path=path.replace("\\", "/"),
@@ -104,6 +112,9 @@ class ManifestFile:
             compression=compression,
             sha256=payload_sha256,
             size=payload_size,
+            source_download_url=source_download_url,
+            source_download_sha256=source_download_sha256,
+            source_download_size=source_download_size,
             source_sha256=source_sha256,
             source_size=source_size,
         )
@@ -122,9 +133,26 @@ class ManifestFile:
             raise ValueError(f"unsupported transport compression: {self.compression}")
         _validate_sha256(self.download_sha256, "download sha256")
         _validate_sha256(self.sha256, "file sha256")
-        if (self.source_sha256 is None) != (self.source_size is None):
-            raise ValueError("manifest source sha256 and size must be provided together")
+        source_values = (
+            self.source_download_url,
+            self.source_download_sha256,
+            self.source_download_size,
+            self.source_sha256,
+            self.source_size,
+        )
+        if any(value is not None for value in source_values) and not all(
+            value is not None for value in source_values
+        ):
+            raise ValueError("manifest source download metadata must be provided together")
         if self.source_sha256 is not None:
+            assert self.source_download_url is not None
+            assert self.source_download_sha256 is not None
+            assert self.source_download_size is not None
+            if not self.source_download_url.startswith(("https://", "http://")):
+                raise ValueError("manifest source_download_url must be an http(s) URL")
+            _validate_sha256(self.source_download_sha256, "source download sha256")
+            if self.source_download_size <= 0:
+                raise ValueError("manifest source download size must be positive")
             _validate_sha256(self.source_sha256, "source sha256")
             if self.source_size is None or self.source_size <= 0:
                 raise ValueError("manifest source size must be positive")
@@ -146,6 +174,12 @@ class ManifestFile:
             "size": self.size,
         }
         if self.source_sha256 is not None and self.source_size is not None:
+            assert self.source_download_url is not None
+            assert self.source_download_sha256 is not None
+            assert self.source_download_size is not None
+            result["sourceDownloadUrl"] = self.source_download_url
+            result["sourceDownloadSha256"] = self.source_download_sha256
+            result["sourceDownloadSize"] = self.source_download_size
             result["sourceSha256"] = self.source_sha256
             result["sourceSize"] = self.source_size
         return result

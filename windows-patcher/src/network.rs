@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::protocol::{
-    InstallTarget, PatchManifest, ProtocolError, ReleaseIndex, ReleaseIndexEntry,
+    InstallTarget, ManifestFile, PatchManifest, ProtocolError, ReleaseIndex, ReleaseIndexEntry,
     validate_relative_path,
 };
 
@@ -224,6 +224,70 @@ impl ReleaseClient {
             staged.push(destination);
         }
         Ok(staged)
+    }
+
+    pub fn download_original_file(
+        &self,
+        file: &ManifestFile,
+        destination: &Path,
+    ) -> Result<(), NetworkError> {
+        let (url, download_sha256, download_size, source_sha256, source_size) = match (
+            &file.source_download_url,
+            &file.source_download_sha256,
+            file.source_download_size,
+            &file.source_sha256,
+            file.source_size,
+        ) {
+            (
+                Some(url),
+                Some(download_sha256),
+                Some(download_size),
+                Some(source_sha256),
+                Some(source_size),
+            ) => (
+                url,
+                download_sha256,
+                download_size,
+                source_sha256,
+                source_size,
+            ),
+            _ => {
+                return Err(
+                    ProtocolError::UnsafePath("source restore metadata missing".into()).into(),
+                );
+            }
+        };
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let transport = destination.with_extension("astral-original-gz");
+        let payload = destination.with_extension("astral-original-tmp");
+        let result = (|| {
+            self.download_verified_with_progress(
+                url,
+                &transport,
+                download_size,
+                download_sha256,
+                |_| {},
+            )?;
+            decompress_gzip_verified_with_progress(
+                &transport,
+                &payload,
+                source_size,
+                source_sha256,
+                |_| {},
+            )?;
+            if destination.exists() {
+                fs::remove_file(destination)?;
+            }
+            fs::rename(&payload, destination)?;
+            Ok::<(), NetworkError>(())
+        })();
+        let _ = fs::remove_file(&transport);
+        if result.is_err() {
+            let _ = fs::remove_file(&payload);
+        }
+        result
     }
 
     fn download_verified_with_progress<F>(

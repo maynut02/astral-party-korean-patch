@@ -343,12 +343,27 @@ where
                     current: completed_size,
                     total: total_size,
                 });
-                let original_hash = sha256_file(&destination)?;
                 let backup = backup_path(backup_root, file.target, &file.path)?;
-                if let Some(parent) = backup.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::copy(&destination, &backup)?;
+                let original_hash = match (&file.source_sha256, file.source_size) {
+                    (Some(source_sha256), Some(source_size)) => {
+                        verify_file(&destination, source_size, source_sha256)?;
+                        verify_file(&backup, source_size, source_sha256)?;
+                        source_sha256.clone()
+                    }
+                    (None, None) => {
+                        let original_hash = sha256_file(&destination)?;
+                        if let Some(parent) = backup.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
+                        fs::copy(&destination, &backup)?;
+                        original_hash
+                    }
+                    _ => {
+                        return Err(InstallError::Protocol(ProtocolError::UnsafePath(
+                            "partial source restore metadata".into(),
+                        )));
+                    }
+                };
                 ownership.modified_files.push(OwnedModifiedFile {
                     target: file.target,
                     path: file.path.clone(),
@@ -606,6 +621,11 @@ mod tests {
             compression: "gzip".into(),
             sha256: hash,
             size: payload.len() as u64,
+            source_download_url: None,
+            source_download_sha256: None,
+            source_download_size: None,
+            source_sha256: None,
+            source_size: None,
         });
 
         let summary = install_patch(&patch, &staging, &roots, &backup, &ownership_path).unwrap();
@@ -642,6 +662,11 @@ mod tests {
             compression: "gzip".into(),
             sha256: hash,
             size: payload.len() as u64,
+            source_download_url: None,
+            source_download_sha256: None,
+            source_download_size: None,
+            source_sha256: None,
+            source_size: None,
         });
         let mut events = Vec::new();
 
@@ -690,6 +715,11 @@ mod tests {
             compression: "gzip".into(),
             sha256: hash,
             size: payload.len() as u64,
+            source_download_url: None,
+            source_download_sha256: None,
+            source_download_size: None,
+            source_sha256: None,
+            source_size: None,
         });
 
         install_patch(&patch, &staging, &roots, &backup, &ownership_path).unwrap();
@@ -706,6 +736,55 @@ mod tests {
         let report = remove_patch(&ownership, &roots, &backup).unwrap();
         assert_eq!(report.issues.len(), 1);
         assert_eq!(fs::read(&destination).unwrap(), b"external-change");
+    }
+
+    #[test]
+    fn release_restore_backup_requires_matching_game_original() {
+        let temp = tempdir().unwrap();
+        let staging = temp.path().join("staging");
+        let roots = roots(temp.path());
+        fs::create_dir_all(&roots.game_data).unwrap();
+        let destination = roots.game_data.join("data.unity3d");
+        fs::write(&destination, b"modified").unwrap();
+        let backup = temp.path().join("backup/game-data/data.unity3d");
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        fs::write(&backup, b"original").unwrap();
+        let ownership_path = temp.path().join("installed.json");
+        let payload = b"patched";
+        let payload_hash = format!("{:x}", Sha256::digest(payload));
+        let original_hash = format!("{:x}", Sha256::digest(b"original"));
+        let stage = staging.join("game-data/data.unity3d");
+        fs::create_dir_all(stage.parent().unwrap()).unwrap();
+        fs::write(&stage, payload).unwrap();
+        let patch = manifest(ManifestFile {
+            target: InstallTarget::GameData,
+            path: "data.unity3d".into(),
+            operation: "replace".into(),
+            download_url: "https://example.test/replaced.gz".into(),
+            download_sha256: "d".repeat(64),
+            download_size: 5,
+            compression: "gzip".into(),
+            sha256: payload_hash,
+            size: payload.len() as u64,
+            source_download_url: Some("https://example.test/original.gz".into()),
+            source_download_sha256: Some("e".repeat(64)),
+            source_download_size: Some(5),
+            source_sha256: Some(original_hash),
+            source_size: Some(8),
+        });
+
+        let error = install_patch(
+            &patch,
+            &staging,
+            &roots,
+            &temp.path().join("backup"),
+            &ownership_path,
+        )
+        .unwrap_err();
+        assert!(matches!(error, InstallError::HashMismatch(_, _, _)));
+        assert_eq!(fs::read(&destination).unwrap(), b"modified");
+        assert_eq!(fs::read(&backup).unwrap(), b"original");
+        assert!(!ownership_path.exists());
     }
 
     #[test]

@@ -25,5 +25,12 @@ interface IPatchService {
     String restorePatch() = 6;
     String inspectPatchTargets(String requirementsJson) = 7;
     String getPatchDiagnostics(String transactionId) = 8;
+    void stageOriginal(
+        String transactionId,
+        in ParcelFileDescriptor original,
+        long sourceSize,
+        String sourceSha256,
+        String relativePath
+    ) = 9;
     void destroy() = 16777114;
 }

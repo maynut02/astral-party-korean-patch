@@ -49,6 +49,7 @@ def test_manifest_is_valid_against_shared_schema(tmp_path: Path) -> None:
 def test_manifest_records_original_source_metadata(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.write_bytes(b"original-addressables")
+    source_transport = gzip_payload(source, tmp_path / "source.gz")
     payload = tmp_path / "payload"
     payload.write_bytes(b"patched-addressables")
     transport = gzip_payload(payload, tmp_path / "payload.gz")
@@ -59,10 +60,15 @@ def test_manifest_records_original_source_metadata(tmp_path: Path) -> None:
         path="root/hash/__data",
         download_url="https://example.test/payload.gz",
         source=source,
+        source_transport=source_transport.path,
+        source_download_url="https://example.test/original.gz",
     )
     raw = item.as_dict()
     assert raw["sourceSize"] == len(b"original-addressables")
     assert len(str(raw["sourceSha256"])) == 64
+    assert raw["sourceDownloadUrl"] == "https://example.test/original.gz"
+    assert raw["sourceDownloadSize"] == source_transport.size
+    assert len(str(raw["sourceDownloadSha256"])) == 64
     schema = json.loads((ROOT / "schemas/patch-manifest.schema.json").read_text())
     manifest = PatchManifest(
         patch=PatchMetadata(

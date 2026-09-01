@@ -55,6 +55,7 @@ pub struct RouteStatePaths {
     pub staging_root: PathBuf,
     pub backup_root: PathBuf,
     pub ownership_path: PathBuf,
+    pub manifest_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,7 @@ impl PatcherPaths {
             staging_root: root.join("staging"),
             backup_root: root.join("backup"),
             ownership_path: root.join("installed.json"),
+            manifest_path: root.join("installed-manifest.json"),
             root,
         }
     }
@@ -291,6 +293,9 @@ pub fn reset_patch_state(
     if ownership_removed {
         fs::remove_file(&state.ownership_path)?;
     }
+    if state.manifest_path.exists() {
+        fs::remove_file(&state.manifest_path)?;
+    }
 
     Ok(PatchStateResetReport {
         ownership_removed,
@@ -320,6 +325,7 @@ pub fn remove_installed_patch(
         ownership.modified_files.len(),
         state.backup_root.display()
     ));
+    repair_restore_backups(&ownership, &state)?;
     let report = remove_patch(&ownership, roots, &state.backup_root)?;
     let issues = report.issue_summary();
     if issues.total() > 0 {
@@ -344,6 +350,9 @@ pub fn remove_installed_patch(
     if state.backup_root.exists() {
         fs::remove_dir_all(&state.backup_root)?;
     }
+    if state.manifest_path.exists() {
+        fs::remove_file(&state.manifest_path)?;
+    }
     logging::info(format!(
         "Steam remove complete: route={} removed={} restored={}",
         route.as_str(),
@@ -351,6 +360,104 @@ pub fn remove_installed_patch(
         report.restored
     ));
     Ok(Some(report))
+}
+
+fn repair_restore_backups(
+    ownership: &OwnershipManifest,
+    state: &RouteStatePaths,
+) -> Result<(), ServiceError> {
+    let mut needs_restore = Vec::new();
+    for modified in &ownership.modified_files {
+        let backup = state.backup_root.join(&modified.backup_path);
+        if !backup.is_file() || crate::install::sha256_file(&backup)? != modified.original_sha256 {
+            needs_restore.push(modified);
+        }
+    }
+    if needs_restore.is_empty() || !state.manifest_path.is_file() {
+        return Ok(());
+    }
+    let raw = fs::read(&state.manifest_path)?;
+    let manifest: PatchManifest = serde_json::from_slice(&raw)?;
+    manifest.validate().map_err(InstallError::from)?;
+    if manifest.patch.version != ownership.patch_version
+        || manifest.game.catalog_hash != ownership.catalog_hash
+    {
+        return Err(ServiceError::IncompatibleManifest);
+    }
+    let user_agent = format!("AstralAutoPatcher/{}", env!("CARGO_PKG_VERSION"));
+    let client = ReleaseClient::new(&user_agent)?;
+    for modified in needs_restore {
+        let Some(file) = manifest
+            .files
+            .iter()
+            .find(|file| file.target == modified.target && file.path == modified.path)
+        else {
+            continue;
+        };
+        if file.source_sha256.as_deref() != Some(modified.original_sha256.as_str()) {
+            continue;
+        }
+        let backup = state.backup_root.join(&modified.backup_path);
+        logging::info(format!(
+            "Steam restore source download: path={}",
+            modified.path
+        ));
+        client.download_original_file(file, &backup)?;
+    }
+    Ok(())
+}
+
+fn prepare_release_restore_backups(
+    client: &ReleaseClient,
+    manifest: &PatchManifest,
+    roots: &InstallRoots,
+    state: &RouteStatePaths,
+) -> Result<(), ServiceError> {
+    for file in &manifest.files {
+        let (Some(source_sha256), Some(source_size)) = (&file.source_sha256, file.source_size)
+        else {
+            continue;
+        };
+        let destination = match file.target {
+            crate::protocol::InstallTarget::Addressables => roots.addressables.join(&file.path),
+            crate::protocol::InstallTarget::GameData => roots.game_data.join(&file.path),
+        };
+        if !destination.is_file() {
+            continue;
+        }
+
+        let actual_size = destination.metadata()?.len();
+        if actual_size != source_size {
+            return Err(InstallError::SizeMismatch(destination, source_size, actual_size).into());
+        }
+        let actual_sha256 = crate::install::sha256_file(&destination)?;
+        if actual_sha256 != *source_sha256 {
+            return Err(InstallError::HashMismatch(
+                destination,
+                source_sha256.clone(),
+                actual_sha256,
+            )
+            .into());
+        }
+
+        let backup = state
+            .backup_root
+            .join(file.target.staging_dir())
+            .join(&file.path);
+        if backup.is_file()
+            && backup.metadata()?.len() == source_size
+            && crate::install::sha256_file(&backup)? == *source_sha256
+        {
+            continue;
+        }
+        logging::info(format!(
+            "Steam restore source prepare: path={} source={}",
+            file.path,
+            file.source_download_url.as_deref().unwrap_or("missing")
+        ));
+        client.download_original_file(file, &backup)?;
+    }
+    Ok(())
 }
 
 fn ensure_manifest_compatible(
@@ -456,6 +563,7 @@ where
     }
 
     state.reset_staging()?;
+    prepare_release_restore_backups(&client, &manifest, &roots, &state)?;
     client.stage_manifest_files_with_progress(
         &manifest,
         &state.staging_root,
@@ -512,6 +620,16 @@ where
             });
         },
     )?;
+    let manifest_json = serde_json::to_vec_pretty(&manifest)?;
+    let manifest_temp = state.manifest_path.with_extension("json.tmp");
+    if let Some(parent) = state.manifest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&manifest_temp, manifest_json)?;
+    if state.manifest_path.exists() {
+        fs::remove_file(&state.manifest_path)?;
+    }
+    fs::rename(manifest_temp, &state.manifest_path)?;
     let _ = fs::remove_dir_all(&state.staging_root);
     logging::info(format!(
         "Steam install complete: route={} patch={} created={} modified={}",
@@ -570,6 +688,11 @@ mod tests {
                 compression: "gzip".into(),
                 sha256: hash.into(),
                 size: 7,
+                source_download_url: None,
+                source_download_sha256: None,
+                source_download_size: None,
+                source_sha256: None,
+                source_size: None,
             }],
         }
     }

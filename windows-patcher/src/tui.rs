@@ -311,7 +311,7 @@ impl App {
                 self.install_progress.apply_total = total;
                 let action = match phase {
                     ApplyPhase::VerifyingStage => "적용 전 검증",
-                    ApplyPhase::BackingUp => "원본 백업",
+                    ApplyPhase::BackingUp => "복원 원본 확인",
                     ApplyPhase::Copying => "패치 적용",
                     ApplyPhase::VerifyingInstalled => "적용 후 검증",
                 };
@@ -1209,11 +1209,11 @@ fn render_operation(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(
-                    "WindowsPatcher의 기존 installed/backup/staging 기록만 폐기한 뒤 현재 파일을 기준으로 다시 설치합니다.",
+                    "WindowsPatcher의 기존 installed/backup/staging 기록만 폐기하고, 다음 설치에서 릴리즈 원본과 현재 게임 파일을 다시 검증합니다.",
                 ),
                 Line::from(""),
                 Line::from(
-                    "다른 모드나 수동 수정이 남아 있다면 그 상태를 원본으로 백업할 수 있습니다.",
+                    "다른 모드나 수동 수정이 남아 있으면 원본 검증에 실패하여 설치가 중단됩니다.",
                 ),
                 Line::from("Steam 파일이 정상 상태인지 확인한 경우에만 초기화를 선택하세요."),
             ]);

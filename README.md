@@ -14,7 +14,7 @@ Astral Party 비공식 한국어 패치 프로젝트입니다. 게임 업데이�
 
 ### Android
 
-Android판은 Google Play에서 설치한 원본 게임을 유지합니다. `AndroidPatcher`는 Shizuku shell 권한으로 게임의 외부 Addressables 캐시만 백업·검증·교체합니다. LANG, STR, TMP 폰트 bundle이 패치 대상이며 APK 내부 legacy 폰트는 수정하지 않습니다.
+Android판은 Google Play에서 설치한 원본 게임을 유지합니다. `AndroidPatcher`는 Shizuku shell 권한으로 게임의 외부 Addressables 캐시만 검증·교체하며, 복원용 원본은 게임 파일을 복사하지 않고 동일 게임 버전/revision에 고정된 GitHub Release에서 내려받아 보관합니다. LANG, STR, TMP 폰트 bundle이 패치 대상이며 APK 내부 legacy 폰트는 수정하지 않습니다.
 
 게임을 먼저 실행해 최신 리소스 다운로드를 완료한 뒤 `AndroidPatcher`에서 Shizuku 권한을 허용하고 한글패치를 적용해야 합니다. 게임 업데이트 후에는 새 리소스를 내려받은 다음 패치를 다시 적용합니다.
 

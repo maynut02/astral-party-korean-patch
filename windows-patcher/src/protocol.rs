@@ -73,6 +73,11 @@ pub struct ManifestFile {
     pub compression: String,
     pub sha256: String,
     pub size: u64,
+    pub source_download_url: Option<String>,
+    pub source_download_sha256: Option<String>,
+    pub source_download_size: Option<u64>,
+    pub source_sha256: Option<String>,
+    pub source_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +180,51 @@ impl PatchManifest {
             if file.size == 0 {
                 return Err(ProtocolError::InvalidSize("file.size"));
             }
+            let source_fields = [
+                file.source_download_url.is_some(),
+                file.source_download_sha256.is_some(),
+                file.source_download_size.is_some(),
+                file.source_sha256.is_some(),
+                file.source_size.is_some(),
+            ];
+            if source_fields.iter().any(|value| *value) && source_fields.iter().any(|value| !*value)
+            {
+                return Err(ProtocolError::UnsafePath(
+                    "incomplete source metadata".into(),
+                ));
+            }
+            if let (
+                Some(url),
+                Some(download_sha256),
+                Some(download_size),
+                Some(source_sha256),
+                Some(source_size),
+            ) = (
+                &file.source_download_url,
+                &file.source_download_sha256,
+                file.source_download_size,
+                &file.source_sha256,
+                file.source_size,
+            ) {
+                if !url.starts_with("https://") && !url.starts_with("http://") {
+                    return Err(ProtocolError::InvalidUrl(
+                        "file.sourceDownloadUrl",
+                        url.clone(),
+                    ));
+                }
+                if !valid_sha256(download_sha256) {
+                    return Err(ProtocolError::InvalidSha256("file.sourceDownloadSha256"));
+                }
+                if !valid_sha256(source_sha256) {
+                    return Err(ProtocolError::InvalidSha256("file.sourceSha256"));
+                }
+                if download_size == 0 {
+                    return Err(ProtocolError::InvalidSize("file.sourceDownloadSize"));
+                }
+                if source_size == 0 {
+                    return Err(ProtocolError::InvalidSize("file.sourceSize"));
+                }
+            }
             if file.compression != "gzip" {
                 return Err(ProtocolError::UnsupportedCompression(
                     file.compression.clone(),
@@ -274,6 +324,11 @@ mod tests {
                 compression: "gzip".into(),
                 sha256: "c".repeat(64),
                 size: 10,
+                source_download_url: Some("https://example.test/files/original.gz".into()),
+                source_download_sha256: Some("e".repeat(64)),
+                source_download_size: Some(9),
+                source_sha256: Some("f".repeat(64)),
+                source_size: Some(11),
             }],
         }
     }
@@ -304,6 +359,13 @@ mod tests {
             bad.validate(),
             Err(ProtocolError::SchemaVersion(1))
         ));
+    }
+
+    #[test]
+    fn rejects_partial_source_download_metadata() {
+        let mut bad = manifest();
+        bad.files[0].source_download_url = None;
+        assert!(bad.validate().is_err());
     }
 
     #[test]
