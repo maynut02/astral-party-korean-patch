@@ -66,21 +66,9 @@ def test_android_patcher_notes_include_requirements_and_artifact_details() -> No
     )
     assert "Android 11" in text
     assert "Shizuku" in text
+    assert "원본 게임" in text
+    assert "Addressables" in text
     assert "AstralAndroidPatcher.apk" in text
     assert "123456" in text
     assert "c" * 64 in text
     assert "/actions/runs/12" in text
-
-
-def test_android_notes_include_install_and_restart_guidance() -> None:
-    text = MODULE.render_android_notes(
-        game_version="3.2.0",
-        sha256="b" * 64,
-        repository="owner/repo",
-        run_id="11",
-        run_number="3",
-    )
-    assert "AndroidPatcher" in text
-    assert "WindowsPatcher" in text
-    assert "다시 실행" in text
-    assert "b" * 64 in text

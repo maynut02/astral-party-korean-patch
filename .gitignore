@@ -30,6 +30,7 @@ windows-patcher/target/
 # IDE / OS
 .vscode/
 .idea/
+.agent/
 .gradle/
 local.properties
 android-patcher/AstralAndroidPatcher.apk

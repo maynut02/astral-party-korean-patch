@@ -1,34 +1,47 @@
 # AndroidPatcher
 
-Android 기기에서 INT_ANDROID 한국어판과 Shizuku를 내려받고 설치 준비를 하는 모바일 클라이언트입니다.
+Google Play 원본 Astral Party를 유지하면서 외부 Addressables 캐시에 한국어 패치를 적용하는 Android 11 이상용 클라이언트입니다. UI는 Jetpack Compose와 Material Design 3를 사용합니다.
 
-현재 구현된 흐름은 다음과 같습니다.
+## 동작 방식
 
-1. `thedjchi/Shizuku`의 GitHub `releases/latest` API에서 최신 안정 APK를 찾습니다.
-2. Shizuku APK의 크기, GitHub asset SHA-256, package name을 검증합니다.
-3. Android 시스템 패키지 설치 화면을 엽니다.
-4. Shizuku가 실행되면 Binder 상태를 확인하고 AndroidPatcher 권한을 요청합니다.
-5. `distribution/android-apk-index.json`에서 최신 게임 APK 정보를 가져옵니다.
-6. 게임 APK의 크기, SHA-256, package name을 검증합니다.
-7. Shizuku UserService를 shell 권한으로 실행하고 APK를 `/data/local/tmp`에 임시 저장한 뒤 `pm install -r -i com.android.vending`으로 설치합니다.
-8. 설치 후 Android `InstallSourceInfo`를 다시 조회해 실제 설치 출처가 `com.android.vending`인지 검증합니다.
+1. `com.feimo.astralpartyjpn`이 Google Play에서 설치되었는지 확인합니다. 예전 변조 APK는 패치 대상으로 인정하지 않습니다.
+2. Shizuku 연결과 AndroidPatcher 권한을 확인합니다.
+3. Shizuku UserService가 게임의 `com.unity.addressables` catalog version/hash를 읽습니다.
+4. 고정된 `release-index.json`에서 정확히 일치하는 `INT_ANDROID` 정식 패치를 찾습니다.
+5. manifest와 모든 gzip/payload의 크기 및 SHA-256을 검증합니다.
+6. 게임을 종료하고 기존 cache 파일을 영구 backup과 transaction backup에 저장합니다.
+7. LANG, STR, TMP 폰트 bundle을 원자적으로 교체합니다.
+8. 중간 실패 시 transaction backup으로 자동 rollback합니다.
+9. 사용자는 앱에서 원본 파일을 복원할 수 있습니다.
+
+게임 APK 다운로드, APK 재서명, LSPatch, `pm install`, 설치 출처 위장은 사용하지 않습니다. APK 내부 `assets/bin/Data/data.unity3d`의 legacy 폰트는 원본 상태로 유지합니다.
 
 ## 요구 사항
 
 - Android 11 이상
+- Google Play에서 설치한 원본 게임
+- 게임 최초 실행과 최신 리소스 다운로드 완료
+- Shizuku 설치·서비스 시작·AndroidPatcher 권한 허용
 - 인터넷 연결
-- Shizuku 사용 시 Shizuku 서비스 실행 및 권한 허용
+
+일반 Android 앱은 다른 앱의 app-specific external directory에 접근할 수 없으므로 Shizuku shell 권한이 필요합니다. 제조사와 Android 버전에 따라 shell의 `/storage/emulated/0/Android/data/...` 접근 동작이 다를 수 있어 실제 기기 검증이 필요합니다.
+
+## 보안 경계
+
+- patch 대상 package와 파일 root는 코드에 고정되어 있습니다.
+- Shizuku 서비스는 임의 shell command API를 노출하지 않습니다.
+- manifest의 `game-data` target과 안전하지 않은 상대 경로를 거부합니다.
+- index, manifest, payload URL은 프로젝트의 HTTPS GitHub 경로로 제한합니다.
+- payload는 앱 프로세스와 shell 서비스 양쪽에서 SHA-256/크기를 검증합니다.
+- patch 시작 전에 게임을 강제 종료합니다.
+- crash가 남긴 transaction은 다음 진단 시 원래 파일로 복구합니다.
 
 ## 빌드
 
-JDK 17, Android SDK 36, Gradle 8.13이 필요합니다.
+JDK 17, Android SDK 36, Gradle 9.4.1이 필요합니다.
 
 ```bash
-gradle :app:assembleDebug
+gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-Shizuku 자체는 Shizuku가 아직 실행될 수 없는 초기 부트스트랩 단계이므로 Android 시스템 설치 화면을 사용합니다. 게임 APK는 시스템 설치 화면을 사용하지 않으며, WindowsPatcher의 `adb install -r -i com.android.vending`과 같은 설치 출처를 남기도록 Shizuku shell 권한으로 `/data/local/tmp`에 스테이징한 뒤 설치합니다. 설치가 끝나면 AndroidPatcher 캐시와 UserService의 임시 APK를 정리합니다.
-
-GitHub Actions의 `AndroidPatcher` workflow는 기존 Android APK와 동일한 `ANDROID_KEYSTORE_*` secrets로 release APK를 서명하고 `android-patcher-v<version>` Release를 생성합니다. Release 이름은 `AndroidPatcher v<version>`, 배포 파일은 `AstralAndroidPatcher.apk`입니다. Workflow 실행 시 `patch`, `minor`, `major` 중 하나를 선택하면 기존 `android-patcher-v*` Release와 `distribution/mobile-patcher-index.json`의 마지막 배포 버전 중 가장 높은 SemVer를 기준으로 다음 버전을 자동 계산합니다. 둘 다 없을 때만 최초 버전 `0.1.0`으로 시작합니다.
-
-Release가 발행되면 workflow가 `distribution/mobile-patcher-index.json`도 함께 갱신합니다. AndroidPatcher는 앱 시작과 새로고침 시 이 인덱스를 확인하고 현재 `versionCode`보다 새 버전이 있으면 업데이트 패널을 표시합니다. 업데이트 APK는 `android-patcher-v<version>/AstralAndroidPatcher.apk` URL, SHA-256, 파일 크기, packageName, versionName, versionCode와 현재 앱의 서명 인증서를 검증한 뒤 Android 시스템 설치 화면으로 전달합니다. 업데이트 확인 실패는 Shizuku 및 게임 설치 기능을 차단하지 않습니다.
+GitHub Actions의 `AndroidPatcher` workflow는 `ANDROID_KEYSTORE_*` secrets로 release APK를 서명하고 `android-patcher-v<version>` immutable Release를 생성합니다. 배포 파일은 `AstralAndroidPatcher.apk`입니다.

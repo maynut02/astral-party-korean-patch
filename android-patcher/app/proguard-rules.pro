@@ -1,6 +1,6 @@
 -keep class rikka.shizuku.** { *; }
 -dontwarn rikka.shizuku.**
--keep class com.maynutlab.astralpatcher.InstallerUserService { *; }
--keep interface com.maynutlab.astralpatcher.IInstallerService { *; }
--keep class com.maynutlab.astralpatcher.IInstallerService$Stub { *; }
--keep class com.maynutlab.astralpatcher.IInstallerService$Stub$Proxy { *; }
+-keep class com.maynutlab.astralpatcher.shizuku.PatchUserService { public <init>(); *; }
+-keep interface com.maynutlab.astralpatcher.IPatchService { *; }
+-keep class com.maynutlab.astralpatcher.IPatchService$Stub { *; }
+-keep class com.maynutlab.astralpatcher.IPatchService$Stub$Proxy { *; }

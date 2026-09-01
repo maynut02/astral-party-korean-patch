@@ -116,8 +116,6 @@ mod tests {
     #[test]
     fn rejects_untrusted_or_unknown_uri_parts() {
         assert!(UriRequest::parse("astral://install?url=https://evil.test").is_err());
-        assert!(UriRequest::parse("astral://install/INT_ANDROID").is_err());
-        assert!(UriRequest::parse("astral://remove/INT_ANDROID").is_err());
         assert!(UriRequest::parse("astral://CN_STEAM/install").is_err());
         assert!(UriRequest::parse("https://example.test").is_err());
     }

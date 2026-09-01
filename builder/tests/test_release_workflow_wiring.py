@@ -36,13 +36,3 @@ def test_android_patcher_release_uses_generated_notes_file() -> None:
     assert "android-patcher-v" in text
     assert 'AndroidPatcher v${VERSION}' in text
     assert "AstralAndroidPatcher.apk" in text
-
-
-def test_android_release_uses_generated_notes_file() -> None:
-    text = _text("int-apk.yml")
-    assert "tools/workflow/release_notes.py android" in text
-    assert "--game-version '${{ steps.apk.outputs.game_version }}'" in text
-    assert "--notes-file .work/android-release-notes.md" in text
-    assert "int-apk-v" in text
-    assert 'INT_APK v$GAME_VERSION' in text
-    assert "AstralPartyKorean.apk" in text

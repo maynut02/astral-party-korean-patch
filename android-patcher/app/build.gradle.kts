@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 val appVersionName = providers.gradleProperty("versionName").orElse("0.1.0").get()
@@ -64,19 +65,34 @@ android {
     buildFeatures {
         aidl = true
         buildConfig = true
+        compose = true
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
-    implementation("androidx.core:core:1.16.0")
+    // Compose 1.11 is the newest stable line that compiles against API 36.
+    val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.core:core-ktx:1.17.0")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20250517")
+    testImplementation("org.json:json:20260814")
 }
