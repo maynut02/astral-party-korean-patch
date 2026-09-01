@@ -12,6 +12,7 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.SyncFailedException
 import java.security.MessageDigest
 import java.util.Locale
 
@@ -148,58 +149,63 @@ class PatchUserService : IPatchService.Stub() {
         sourceSize: Long,
         sourceSha256: String,
         relativePath: String,
-    ) {
+    ): String {
         val safeId = requireTransactionId(transactionId)
         val requestedPath = relativePath.take(MAX_DIAGNOSTIC_DETAIL_CHARS)
-        diagnosticOperation(
-            safeId,
-            "apply_file",
-            "path=$requestedPath payloadSize=$size sourceSize=$sourceSize",
-        ) {
-            require(size > 0) { "payload 크기가 올바르지 않습니다." }
-            require(sourceSize > 0) { "원본 파일 크기가 올바르지 않습니다." }
-            val expectedSha = requireSha256(sha256)
-            val expectedSourceSha = requireSha256(sourceSha256)
-            val safePath = PatchProtocol.safeRelativePath(relativePath)
-            val transaction = activeTransaction(safeId)
-            val catalogHash = File(transaction, "catalog.txt").readText().trim()
-            val target = resolveExistingBundle(safePath)
-            val actualPath = target.relativeTo(bundleRoot).invariantSeparatorsPath
-            val journal = File(transaction, "journal.txt")
-            val applied = readJournal(journal)
-            appendDiagnostic(
+        return try {
+            diagnosticOperation(
                 safeId,
-                "target_resolved",
-                "path=$actualPath targetBytes=${target.length()} ${journalDetail(journal)}",
-            )
-            require(actualPath !in applied) { "같은 파일을 두 번 적용할 수 없습니다: $actualPath" }
+                "apply_file",
+                "path=$requestedPath payloadSize=$size sourceSize=$sourceSize",
+            ) {
+                require(size > 0) { "payload 크기가 올바르지 않습니다." }
+                require(sourceSize > 0) { "원본 파일 크기가 올바르지 않습니다." }
+                val expectedSha = requireSha256(sha256)
+                val expectedSourceSha = requireSha256(sourceSha256)
+                val safePath = PatchProtocol.safeRelativePath(relativePath)
+                val transaction = activeTransaction(safeId)
+                val catalogHash = File(transaction, "catalog.txt").readText().trim()
+                val target = resolveExistingBundle(safePath)
+                val actualPath = target.relativeTo(bundleRoot).invariantSeparatorsPath
+                val journal = File(transaction, "journal.txt")
+                val applied = readJournal(journal)
+                appendDiagnostic(
+                    safeId,
+                    "target_resolved",
+                    "path=$actualPath targetBytes=${target.length()} ${journalDetail(journal)}",
+                )
+                require(actualPath !in applied) { "같은 파일을 두 번 적용할 수 없습니다: $actualPath" }
 
-            val permanentBackup = File(File(backupsRoot, catalogHash), actualPath)
-            if (permanentBackup.isFile) {
-                verifyFile(permanentBackup, sourceSize, expectedSourceSha, "보관된 원본")
-                appendDiagnostic(safeId, "backup_verified", "path=$actualPath 기존 원본 backup 사용")
-            } else {
-                verifyFile(target, sourceSize, expectedSourceSha, "게임 원본")
-                copyVerified(target, permanentBackup)
-                appendDiagnostic(safeId, "backup_created", "path=$actualPath bytes=$sourceSize")
+                val permanentBackup = File(File(backupsRoot, catalogHash), actualPath)
+                if (permanentBackup.isFile) {
+                    verifyFile(permanentBackup, sourceSize, expectedSourceSha, "보관된 원본")
+                    appendDiagnostic(safeId, "backup_verified", "path=$actualPath 기존 원본 backup 사용")
+                } else {
+                    verifyFile(target, sourceSize, expectedSourceSha, "게임 원본")
+                    copyVerified(target, permanentBackup, safeId, "permanent_backup")
+                    appendDiagnostic(safeId, "backup_created", "path=$actualPath bytes=$sourceSize")
+                }
+                val previous = File(transaction, "previous/$actualPath")
+                copyVerified(target, previous, safeId, "transaction_previous")
+                appendDiagnostic(safeId, "previous_saved", "path=$actualPath bytes=${previous.length()}")
+
+                val staged = File(transaction, "staging/$actualPath")
+                receiveVerified(payload, staged, size, expectedSha, safeId)
+                appendDiagnostic(
+                    safeId,
+                    "payload_verified",
+                    "path=$actualPath bytes=${staged.length()} sha256=$expectedSha",
+                )
+                appendJournal(journal, actualPath, safeId)
+                appendDiagnostic(safeId, "journal_written", "path=$actualPath ${journalDetail(journal)}")
+                replaceFile(staged, target, safeId, "patch_target")
+                appendDiagnostic(safeId, "target_replaced", "path=$actualPath bytes=${target.length()}")
+                verifyFile(target, size, expectedSha, "적용된 patch")
+                appendDiagnostic(safeId, "target_verified", "path=$actualPath sha256=$expectedSha")
             }
-            val previous = File(transaction, "previous/$actualPath")
-            copyVerified(target, previous)
-            appendDiagnostic(safeId, "previous_saved", "path=$actualPath bytes=${previous.length()}")
-
-            val staged = File(transaction, "staging/$actualPath")
-            receiveVerified(payload, staged, size, expectedSha)
-            appendDiagnostic(
-                safeId,
-                "payload_verified",
-                "path=$actualPath bytes=${staged.length()} sha256=$expectedSha",
-            )
-            appendJournal(journal, actualPath)
-            appendDiagnostic(safeId, "journal_written", "path=$actualPath ${journalDetail(journal)}")
-            replaceFile(staged, target)
-            appendDiagnostic(safeId, "target_replaced", "path=$actualPath bytes=${target.length()}")
-            verifyFile(target, size, expectedSha, "적용된 patch")
-            appendDiagnostic(safeId, "target_verified", "path=$actualPath sha256=$expectedSha")
+            PatchProtocol.createApplyFileResult()
+        } catch (error: Exception) {
+            PatchProtocol.createApplyFileResult(error)
         }
     }
 
@@ -375,6 +381,7 @@ class PatchUserService : IPatchService.Stub() {
         target: File,
         expectedSize: Long,
         expectedSha: String,
+        transactionId: String,
     ) {
         ensureParent(target)
         val digest = MessageDigest.getInstance("SHA-256")
@@ -382,48 +389,68 @@ class PatchUserService : IPatchService.Stub() {
         ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { raw ->
             BufferedInputStream(raw).use { input ->
                 FileOutputStream(target).use { fileOutput ->
-                    BufferedOutputStream(fileOutput).use { output ->
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            total += read
-                            require(total <= expectedSize) { "payload stream이 예상 크기를 초과했습니다." }
-                            output.write(buffer, 0, read)
-                            digest.update(buffer, 0, read)
-                        }
-                        output.flush()
+                    val output = BufferedOutputStream(fileOutput)
+                    val buffer = ByteArray(BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        require(total <= expectedSize) { "payload stream이 예상 크기를 초과했습니다." }
+                        output.write(buffer, 0, read)
+                        digest.update(buffer, 0, read)
                     }
-                    fileOutput.fd.sync()
+                    output.flush()
+                    syncBestEffort(fileOutput, transactionId, "payload_staging")
                 }
             }
         }
         require(total == expectedSize) { "payload stream 크기가 다릅니다." }
         require(digest.digest().toHex() == expectedSha) { "payload stream SHA-256이 다릅니다." }
+        verifyFile(target, expectedSize, expectedSha, "수신된 payload")
     }
 
-    private fun copyVerified(source: File, target: File) {
+    private fun copyVerified(
+        source: File,
+        target: File,
+        transactionId: String? = null,
+        operation: String = "copy",
+    ) {
         val size = source.length()
         val hash = sha256(source)
-        copyFile(source, target)
+        copyFile(source, target, transactionId, operation)
         verifyFile(target, size, hash, "backup")
     }
 
-    private fun copyFile(source: File, target: File) {
+    private fun copyFile(
+        source: File,
+        target: File,
+        transactionId: String? = null,
+        operation: String = "copy",
+    ) {
         ensureParent(target)
         BufferedInputStream(FileInputStream(source)).use { input ->
             FileOutputStream(target).use { fileOutput ->
-                BufferedOutputStream(fileOutput).use { output -> input.copyTo(output, BUFFER_SIZE) }
-                fileOutput.fd.sync()
+                val output = BufferedOutputStream(fileOutput)
+                input.copyTo(output, BUFFER_SIZE)
+                output.flush()
+                syncBestEffort(fileOutput, transactionId, operation)
             }
         }
     }
 
-    private fun replaceFile(source: File, target: File) {
+    private fun replaceFile(
+        source: File,
+        target: File,
+        transactionId: String? = null,
+        operation: String = "replace",
+    ) {
         ensureParent(target)
+        val expectedSize = source.length()
+        val expectedSha = sha256(source)
         val temporary = File(target.parentFile, "${target.name}.astral.new")
         temporary.delete()
-        copyFile(source, temporary)
+        copyFile(source, temporary, transactionId, operation)
+        verifyFile(temporary, expectedSize, expectedSha, "교체 임시 파일")
         if (target.exists() && !target.delete()) {
             temporary.delete()
             error("게임 리소스를 교체할 수 없습니다: $target")
@@ -432,6 +459,7 @@ class PatchUserService : IPatchService.Stub() {
             temporary.delete()
             error("게임 리소스 교체를 완료할 수 없습니다: $target")
         }
+        verifyFile(target, expectedSize, expectedSha, "교체된 파일")
     }
 
     private fun verifyFile(file: File, expectedSize: Long, expectedSha: String, label: String) {
@@ -453,11 +481,27 @@ class PatchUserService : IPatchService.Stub() {
         return digest.digest().toHex()
     }
 
-    private fun appendJournal(journal: File, relativePath: String) {
+    private fun appendJournal(journal: File, relativePath: String, transactionId: String) {
         ensureParent(journal)
         FileOutputStream(journal, true).use { output ->
             output.write((relativePath + "\n").toByteArray(Charsets.UTF_8))
+            output.flush()
+            syncBestEffort(output, transactionId, "journal")
+        }
+        require(readJournal(journal).lastOrNull() == relativePath) { "patch journal 기록을 확인할 수 없습니다." }
+    }
+
+    private fun syncBestEffort(
+        output: FileOutputStream,
+        transactionId: String? = null,
+        operation: String,
+    ) {
+        try {
             output.fd.sync()
+        } catch (_: SyncFailedException) {
+            if (transactionId != null) {
+                appendDiagnostic(transactionId, "fsync_unsupported", "operation=$operation")
+            }
         }
     }
 
@@ -564,10 +608,13 @@ class PatchUserService : IPatchService.Stub() {
         val temporary = File(target.parentFile, "${target.name}.tmp")
         FileOutputStream(temporary).use { output ->
             output.write(value.toByteArray(Charsets.UTF_8))
-            output.fd.sync()
+            output.flush()
+            syncBestEffort(output, operation = "atomic_text")
         }
+        require(temporary.readText() == value) { "상태 파일 기록을 확인할 수 없습니다." }
         if (target.exists() && !target.delete()) error("상태 파일을 교체할 수 없습니다.")
         if (!temporary.renameTo(target)) error("상태 파일 저장을 완료할 수 없습니다.")
+        require(target.readText() == value) { "상태 파일 저장 결과를 확인할 수 없습니다." }
     }
 
     private fun safePath(root: File, relativePath: String): File {

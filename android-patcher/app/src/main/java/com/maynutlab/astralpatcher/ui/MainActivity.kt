@@ -441,7 +441,7 @@ private class PatchController(private val activity: MainActivity) {
                         (index + 0.95f) / targetManifest.files.size,
                     )
                     appendLog("[CLIENT] 파일 $fileLabel applyFile 호출 · path=${item.relativePath}")
-                    ParcelFileDescriptor.open(payload, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                    val applyResultJson = ParcelFileDescriptor.open(payload, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
                         patchService.applyFile(
                             transactionId,
                             descriptor,
@@ -452,13 +452,23 @@ private class PatchController(private val activity: MainActivity) {
                             item.relativePath,
                         )
                     }
-                    appendLog("[CLIENT] 파일 $fileLabel applyFile 반환")
+                    val applyResult = PatchProtocol.parseApplyFileResult(applyResultJson)
+                    appendLog(
+                        if (applyResult.ok) {
+                            "[CLIENT] 파일 $fileLabel applyFile 성공"
+                        } else {
+                            "[CLIENT] 파일 $fileLabel applyFile 실패 · ${applyResult.error}"
+                        }
+                    )
                     diagnosticsCursor = appendServiceDiagnostics(
                         patchService,
                         transactionId,
                         diagnosticsCursor,
                         includeSnapshot = true,
                     )
+                    require(applyResult.ok) {
+                        applyResult.error.ifBlank { "patch 파일 적용에 실패했습니다." }
+                    }
                 }
                 appendLog("[CLIENT] commitPatch 호출")
                 patchService.commitPatch(

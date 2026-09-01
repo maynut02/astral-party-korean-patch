@@ -6,7 +6,7 @@ interface IPatchService {
     String getServiceInfo() = 0;
     String inspectGame() = 1;
     void beginPatch(String transactionId, String catalogHash) = 2;
-    void applyFile(
+    String applyFile(
         String transactionId,
         in ParcelFileDescriptor payload,
         long size,

@@ -92,6 +92,20 @@ class PatchProtocolTest {
     }
 
     @Test
+    fun createsAndParsesApplyFileResults() {
+        val success = PatchProtocol.parseApplyFileResult(PatchProtocol.createApplyFileResult())
+        assertTrue(success.ok)
+        assertEquals("", success.error)
+
+        val failure = PatchProtocol.parseApplyFileResult(
+            PatchProtocol.createApplyFileResult(IllegalStateException("apply failed"))
+        )
+        assertTrue(!failure.ok)
+        assertTrue(failure.error.contains("IllegalStateException"))
+        assertTrue(failure.error.contains("apply failed"))
+    }
+
+    @Test
     fun parsesPatchDiagnosticsWithJournalSnapshot() {
         val transactionId = "12345678-1234-1234-1234-123456789abc"
         val diagnostics = PatchProtocol.parsePatchDiagnostics(

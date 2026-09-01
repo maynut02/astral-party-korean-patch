@@ -60,6 +60,11 @@ data class PatchTargetInspection(
         get() = total > 0 && ready == total && missing == 0 && incompatible == 0
 }
 
+data class PatchApplyResult(
+    val ok: Boolean,
+    val error: String,
+)
+
 data class PatchDiagnosticEvent(
     val timestampMs: Long,
     val elapsedRealtimeNanos: Long,
@@ -241,6 +246,32 @@ object PatchProtocol {
             "리소스 검사 결과 합계가 올바르지 않습니다."
         }
         return result
+    }
+
+    fun createApplyFileResult(error: Throwable? = null): String {
+        val root = JSONObject()
+            .put("schemaVersion", 1)
+            .put("ok", error == null)
+        if (error != null) {
+            val detail = buildString {
+                append(error.javaClass.name)
+                error.message?.takeIf { it.isNotBlank() }?.let {
+                    append(": ")
+                    append(it)
+                }
+            }.take(MAX_DIAGNOSTIC_DETAIL_CHARS)
+            root.put("error", detail)
+        }
+        return root.toString()
+    }
+
+    fun parseApplyFileResult(json: String): PatchApplyResult {
+        val root = JSONObject(json)
+        require(root.getInt("schemaVersion") == 1) { "지원하지 않는 파일 적용 결과입니다." }
+        val ok = root.getBoolean("ok")
+        val error = limitedText(root.optString("error"), MAX_DIAGNOSTIC_DETAIL_CHARS, "파일 적용 오류")
+        require(ok || error.isNotBlank()) { "실패한 파일 적용 결과에 오류 정보가 없습니다." }
+        return PatchApplyResult(ok = ok, error = error)
     }
 
     fun parsePatchDiagnostics(json: String, expectedTransactionId: String): PatchDiagnostics {
