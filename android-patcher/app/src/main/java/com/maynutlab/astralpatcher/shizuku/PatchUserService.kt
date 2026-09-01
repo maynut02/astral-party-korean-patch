@@ -1,6 +1,8 @@
 package com.maynutlab.astralpatcher.shizuku
 
 import android.os.ParcelFileDescriptor
+import android.system.Os
+import android.system.OsConstants
 import androidx.annotation.Keep
 import com.maynutlab.astralpatcher.IPatchService
 import com.maynutlab.astralpatcher.core.GAME_PACKAGE
@@ -444,22 +446,46 @@ class PatchUserService : IPatchService.Stub() {
         transactionId: String? = null,
         operation: String = "replace",
     ) {
-        ensureParent(target)
+        require(source.isFile) { "교체할 원본 파일을 찾을 수 없습니다: $source" }
+        require(target.isFile) { "교체할 게임 리소스를 찾을 수 없습니다: $target" }
         val expectedSize = source.length()
         val expectedSha = sha256(source)
-        val temporary = File(target.parentFile, "${target.name}.astral.new")
-        temporary.delete()
-        copyFile(source, temporary, transactionId, operation)
-        verifyFile(temporary, expectedSize, expectedSha, "교체 임시 파일")
-        if (target.exists() && !target.delete()) {
-            temporary.delete()
-            error("게임 리소스를 교체할 수 없습니다: $target")
+
+        // Android/data 아래의 게임 소유 디렉터리는 shell UID가 기존 파일을 읽고
+        // 덮어쓸 수 있어도 새 sibling 파일 생성은 거부할 수 있다. 대상 파일을
+        // 삭제/rename하지 않고 기존 inode를 그대로 유지한 채 내용을 교체한다.
+        if (transactionId != null) {
+            appendDiagnostic(
+                transactionId,
+                "replace_in_place",
+                "operation=$operation target=${target.path} bytes=$expectedSize",
+            )
         }
-        if (!temporary.renameTo(target)) {
-            temporary.delete()
-            error("게임 리소스 교체를 완료할 수 없습니다: $target")
-        }
+        overwriteExistingFile(source, target, transactionId, operation)
         verifyFile(target, expectedSize, expectedSha, "교체된 파일")
+    }
+
+    private fun overwriteExistingFile(
+        source: File,
+        target: File,
+        transactionId: String? = null,
+        operation: String,
+    ) {
+        require(target.isFile) { "덮어쓸 게임 리소스를 찾을 수 없습니다: $target" }
+        BufferedInputStream(FileInputStream(source)).use { input ->
+            // O_CREAT를 사용하지 않아 Android/data 디렉터리의 새 파일 생성 제한을 피한다.
+            val descriptor = Os.open(
+                target.path,
+                OsConstants.O_WRONLY or OsConstants.O_TRUNC,
+                0,
+            )
+            FileOutputStream(descriptor).use { fileOutput ->
+                val output = BufferedOutputStream(fileOutput)
+                input.copyTo(output, BUFFER_SIZE)
+                output.flush()
+                syncBestEffort(fileOutput, transactionId, operation)
+            }
+        }
     }
 
     private fun verifyFile(file: File, expectedSize: Long, expectedSha: String, label: String) {
