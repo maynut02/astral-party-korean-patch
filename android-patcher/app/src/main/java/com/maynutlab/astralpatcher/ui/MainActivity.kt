@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -56,7 +57,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import com.maynutlab.astralpatcher.BuildConfig
 import com.maynutlab.astralpatcher.IPatchService
 import com.maynutlab.astralpatcher.core.CatalogIdentity
@@ -389,7 +389,7 @@ private class PatchController(private val activity: MainActivity) {
     }
 
     private fun openUrl(value: String) {
-        activity.startActivity(Intent(Intent.ACTION_VIEW, value.toUri()))
+        activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(value)))
     }
 
     private fun setBusy(label: String, progress: Float) {

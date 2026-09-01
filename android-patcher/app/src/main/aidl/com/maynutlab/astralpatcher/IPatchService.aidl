@@ -3,9 +3,9 @@ package com.maynutlab.astralpatcher;
 import android.os.ParcelFileDescriptor;
 
 interface IPatchService {
-    String getServiceInfo();
-    String inspectGame();
-    void beginPatch(String transactionId, String catalogHash);
+    String getServiceInfo() = 0;
+    String inspectGame() = 1;
+    void beginPatch(String transactionId, String catalogHash) = 2;
     void applyFile(
         String transactionId,
         in ParcelFileDescriptor payload,
@@ -14,15 +14,14 @@ interface IPatchService {
         long sourceSize,
         String sourceSha256,
         String relativePath
-    );
+    ) = 3;
     void commitPatch(
         String transactionId,
         String gameVersion,
         String catalogHash,
         String patchVersion
-    );
-    void rollbackPatch(String transactionId);
-    String restorePatch();
-    void forceStopGame();
-    void destroy();
+    ) = 4;
+    void rollbackPatch(String transactionId) = 5;
+    String restorePatch() = 6;
+    void destroy() = 16777114;
 }

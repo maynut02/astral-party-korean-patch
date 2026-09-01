@@ -152,7 +152,7 @@ class PatchUserService : IPatchService.Stub() {
         return "원본 파일 ${backups.size}개를 복원했습니다."
     }
 
-    override fun forceStopGame() {
+    private fun forceStopGame() {
         val process = ProcessBuilder("/system/bin/am", "force-stop", GAME_PACKAGE)
             .redirectErrorStream(true)
             .start()

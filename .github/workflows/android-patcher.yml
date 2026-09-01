@@ -155,8 +155,6 @@ jobs:
       - name: Read release APK metadata
         id: apk
         shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
 
@@ -208,7 +206,6 @@ jobs:
       - name: Verify release artifact
         shell: bash
         env:
-          VERSION: ${{ needs.build.outputs.version }}
           EXPECTED_SHA256: ${{ needs.build.outputs.sha256 }}
           EXPECTED_SIZE: ${{ needs.build.outputs.size }}
         run: |
