@@ -545,7 +545,7 @@ def run() -> int:
                         changed.append(state)
                     if dispatch_due:
                         due.append(state)
-                except Exception as exc:
+                except RuntimeError as exc:
                     conn.rollback()
                     error_message = str(exc)
                     route_errors[route] = error_message
@@ -681,7 +681,7 @@ def run() -> int:
                     error_message=str(exc),
                 )
                 conn.commit()
-            except Exception:
+            except psycopg.Error:
                 conn.rollback()
             raise
 
