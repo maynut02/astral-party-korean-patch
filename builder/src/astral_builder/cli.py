@@ -11,6 +11,12 @@ from astral_builder import __version__
 from astral_builder.automation.build import build_patch, write_build_github_output
 from astral_builder.automation.check import check_revision, write_github_output
 from astral_builder.automation.release import update_release_index
+from astral_builder.automation.reuse import (
+    resolve_released_revision,
+)
+from astral_builder.automation.reuse import (
+    write_github_output as write_reused_github_output,
+)
 from astral_builder.automation.sync import (
     load_route_sync_config,
     persist_prepared_revision,
@@ -38,6 +44,13 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--route", default="INT_STEAM")
     check.add_argument("--game-version", required=True)
     check.add_argument("--github-output")
+
+    reuse = subparsers.add_parser(
+        "reuse-release", help="Reuse the exact game revision from an existing release manifest."
+    )
+    reuse.add_argument("--manifest", required=True)
+    reuse.add_argument("--route", required=True)
+    reuse.add_argument("--github-output", required=True)
 
     sync = subparsers.add_parser("sync", help="Download, extract and persist one game revision.")
     sync.add_argument("--game-version", required=True)
@@ -125,6 +138,30 @@ def _run_check(args: argparse.Namespace) -> int:
                 "catalogHash": result.catalog_hash,
                 "sourceUrl": result.source.source_url,
                 "catalogUrl": result.source.catalog_url,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _run_reuse_release(args: argparse.Namespace) -> int:
+    with psycopg.connect(_database_url()) as conn:
+        state = resolve_released_revision(
+            conn,
+            manifest_path=args.manifest,
+            expected_route=args.route,
+        )
+    write_reused_github_output(state, args.github_output)
+    print(
+        json.dumps(
+            {
+                "route": state.route,
+                "gameVersion": state.game_version,
+                "revision": state.revision,
+                "revisionId": state.revision_id,
+                "catalogHash": state.catalog_hash,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -302,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "check":
         return _run_check(args)
+    if args.command == "reuse-release":
+        return _run_reuse_release(args)
     if args.command == "sync":
         return _run_sync(args)
     if args.command == "build":

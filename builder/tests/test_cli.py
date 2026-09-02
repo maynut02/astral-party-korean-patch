@@ -13,6 +13,23 @@ def test_parser_exposes_check_command() -> None:
     assert args.game_version == "3.2.0"
 
 
+def test_parser_exposes_reuse_release_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "reuse-release",
+            "--manifest",
+            "INT_STEAM_manifest.json",
+            "--route",
+            "INT_STEAM",
+            "--github-output",
+            "state.env",
+        ]
+    )
+    assert args.command == "reuse-release"
+    assert args.route == "INT_STEAM"
+
+
 def test_parser_exposes_sync_command() -> None:
     parser = build_parser()
     args = parser.parse_args(

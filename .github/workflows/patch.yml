@@ -2,11 +2,8 @@ name: Patch
 
 on:
   workflow_dispatch:
-    inputs:
-      game_version:
-        description: Game version override supplied by the patch watcher
-        required: false
-        type: string
+  repository_dispatch:
+    types: [patch-watcher]
 
 concurrency:
   group: patch-pipeline
@@ -16,16 +13,54 @@ permissions:
   contents: read
 
 env:
-  GAME_VERSION: ${{ inputs.game_version || vars.GAME_VERSION || '3.2.0' }}
   RELEASE_INDEX_URL: https://raw.githubusercontent.com/${{ github.repository }}/distribution/release-index.json
 
 jobs:
+  source:
+    name: Resolve patch source
+    runs-on: ubuntu-latest
+    outputs:
+      automatic: ${{ steps.resolve.outputs.automatic }}
+      game_version: ${{ steps.resolve.outputs.game_version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve automatic or manual source
+        id: resolve
+        shell: bash
+        env:
+          WATCHER_GAME_VERSION: ${{ github.event.client_payload.game_version || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = repository_dispatch ]; then
+            test -n "$WATCHER_GAME_VERSION"
+            echo 'automatic=true' >> "$GITHUB_OUTPUT"
+            echo "game_version=$WATCHER_GAME_VERSION" >> "$GITHUB_OUTPUT"
+            echo 'release_tag=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag="$(
+            gh release list --limit 1000 --json tagName,createdAt,isDraft,isPrerelease \
+              --jq '[.[] | select(.isDraft == false and .isPrerelease == false and (.tagName | test("^v.+_r[^_]+(_p[0-9]+)?$")))] | sort_by(.createdAt) | last | .tagName // empty'
+          )"
+          if [ -z "$tag" ]; then
+            echo 'manual patch requires an existing patch release' >&2
+            exit 1
+          fi
+          echo 'automatic=false' >> "$GITHUB_OUTPUT"
+          echo 'game_version=' >> "$GITHUB_OUTPUT"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+
   check:
     name: Check ${{ matrix.route }}
+    needs: source
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
       DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
+      GH_TOKEN: ${{ github.token }}
     strategy:
       fail-fast: false
       matrix:
@@ -46,11 +81,29 @@ jobs:
           known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
       - uses: ./.github/actions/setup-builder
       - name: Check remote revision and catalog
+        if: needs.source.outputs.automatic == 'true'
         run: |
           mkdir -p .work/check
           astral-builder check \
             --route '${{ matrix.route }}' \
-            --game-version "$GAME_VERSION" \
+            --game-version '${{ needs.source.outputs.game_version }}' \
+            --github-output '.work/check/${{ matrix.slug }}.env'
+      - name: Download latest released manifest
+        if: needs.source.outputs.automatic != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .work/reuse
+          gh release download '${{ needs.source.outputs.release_tag }}' \
+            --pattern '${{ matrix.route }}_manifest.json' \
+            --dir .work/reuse
+      - name: Reuse latest released revision
+        if: needs.source.outputs.automatic != 'true'
+        run: |
+          mkdir -p .work/check
+          astral-builder reuse-release \
+            --manifest '.work/reuse/${{ matrix.route }}_manifest.json' \
+            --route '${{ matrix.route }}' \
             --github-output '.work/check/${{ matrix.slug }}.env'
       - name: Upload route check
         uses: actions/upload-artifact@v7
@@ -62,10 +115,11 @@ jobs:
 
   plan:
     name: Plan patch run
-    needs: check
+    needs: [source, check]
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.aggregate.outputs.should_run }}
+      automatic: ${{ needs.source.outputs.automatic }}
       tag: ${{ steps.release.outputs.tag }}
       title: ${{ steps.release.outputs.title }}
       patch_version: ${{ steps.release.outputs.patch_version }}
@@ -98,6 +152,7 @@ jobs:
         env:
           VERSION: ${{ steps.aggregate.outputs.game_version }}
           MAX_REVISION: ${{ steps.aggregate.outputs.max_revision }}
+          AUTOMATIC: ${{ needs.source.outputs.automatic }}
         run: |
           set -euo pipefail
           base="v${VERSION}_r${MAX_REVISION}"
@@ -111,6 +166,10 @@ jobs:
           patch_version="$tag"
 
           original_tag="${base}-original"
+          if [ "$tag" = "${base}_p0" ] && [ "$AUTOMATIC" != true ]; then
+            echo 'manual patch cannot create a new p0 release' >&2
+            exit 1
+          fi
           if [ "$tag" = "${base}_p0" ]; then
             original_mode=unified
             publish_original=true
@@ -184,7 +243,7 @@ jobs:
         run: |
           mkdir -p .work/state
           astral-builder sync \
-            --game-version "$GAME_VERSION" \
+            --game-version '${{ needs.plan.outputs.game_version }}' \
             --route-config '${{ matrix.config }}' \
             --work-dir '.work/sync-${{ matrix.slug }}' \
             --github-output '.work/state/${{ matrix.slug }}.env'

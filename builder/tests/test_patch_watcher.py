@@ -17,10 +17,9 @@ from tools.patch_watcher import (
 )
 
 
-def test_dispatch_uses_only_game_version_input(monkeypatch) -> None:
+def test_dispatch_uses_repository_event_payload(monkeypatch) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "token")
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
-    monkeypatch.setenv("GITHUB_REF", "main")
     captured: dict[str, object] = {}
 
     class _Response:
@@ -41,10 +40,11 @@ def test_dispatch_uses_only_game_version_input(monkeypatch) -> None:
     _dispatch_patch("3.3.0")
 
     assert captured["body"] == {
-        "ref": "main",
-        "inputs": {"game_version": "3.3.0"},
+        "event_type": "patch-watcher",
+        "client_payload": {"game_version": "3.3.0"},
     }
     assert captured["timeout"] == 15.0
+
 
 def test_interval_argument_enables_daemon_mode() -> None:
     args = _parse_args(["--interval-seconds", "300"])

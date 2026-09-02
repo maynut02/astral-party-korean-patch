@@ -27,7 +27,7 @@ Android 패치는 Google Play 서명의 원본 게임 APK를 수정하지 않고
 
 ## Patch watcher
 
-DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 실행합니다. 새 게임 version/revision의 첫 패치는 `_p0` 정식 Release로 생성되며, 같은 revision을 다시 수동 빌드하면 `_p1`, `_p2` 순서로 새 immutable Release가 생성됩니다. 복원용 원본은 새 게임 version/revision의 최초 `_p0` 자동 패치에서만 세 route를 하나의 `v<game-version>_r<revision>-original` Release로 생성합니다. 같은 revision의 `_p1`, `_p2` 등 수동 재빌드는 이 원본 Release를 그대로 재사용합니다.
+DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때 `repository_dispatch`로 `patch.yml`을 실행합니다. 새 게임 version/revision의 첫 자동 패치는 `_p0` 정식 Release로 생성됩니다. GitHub Actions에서 Patch workflow를 수동 실행하면 별도의 버전 입력 없이 가장 최근에 배포된 Patch Release의 세 manifest를 기준으로 동일한 game version/revision을 재사용하고 `_p1`, `_p2` 순서로 새 immutable Release를 생성합니다. 따라서 수동 실행은 아직 watcher가 배포하지 않은 원격 revision으로 넘어가지 않습니다. 복원용 원본은 새 game version/revision의 최초 `_p0` 자동 패치에서만 세 route를 하나의 `v<game-version>_r<revision>-original` Release로 생성하며 수동 재빌드는 기존 원본 Release를 그대로 재사용합니다.
 
 ```sql
 UPDATE patch_watch_config
@@ -35,7 +35,7 @@ SET game_version = '3.3.0', updated_at = now()
 WHERE singleton = true;
 ```
 
-운영 서버에서는 이 저장소의 Docker Compose가 watcher 컨테이너를 실행합니다. watcher는 site 저장소의 `astral-patch_default` Docker 네트워크에 참여해 `postgres-db:5432`로 DB에 접근하고, `GITHUB_TOKEN`으로 Patch workflow를 실행합니다. 5분마다 검사하며 동일 변경의 workflow가 아직 DB에 처리되지 않은 경우 30분 뒤 한 번 더 dispatch할 수 있습니다.
+운영 서버에서는 이 저장소의 Docker Compose가 watcher 컨테이너를 실행합니다. watcher는 site 저장소의 `astral-patch_default` Docker 네트워크에 참여해 `postgres-db:5432`로 DB에 접근하고, 이 저장소에 `Contents: Read and write` 권한이 있는 `GITHUB_TOKEN`으로 자동 패치 이벤트를 전송합니다. 5분마다 검사하며 동일 변경의 workflow가 아직 DB에 처리되지 않은 경우 30분 뒤 한 번 더 dispatch할 수 있습니다.
 
 `main` push의 CI가 모두 통과하면 기존 DB SSH 접속 정보와 `PATCH_SERVER_WORK_DIR`을 사용해 서버의 이 저장소를 해당 commit으로 전환하고 watcher 이미지만 직접 다시 빌드합니다. site 저장소의 배포 workflow를 경유하지 않습니다.
 
@@ -46,7 +46,7 @@ docker compose -p astral-patch-watcher logs -f patch-watcher
 
 ## 개발
 
-Builder는 Python 3.12+를 사용합니다. 필요한 환경변수와 GitHub Actions Secret/Variable 목록은 [`.env.example`](.env.example)에 정리되어 있습니다.
+Builder는 Python 3.12+를 사용합니다. 필요한 환경변수와 GitHub Actions Secret 목록은 [`.env.example`](.env.example)에 정리되어 있습니다.
 
 ```bash
 python -m pip install -e './builder[dev]'

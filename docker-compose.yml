@@ -11,7 +11,6 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       GITHUB_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN is required}
       GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-maynut02/astral-party-korean-patch}
-      GITHUB_REF: ${GITHUB_REF:-main}
     read_only: true
     tmpfs:
       - /tmp

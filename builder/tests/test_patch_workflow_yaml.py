@@ -13,6 +13,7 @@ def _workflow() -> dict:
 def test_patch_workflow_is_split_into_parallel_roles() -> None:
     jobs = _workflow()["jobs"]
     assert set(jobs) == {
+        "source",
         "check",
         "plan",
         "sync",
@@ -36,8 +37,8 @@ def test_patch_workflow_is_split_into_parallel_roles() -> None:
 def test_patch_workflow_uses_only_immutable_release_tags() -> None:
     workflow = _workflow()
     triggers = workflow[True] if True in workflow else workflow["on"]
-    inputs = triggers["workflow_dispatch"]["inputs"]
-    assert "mode" not in inputs
+    assert triggers["workflow_dispatch"] is None
+    assert triggers["repository_dispatch"]["types"] == ["patch-watcher"]
 
     jobs = workflow["jobs"]
     plan_script = next(
@@ -105,18 +106,38 @@ def test_patch_workflow_uses_one_unified_original_release() -> None:
     assert "immutable original release is incomplete" in original_publish
 
 
-def test_patch_workflow_has_no_github_cron_and_accepts_watcher_game_version() -> None:
+def test_patch_workflow_separates_watcher_and_manual_sources() -> None:
     workflow = _workflow()
     triggers = workflow[True] if True in workflow else workflow["on"]
     assert "schedule" not in triggers
-    assert "workflow_dispatch" in triggers
-    assert "game_version" in triggers["workflow_dispatch"]["inputs"]
-    assert "inputs.game_version" in workflow["env"]["GAME_VERSION"]
+    assert triggers["workflow_dispatch"] is None
+    assert triggers["repository_dispatch"]["types"] == ["patch-watcher"]
+    assert "GAME_VERSION" not in workflow.get("env", {})
+
     jobs = workflow["jobs"]
-    aggregate_script = next(
+    source_script = next(
+        step["run"]
+        for step in jobs["source"]["steps"]
+        if step.get("name") == "Resolve automatic or manual source"
+    )
+    assert "WATCHER_GAME_VERSION" in source_script
+    assert "gh release list" in source_script
+    assert "manual patch requires an existing patch release" in source_script
+
+    check_steps = jobs["check"]["steps"]
+    automatic_check = next(
+        step for step in check_steps if step.get("name") == "Check remote revision and catalog"
+    )
+    manual_reuse = next(
+        step for step in check_steps if step.get("name") == "Reuse latest released revision"
+    )
+    assert "needs.source.outputs.game_version" in automatic_check["run"]
+    assert "astral-builder reuse-release" in manual_reuse["run"]
+    assert "needs.source.outputs.automatic != 'true'" == manual_reuse["if"]
+
+    plan_script = next(
         step["run"]
         for step in jobs["plan"]["steps"]
-        if step.get("name") == "Aggregate route checks"
+        if step.get("name") == "Define immutable release identity"
     )
-    assert "GITHUB_EVENT_NAME" not in aggregate_script
-    assert "--scheduled" not in aggregate_script
+    assert "manual patch cannot create a new p0 release" in plan_script

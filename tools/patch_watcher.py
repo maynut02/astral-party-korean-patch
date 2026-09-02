@@ -418,12 +418,14 @@ def _is_route_baseline(
 
 def _dispatch_patch(game_version: str) -> None:
     repository = os.environ.get("GITHUB_REPOSITORY", "maynut02/astral-party-korean-patch").strip()
-    ref = os.environ.get("GITHUB_REF", "main").strip()
     token = _require_env("GITHUB_TOKEN")
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
-    url = f"{api_url}/repos/{repository}/actions/workflows/patch.yml/dispatches"
+    url = f"{api_url}/repos/{repository}/dispatches"
     body = json.dumps(
-        {"ref": ref, "inputs": {"game_version": game_version}}
+        {
+            "event_type": "patch-watcher",
+            "client_payload": {"game_version": game_version},
+        }
     ).encode("utf-8")
     request = urllib.request.Request(
         url,
