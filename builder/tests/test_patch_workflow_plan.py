@@ -65,7 +65,9 @@ def test_immutable_release_tag_starts_at_p0_and_increments() -> None:
     base = "v3.2.0_r117"
     assert module.next_immutable_tag(base, ()) == f"{base}_p0"
     assert module.next_immutable_tag(base, (f"{base}_p0",)) == f"{base}_p1"
-    assert module.next_immutable_tag(base, (f"{base}_p0", f"{base}_p2", f"{base}_p4")) == f"{base}_p5"
+    assert module.next_immutable_tag(
+        base, (f"{base}_p0", f"{base}_p2", f"{base}_p4")
+    ) == f"{base}_p5"
     # Existing legacy unsuffixed tags are treated as p0 for migration purposes.
     assert module.next_immutable_tag(base, (base,)) == f"{base}_p1"
     assert module.next_immutable_tag(base, ("v3.2.0_r1170", f"{base}_preview")) == f"{base}_p0"

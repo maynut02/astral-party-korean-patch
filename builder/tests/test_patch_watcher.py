@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from tools.patch_watcher import (
     DISPATCH_RETRY_AFTER,
     DispatchRecord,
@@ -15,7 +16,6 @@ from tools.patch_watcher import (
     _parse_args,
     _route_status,
 )
-
 
 
 def test_dispatch_uses_only_game_version_input(monkeypatch) -> None:
