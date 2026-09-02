@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,12 +9,43 @@ from tools.patch_watcher import (
     DispatchRecord,
     RemoteState,
     _dispatch_due,
+    _dispatch_patch,
     _is_route_baseline,
     _needs_processing,
     _parse_args,
     _route_status,
 )
 
+
+
+def test_dispatch_uses_only_game_version_input(monkeypatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("GITHUB_REF", "main")
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status = 204
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode())
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr("tools.patch_watcher.urllib.request.urlopen", fake_urlopen)
+    _dispatch_patch("3.3.0")
+
+    assert captured["body"] == {
+        "ref": "main",
+        "inputs": {"game_version": "3.3.0"},
+    }
+    assert captured["timeout"] == 15.0
 
 def test_interval_argument_enables_daemon_mode() -> None:
     args = _parse_args(["--interval-seconds", "300"])

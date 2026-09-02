@@ -20,7 +20,6 @@ from astral_builder.extract.unity import extract_object_names, extract_text_asse
 from astral_builder.game.source import GameSource, GameSourceClient
 from astral_builder.patch.builder import patch_lang_bundle, patch_str_bundle
 from astral_builder.patch.fonts import patch_legacy_font, patch_tmp_font_bundle
-from astral_builder.patch.translations import DistributionChannel
 from astral_builder.release.manifest import (
     ManifestFile,
     PatchManifest,
@@ -171,7 +170,6 @@ def build_patch(
     asset_base_url: str,
     source_asset_base_url: str,
     patch_version: str,
-    channel: DistributionChannel,
     git_commit: str | None = None,
     github_run_id: str | None = None,
     legacy_data_path: str | Path | None,
@@ -232,7 +230,7 @@ def build_patch(
     lang_item = _one_bundle_with_text_asset(lang_items, lang_name)
     lang_release_name = _release_name(revision.route, "lang", lang_item.resolved)
     lang_out = payloads / lang_release_name
-    patch_lang_bundle(lang_item.path, lang_out, snapshot, asset_name=lang_name, channel=channel)
+    patch_lang_bundle(lang_item.path, lang_out, snapshot, asset_name=lang_name)
     validate_file(lang_out)
     lang_transport = _package_payload(lang_out, releases, lang_release_name)
     lang_source_transport = _package_payload(lang_item.path, originals, lang_release_name)
@@ -268,7 +266,6 @@ def build_patch(
         snapshot,
         asset_prefix=config.str_asset_prefix,
         target_field=config.str_target_field,
-        channel=channel,
     )
     validate_file(str_out)
     str_transport = _package_payload(str_out, releases, str_release_name)
@@ -365,7 +362,6 @@ def build_patch(
         conn,
         revision_id=revision_id,
         route=revision.route,
-        channel=channel.value,
         translation_fingerprint=snapshot.fingerprint,
         git_commit=git_commit,
         github_run_id=github_run_id,
@@ -374,7 +370,7 @@ def build_patch(
     manifest = PatchManifest(
         patch=PatchMetadata(
             version=patch_version,
-            channel=channel.value,
+            channel="release",
             route=revision.route,
             build_id=str(build_record.id),
             translation_fingerprint=snapshot.fingerprint,

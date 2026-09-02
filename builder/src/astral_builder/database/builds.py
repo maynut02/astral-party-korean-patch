@@ -33,7 +33,6 @@ class BuildFileRecord:
 class BuildRecord:
     id: UUID
     revision_id: UUID
-    channel: str
     translation_fingerprint: str
 
 
@@ -42,13 +41,10 @@ def begin_build(
     *,
     revision_id: UUID,
     route: str,
-    channel: str,
     translation_fingerprint: str,
     git_commit: str | None = None,
     github_run_id: str | None = None,
 ) -> BuildRecord:
-    if channel not in {"release", "develop"}:
-        raise ValueError(f"unsupported build channel: {channel}")
     if len(translation_fingerprint) != 64:
         raise ValueError("translation_fingerprint must be SHA-256 hex")
     build_id = uuid4()
@@ -65,13 +61,13 @@ def begin_build(
                 build_id,
                 revision_id,
                 route,
-                channel,
+                "release",
                 translation_fingerprint,
                 git_commit,
                 github_run_id,
             ),
         )
-    return BuildRecord(build_id, revision_id, channel, translation_fingerprint)
+    return BuildRecord(build_id, revision_id, translation_fingerprint)
 
 
 def record_build_files(

@@ -3,14 +3,6 @@ name: Patch
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: Pre update build or stable release
-        required: true
-        default: release
-        type: choice
-        options:
-          - release
-          - pre
       game_version:
         description: Game version override supplied by the patch watcher
         required: false
@@ -74,8 +66,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.aggregate.outputs.should_run }}
-      mode: ${{ steps.release.outputs.mode }}
-      channel: ${{ steps.release.outputs.channel }}
       tag: ${{ steps.release.outputs.tag }}
       title: ${{ steps.release.outputs.title }}
       patch_version: ${{ steps.release.outputs.patch_version }}
@@ -93,45 +83,29 @@ jobs:
       - name: Aggregate route checks
         id: aggregate
         shell: bash
-        env:
-          REQUESTED_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          mode="${REQUESTED_MODE:-release}"
           python tools/workflow/patch_plan.py \
             --checks-dir .work/check \
-            --mode "$mode" \
             --github-output "$GITHUB_OUTPUT"
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
       - name: Define immutable release identity
         if: steps.aggregate.outputs.should_run == 'true'
         id: release
         shell: bash
         env:
-          MODE: ${{ steps.aggregate.outputs.mode }}
           VERSION: ${{ steps.aggregate.outputs.game_version }}
           MAX_REVISION: ${{ steps.aggregate.outputs.max_revision }}
         run: |
           set -euo pipefail
           base="v${VERSION}_r${MAX_REVISION}"
-          if [ "$MODE" = "pre" ]; then
-            tag=patch-pre
-            title="${base}-pre"
-            patch_version="$title"
-            channel=develop
-          else
-            channel=release
-            mkdir -p .work
-            git ls-remote --tags --refs origin "refs/tags/${base}*" \
-              | awk '{sub("refs/tags/", "", $2); print $2}' > .work/existing-patch-tags.txt
-            tag="$(python tools/workflow/release_tag.py \
-              --base "$base" \
-              --tags-file .work/existing-patch-tags.txt)"
-            title="$tag"
-            patch_version="$tag"
-          fi
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          mkdir -p .work
+          git ls-remote --tags --refs origin "refs/tags/${base}*" \
+            | awk '{sub("refs/tags/", "", $2); print $2}' > .work/existing-patch-tags.txt
+          tag="$(python tools/workflow/release_tag.py \
+            --base "$base" \
+            --tags-file .work/existing-patch-tags.txt)"
+          title="$tag"
+          patch_version="$tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "title=$title" >> "$GITHUB_OUTPUT"
           echo "patch_version=$patch_version" >> "$GITHUB_OUTPUT"
@@ -422,7 +396,6 @@ jobs:
             --patch-version '${{ needs.plan.outputs.patch_version }}' \
             --github-run-id "$GITHUB_RUN_ID" \
             --git-commit "$GITHUB_SHA" \
-            --channel '${{ needs.plan.outputs.channel }}' \
             --legacy-data '${{ matrix.legacy_path }}' \
             --github-output "$output_file"
           astral-builder validate-build \
@@ -496,7 +469,6 @@ jobs:
             --patch-version '${{ needs.plan.outputs.patch_version }}' \
             --github-run-id "$GITHUB_RUN_ID" \
             --git-commit "$GITHUB_SHA" \
-            --channel '${{ needs.plan.outputs.channel }}' \
             --github-output "$output_file"
           astral-builder validate-build \
             --manifest "$root/manifest.json" \
@@ -658,38 +630,23 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
           TITLE: ${{ needs.plan.outputs.title }}
-          MODE: ${{ needs.plan.outputs.mode }}
         run: |
           set -euo pipefail
-          if [ "$MODE" = "pre" ]; then
-            if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release delete "$TAG" --yes --cleanup-tag
-            elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-              git push origin ":refs/tags/$TAG"
-            fi
-          else
-            if gh release view "$TAG" >/dev/null 2>&1 || \
-               git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "immutable release tag already exists: $TAG" >&2
-              exit 1
-            fi
+          if gh release view "$TAG" >/dev/null 2>&1 || \
+             git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "immutable release tag already exists: $TAG" >&2
+            exit 1
           fi
 
           cleanup() {
             gh release delete "$TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
           }
           trap cleanup ERR
-          args=(
-            release create "$TAG"
-            --draft
-            --target "$GITHUB_SHA"
-            --title "$TITLE"
+          gh release create "$TAG" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
             --notes-file .work/patch-release-notes.md
-          )
-          if [ "$MODE" = "pre" ]; then
-            args+=(--prerelease)
-          fi
-          gh "${args[@]}"
           find output/release -maxdepth 1 -type f -name '*_build_id.txt' -delete
           gh release upload "$TAG" output/release/*
           gh release edit "$TAG" --draft=false

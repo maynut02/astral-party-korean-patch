@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 
 from astral_builder.database.snapshot import SnapshotUnit, TranslationSnapshot
 from astral_builder.formats.astral_str import StrDocument, StrEntry, decode_str, encode_str
 from astral_builder.formats.lang_xml import decode_lang_xml, encode_lang_xml
 from astral_builder.formats.model import SourceStrings
-
-
-class DistributionChannel(StrEnum):
-    RELEASE = "release"
-    DEVELOP = "develop"
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,10 +15,9 @@ class PatchStats:
     skipped_units: int
 
 
-def select_translation(unit: SnapshotUnit, channel: DistributionChannel) -> str | None:
+def select_translation(unit: SnapshotUnit) -> str | None:
     # ``translations`` contains approved production values only. Pending/rejected proposals live
     # in ``translation_changes`` and never reach the build snapshot.
-    _ = channel
     return unit.translation or None
 
 
@@ -46,7 +39,6 @@ def patch_lang_payload(
     snapshot: TranslationSnapshot,
     *,
     namespace: str = "lang",
-    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> tuple[bytes, PatchStats]:
     source = decode_lang_xml(source_payload)
     units = _snapshot_map(snapshot, kind="lang", namespace=namespace)
@@ -55,7 +47,7 @@ def patch_lang_payload(
     patched: dict[str, str] = {}
     for key, value in source.items():
         unit = units.get(key)
-        replacement = None if unit is None else select_translation(unit, channel)
+        replacement = None if unit is None else select_translation(unit)
         if replacement is None:
             patched[key] = value
         else:
@@ -91,7 +83,6 @@ def patch_str_payload(
     *,
     namespace: str,
     target_field: str,
-    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> tuple[bytes, PatchStats]:
     if not source_payload:
         return b"", PatchStats(total_units=0, translated_units=0, skipped_units=0)
@@ -103,7 +94,7 @@ def patch_str_payload(
 
     for entry in document.entries:
         unit = units.get(str(entry.id))
-        replacement = None if unit is None else select_translation(unit, channel)
+        replacement = None if unit is None else select_translation(unit)
         if replacement is None:
             patched_entries.append(entry)
             continue

@@ -1,11 +1,7 @@
 from astral_builder.database.snapshot import SnapshotUnit, make_snapshot
 from astral_builder.formats.astral_str import StrDocument, StrEntry, decode_str, encode_str
 from astral_builder.formats.model import SourceStrings
-from astral_builder.patch.translations import (
-    DistributionChannel,
-    patch_lang_payload,
-    patch_str_payload,
-)
+from astral_builder.patch.translations import patch_lang_payload, patch_str_payload
 
 
 def _snapshot_unit(*, kind: str, namespace: str, key: str, translation: str) -> SnapshotUnit:
@@ -38,25 +34,12 @@ def test_lang_uses_production_translation_and_falls_back_to_source() -> None:
     payload, stats = patch_lang_payload(
         '<resources><string name="A">A</string><string name="B">B</string></resources>',
         snapshot,
-        channel=DistributionChannel.RELEASE,
     )
     text = payload.decode()
     assert "승인 번역" in text
     assert ">B<" in text
     assert stats.translated_units == 1
 
-
-def test_develop_channel_uses_the_same_production_translation_table() -> None:
-    snapshot = _snapshot(
-        _snapshot_unit(kind="lang", namespace="lang", key="A", translation="승인 번역")
-    )
-    payload, stats = patch_lang_payload(
-        '<resources><string name="A">English</string></resources>',
-        snapshot,
-        channel=DistributionChannel.DEVELOP,
-    )
-    assert "승인 번역" in payload.decode()
-    assert stats.translated_units == 1
 
 
 def test_str_patch_replaces_only_configured_language_field() -> None:

@@ -44,10 +44,7 @@
             "$ref": "#/$defs/catalogHash"
           },
           "channel": {
-            "enum": [
-              "release",
-              "develop"
-            ]
+            "const": "release"
           },
           "patchVersion": {
             "type": "string",

@@ -16,7 +16,6 @@ class RevisionCheck:
     catalog_hash: str
     changed: bool
     sync_required: bool
-    release_changed: bool
     revision_id: str | None = None
 
 
@@ -42,16 +41,9 @@ def check_revision(
                     SELECT 1
                     FROM builds AS b
                     WHERE b.revision_id = gr.id
-                      AND b.channel IN ('develop', 'release')
-                      AND b.status = 'released'
-                ) AS has_published_build,
-                EXISTS (
-                    SELECT 1
-                    FROM builds AS b
-                    WHERE b.revision_id = gr.id
                       AND b.channel = 'release'
                       AND b.status = 'released'
-                ) AS has_release_build
+                ) AS has_published_build
             FROM game_revisions AS gr
             WHERE gr.route = %s AND gr.game_version = %s AND gr.revision = %s
             """,
@@ -65,10 +57,9 @@ def check_revision(
             catalog_hash=catalog_hash,
             changed=True,
             sync_required=True,
-            release_changed=True,
         )
 
-    revision_id, persisted_hash, processed_at, has_published_build, has_release_build = row
+    revision_id, persisted_hash, processed_at, has_published_build = row
     if persisted_hash != catalog_hash:
         raise RevisionConflictError(
             "remote catalog hash changed for an existing immutable revision: "
@@ -81,7 +72,6 @@ def check_revision(
         catalog_hash=catalog_hash,
         changed=sync_required or not has_published_build,
         sync_required=sync_required,
-        release_changed=not has_release_build,
         revision_id=str(revision_id),
     )
 
@@ -90,7 +80,6 @@ def write_github_output(check: RevisionCheck, destination: str | Path | TextIO) 
     lines = (
         f"changed={'true' if check.changed else 'false'}",
         f"sync_required={'true' if check.sync_required else 'false'}",
-        f"release_changed={'true' if check.release_changed else 'false'}",
         f"revision_id={check.revision_id or ''}",
         f"route={check.source.route}",
         f"game_version={check.source.version}",

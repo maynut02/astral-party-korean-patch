@@ -22,7 +22,6 @@ class RouteCheck:
     revision_id: str
     changed: bool
     sync_required: bool
-    release_changed: bool
 
 
 def _bool(value: str, *, name: str) -> bool:
@@ -59,7 +58,6 @@ def load_check(path: Path) -> RouteCheck:
         revision_id=values.get("revision_id", ""),
         changed=_bool(values["changed"], name="changed"),
         sync_required=_bool(values["sync_required"], name="sync_required"),
-        release_changed=_bool(values["release_changed"], name="release_changed"),
     )
 
 
@@ -68,13 +66,7 @@ def revision_key(value: str) -> tuple[tuple[int, int | str], ...]:
     return tuple((0, int(part)) if part.isdigit() else (1, part.casefold()) for part in parts)
 
 
-def build_plan(
-    checks: tuple[RouteCheck, ...],
-    *,
-    mode: str,
-) -> dict[str, object]:
-    if mode not in {"pre", "release"}:
-        raise ValueError(f"unsupported patch mode: {mode}")
+def build_plan(checks: tuple[RouteCheck, ...]) -> dict[str, object]:
     by_route = {item.route: item for item in checks}
     if set(by_route) != set(ROUTES):
         missing = sorted(set(ROUTES) - set(by_route))
@@ -86,14 +78,12 @@ def build_plan(
         raise ValueError(f"route game versions differ: {sorted(versions)}")
     game_version = next(iter(versions))
     max_revision = max((item.revision for item in checks), key=revision_key)
-    should_run = mode == "release" or any(item.changed for item in checks)
-    if mode == "release":
-        updated_routes = tuple(item.route for item in checks if item.release_changed)
-    else:
-        updated_routes = tuple(item.route for item in checks if item.changed)
+    updated_routes = tuple(item.route for item in checks if item.changed)
 
     result: dict[str, object] = {
-        "should_run": should_run,
+        # Every workflow invocation publishes a new immutable patch revision.
+        # Automatic runs are already gated by the external watcher.
+        "should_run": True,
         "game_version": game_version,
         "max_revision": max_revision,
         "updated_routes": updated_routes,
@@ -105,7 +95,6 @@ def build_plan(
         result[f"{slug}_revision_id"] = item.revision_id
         result[f"{slug}_changed"] = item.changed
         result[f"{slug}_sync_required"] = item.sync_required
-        result[f"{slug}_release_changed"] = item.release_changed
     return result
 
 
@@ -125,12 +114,11 @@ def _write_output(path: Path, plan: dict[str, object]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Aggregate per-route patch checks into one run plan.")
     parser.add_argument("--checks-dir", required=True, type=Path)
-    parser.add_argument("--mode", choices=("pre", "release"), required=True)
     parser.add_argument("--github-output", required=True, type=Path)
     args = parser.parse_args(argv)
 
     checks = tuple(load_check(args.checks_dir / f"{SLUGS[route]}.env") for route in ROUTES)
-    plan = build_plan(checks, mode=args.mode)
+    plan = build_plan(checks)
     _write_output(args.github_output, plan)
     print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
     return 0

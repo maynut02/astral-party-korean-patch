@@ -24,7 +24,6 @@ from astral_builder.automation.translation_status import (
 from astral_builder.automation.validate_build import validate_built_patch
 from astral_builder.database.builds import set_build_status
 from astral_builder.database.repository import load_translation_snapshot
-from astral_builder.patch.translations import DistributionChannel
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,7 +55,6 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--patch-version", required=True)
     build.add_argument("--github-run-id")
     build.add_argument("--git-commit")
-    build.add_argument("--channel", choices=["release", "develop"], default="release")
     build.add_argument("--legacy-data")
     build.add_argument("--github-output")
 
@@ -120,7 +118,6 @@ def _run_check(args: argparse.Namespace) -> int:
             {
                 "changed": result.changed,
                 "syncRequired": result.sync_required,
-                "releaseChanged": result.release_changed,
                 "revisionId": result.revision_id,
                 "route": result.source.route,
                 "gameVersion": result.source.version,
@@ -197,7 +194,6 @@ def _run_build(args: argparse.Namespace) -> int:
             patch_version=args.patch_version,
             github_run_id=args.github_run_id,
             git_commit=args.git_commit,
-            channel=DistributionChannel(args.channel),
             legacy_data_path=args.legacy_data,
         )
     if args.github_output:

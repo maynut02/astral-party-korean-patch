@@ -423,7 +423,7 @@ def _dispatch_patch(game_version: str) -> None:
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     url = f"{api_url}/repos/{repository}/actions/workflows/patch.yml/dispatches"
     body = json.dumps(
-        {"ref": ref, "inputs": {"mode": "release", "game_version": game_version}}
+        {"ref": ref, "inputs": {"game_version": game_version}}
     ).encode("utf-8")
     request = urllib.request.Request(
         url,

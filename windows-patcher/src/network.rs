@@ -107,7 +107,8 @@ impl ReleaseClient {
 
     pub fn fetch_release_index(&self, url: &str) -> Result<ReleaseIndex, NetworkError> {
         let raw = self.get_metadata(url)?;
-        let index: ReleaseIndex = serde_json::from_slice(&raw)?;
+        let mut index: ReleaseIndex = serde_json::from_slice(&raw)?;
+        index.releases.retain(|entry| entry.channel == "release");
         index.validate()?;
         Ok(index)
     }

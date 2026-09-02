@@ -31,7 +31,7 @@ Android판은 Google Play 서명의 원본 게임을 유지합니다. 게임이 
 
 ## Patch watcher
 
-DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 `release` 모드로 실행합니다.
+DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 실행합니다. 새 게임 version/revision의 첫 패치는 `_p0` 정식 Release로 생성되며, 같은 revision을 다시 수동 빌드하면 `_p1`, `_p2` 순서로 새 immutable Release가 생성됩니다.
 
 ```sql
 UPDATE patch_watch_config

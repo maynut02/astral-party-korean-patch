@@ -5,12 +5,7 @@ from pathlib import Path
 
 from astral_builder.database.snapshot import TranslationSnapshot
 from astral_builder.extract.unity import extract_text_assets
-from astral_builder.patch.translations import (
-    DistributionChannel,
-    PatchStats,
-    patch_lang_payload,
-    patch_str_payload,
-)
+from astral_builder.patch.translations import PatchStats, patch_lang_payload, patch_str_payload
 from astral_builder.patch.unity import patch_text_assets
 
 
@@ -28,15 +23,9 @@ def patch_lang_bundle(
     *,
     asset_name: str = "English",
     namespace: str = "lang",
-    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> BundlePatchResult:
     source = extract_text_assets(input_path, names={asset_name})[asset_name]
-    payload, stats = patch_lang_payload(
-        source,
-        snapshot,
-        namespace=namespace,
-        channel=channel,
-    )
+    payload, stats = patch_lang_payload(source, snapshot, namespace=namespace)
     assets = patch_text_assets(input_path, output_path, {asset_name: payload})
     return BundlePatchResult(Path(output_path), assets, stats)
 
@@ -48,7 +37,6 @@ def patch_str_bundle(
     *,
     asset_prefix: str = "STR",
     target_field: str = "en",
-    channel: DistributionChannel = DistributionChannel.RELEASE,
 ) -> BundlePatchResult:
     source_assets = extract_text_assets(input_path, name_prefix=asset_prefix)
     replacements: dict[str, bytes] = {}
@@ -59,7 +47,6 @@ def patch_str_bundle(
             snapshot,
             namespace=name,
             target_field=target_field,
-            channel=channel,
         )
         replacements[name] = payload
         total += stats.total_units

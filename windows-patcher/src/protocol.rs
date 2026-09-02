@@ -146,7 +146,7 @@ impl PatchManifest {
         if self.files.is_empty() {
             return Err(ProtocolError::EmptyManifest);
         }
-        if !matches!(self.patch.channel.as_str(), "release" | "develop") {
+        if self.patch.channel != "release" {
             return Err(ProtocolError::UnsupportedChannel(
                 self.patch.channel.clone(),
             ));
@@ -255,7 +255,7 @@ impl ReleaseIndex {
             {
                 return Err(ProtocolError::UnsafePath("empty release field".into()));
             }
-            if !matches!(entry.channel.as_str(), "release" | "develop") {
+            if entry.channel != "release" {
                 return Err(ProtocolError::UnsupportedChannel(entry.channel.clone()));
             }
             if !valid_catalog_hash(&entry.catalog_hash) {

@@ -33,8 +33,13 @@ def test_patch_workflow_is_split_into_parallel_roles() -> None:
     assert set(jobs["publish"]["needs"]) == {"plan", "state", "build-steam", "build-android"}
 
 
-def test_patch_workflow_keeps_only_pre_release_mutable() -> None:
-    jobs = _workflow()["jobs"]
+def test_patch_workflow_uses_only_immutable_release_tags() -> None:
+    workflow = _workflow()
+    triggers = workflow[True] if True in workflow else workflow["on"]
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert "mode" not in inputs
+
+    jobs = workflow["jobs"]
     plan_script = next(
         step["run"]
         for step in jobs["plan"]["steps"]
@@ -45,9 +50,10 @@ def test_patch_workflow_keeps_only_pre_release_mutable() -> None:
         for step in jobs["publish"]["steps"]
         if step.get("name") == "Publish release"
     )
-    assert "tag=patch-pre" in plan_script
     assert "tools/workflow/release_tag.py" in plan_script
-    assert 'if [ "$MODE" = "pre" ]' in publish_script
+    assert "patch-pre" not in plan_script
+    assert "--prerelease" not in publish_script
+    assert "--channel" not in WORKFLOW.read_text(encoding="utf-8")
     assert "immutable release tag already exists" in publish_script
 
 
@@ -90,7 +96,7 @@ def test_patch_workflow_builds_against_immutable_original_releases() -> None:
     assert "immutable original release is incomplete" in original_publish
 
 
-def test_patch_workflow_has_no_github_cron_and_pre_is_change_driven() -> None:
+def test_patch_workflow_has_no_github_cron_and_accepts_watcher_game_version() -> None:
     workflow = _workflow()
     triggers = workflow[True] if True in workflow else workflow["on"]
     assert "schedule" not in triggers

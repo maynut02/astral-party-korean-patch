@@ -9,7 +9,7 @@ from typing import Literal
 
 Target = Literal["addressables", "game-data"]
 Operation = Literal["create", "replace"]
-Channel = Literal["release", "develop"]
+Channel = Literal["release"]
 Compression = Literal["gzip"]
 
 
@@ -47,7 +47,7 @@ class PatchMetadata:
     def validate(self) -> None:
         if not all((self.version, self.route, self.build_id)):
             raise ValueError("patch version, route and build_id are required")
-        if self.channel not in {"release", "develop"}:
+        if self.channel != "release":
             raise ValueError(f"unsupported patch channel: {self.channel}")
         _validate_sha256(self.translation_fingerprint, "translation_fingerprint")
 

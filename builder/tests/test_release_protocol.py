@@ -73,7 +73,7 @@ def test_manifest_records_original_source_metadata(tmp_path: Path) -> None:
     manifest = PatchManifest(
         patch=PatchMetadata(
             version="v-test",
-            channel="develop",
+            channel="release",
             route="INT_ANDROID",
             build_id="build-test",
             translation_fingerprint="a" * 64,
@@ -191,7 +191,7 @@ def test_release_index_accepts_entries_without_addressables_paths() -> None:
     assert index.releases[0].addressables_paths == ()
 
 
-def test_release_index_drops_legacy_channels_on_read() -> None:
+def test_release_index_drops_non_release_channels_on_read() -> None:
     raw = json.dumps(
         {
             "schemaVersion": 1,
@@ -201,9 +201,9 @@ def test_release_index_drops_legacy_channels_on_read() -> None:
                     "gameVersion": "3.2.0",
                     "revision": "1042",
                     "catalogHash": "b" * 32,
-                    "channel": "stable",
-                    "patchVersion": "legacy-stable",
-                    "manifestUrl": "https://example.test/stable/manifest.json",
+                    "channel": "legacy",
+                    "patchVersion": "legacy-nonrelease",
+                    "manifestUrl": "https://example.test/legacy/manifest.json",
                     "manifestSha256": "c" * 64,
                 },
                 {
@@ -223,45 +223,21 @@ def test_release_index_drops_legacy_channels_on_read() -> None:
     assert index.releases == ()
 
 
+def test_release_index_rejects_new_non_release_entry() -> None:
+    entry = ReleaseIndexEntry(
+        route="INT_STEAM",
+        game_version="3.2.0",
+        revision="1042",
+        catalog_hash="b" * 32,
+        channel="legacy",  # type: ignore[arg-type]
+        patch_version="legacy-nonrelease",
+        manifest_url="https://example.test/legacy/manifest.json",
+        manifest_sha256="c" * 64,
+    )
+    with pytest.raises(ValueError, match="unsupported release channel"):
+        entry.validate()
+
+
 def test_manifest_digest_hashes_exact_bytes() -> None:
     expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     assert manifest_digest(b"abc") == expected
-
-
-def test_develop_release_index_is_rolling_per_route_and_game_version() -> None:
-    first = ReleaseIndexEntry(
-        route="INT_STEAM",
-        game_version="3.2.0",
-        revision="115",
-        catalog_hash="1" * 32,
-        channel="develop",
-        patch_version="v3.2.0_r115-pre",
-        manifest_url="https://example.test/patch-pre/INT_STEAM_manifest.json",
-        manifest_sha256="a" * 64,
-    )
-    current = ReleaseIndexEntry(
-        route="INT_STEAM",
-        game_version="3.2.0",
-        revision="116",
-        catalog_hash="2" * 32,
-        channel="develop",
-        patch_version="v3.2.0_r116-pre",
-        manifest_url="https://example.test/patch-pre/INT_STEAM_manifest.json",
-        manifest_sha256="b" * 64,
-    )
-    stable = ReleaseIndexEntry(
-        route="INT_STEAM",
-        game_version="3.2.0",
-        revision="115",
-        catalog_hash="1" * 32,
-        channel="release",
-        patch_version="v3.2.0_r115",
-        manifest_url="https://example.test/v3.2.0_r115/INT_STEAM_manifest.json",
-        manifest_sha256="c" * 64,
-    )
-
-    updated = ReleaseIndex((first, stable)).upsert(current)
-
-    assert updated.releases == (current, stable) or updated.releases == (stable, current)
-    assert [item for item in updated.releases if item.channel == "develop"] == [current]
-    assert [item for item in updated.releases if item.channel == "release"] == [stable]

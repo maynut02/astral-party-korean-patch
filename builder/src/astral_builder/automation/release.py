@@ -10,7 +10,6 @@ from astral_builder.release.index import ReleaseIndex, ReleaseIndexEntry, manife
 @dataclass(frozen=True, slots=True)
 class ReleaseMetadata:
     patch_version: str
-    channel: str
     route: str
     game_version: str
     revision: str
@@ -38,17 +37,16 @@ def read_release_metadata(manifest_path: str | Path) -> ReleaseMetadata:
             }
         )
     )
+    if patch.get("channel") != "release":
+        raise ValueError(f"unsupported release channel: {patch.get('channel')}")
     metadata = ReleaseMetadata(
         patch_version=str(patch["version"]),
-        channel=str(patch["channel"]),
         route=str(patch["route"]),
         game_version=str(game["version"]),
         revision=str(game["revision"]),
         catalog_hash=str(game["catalogHash"]),
         addressables_paths=addressables_paths,
     )
-    if metadata.channel not in {"release", "develop"}:
-        raise ValueError(f"unsupported release channel: {metadata.channel}")
     return metadata
 
 
@@ -70,7 +68,7 @@ def update_release_index(
         game_version=metadata.game_version,
         revision=metadata.revision,
         catalog_hash=metadata.catalog_hash,
-        channel=metadata.channel,
+        channel="release",
         patch_version=metadata.patch_version,
         manifest_url=manifest_url,
         manifest_sha256=manifest_digest(manifest_path.read_bytes()),
