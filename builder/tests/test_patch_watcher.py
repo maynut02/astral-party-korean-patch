@@ -4,7 +4,6 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from tools.patch_watcher import (
     DISPATCH_RETRY_AFTER,
     DispatchRecord,
