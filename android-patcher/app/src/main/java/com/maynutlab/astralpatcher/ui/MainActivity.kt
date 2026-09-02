@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +41,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -51,6 +53,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -825,19 +828,18 @@ private class PatchController(private val activity: MainActivity) {
             require(apk.name == expected.name && apk.isFile && apk.length() == expected.size) {
                 "다운로드한 원본 게임 APK 파일 정보가 다릅니다: ${expected.name}"
             }
-            val info = activity.packageManager.getPackageArchiveInfo(
-                apk.absolutePath,
-                PackageManager.GET_SIGNING_CERTIFICATES,
-            ) ?: error("원본 게임 APK를 해석할 수 없습니다: ${expected.name}")
-            require(info.packageName == GAME_PACKAGE) {
-                "원본 게임 APK packageName이 다릅니다: ${expected.name}"
-            }
-            require(info.longVersionCode == release.versionCode) {
-                "원본 게임 APK versionCode가 다릅니다: ${expected.name}"
-            }
-            require(certificateSha256(info) == release.certificateSha256) {
-                "원본 게임 APK Play 인증서가 다릅니다: ${expected.name}"
-            }
+        }
+        val base = apks.single { it.name == "base.apk" }
+        val info = activity.packageManager.getPackageArchiveInfo(
+            base.absolutePath,
+            PackageManager.GET_SIGNING_CERTIFICATES,
+        ) ?: error("원본 게임 base APK를 해석할 수 없습니다.")
+        require(info.packageName == GAME_PACKAGE) { "원본 게임 APK packageName이 다릅니다." }
+        require(info.longVersionCode == release.versionCode) {
+            "원본 게임 APK versionCode가 다릅니다."
+        }
+        require(certificateSha256(info) == release.certificateSha256) {
+            "원본 게임 APK Play 인증서가 다릅니다."
         }
     }
 
@@ -1103,17 +1105,6 @@ private fun PatchManagerScreen(
         ) {
             Spacer(Modifier.height(4.dp))
             StatusCard(
-                "Astral Party",
-                state.gameStatus,
-                when {
-                    state.gameStatus == "확인 중" -> StatusIndicator.IN_PROGRESS
-                    state.gameReady -> StatusIndicator.COMPLETED
-                    else -> StatusIndicator.PENDING
-                },
-                onGame,
-                state.gameActionLabel,
-            )
-            StatusCard(
                 "Shizuku",
                 state.shizukuStatus,
                 when {
@@ -1123,6 +1114,17 @@ private fun PatchManagerScreen(
                 },
                 onShizuku,
                 state.shizukuActionLabel,
+            )
+            StatusCard(
+                "Astral Party",
+                state.gameStatus,
+                when {
+                    state.gameStatus == "확인 중" -> StatusIndicator.IN_PROGRESS
+                    state.gameReady -> StatusIndicator.COMPLETED
+                    else -> StatusIndicator.PENDING
+                },
+                onGame,
+                state.gameActionLabel,
             )
             StatusCard(
                 "게임 리소스",
@@ -1226,22 +1228,26 @@ private fun PatchManagerScreen(
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f),
                         )
-                        IconButton(
-                            onClick = {
-                                val clipboard = activityClipboardManager(context)
-                                clipboard.setPrimaryClip(
-                                    android.content.ClipData.newPlainText(
-                                        "실행 기록",
-                                        state.logs.joinToString("\n\n"),
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
+                            IconButton(
+                                onClick = {
+                                    val clipboard = activityClipboardManager(context)
+                                    clipboard.setPrimaryClip(
+                                        android.content.ClipData.newPlainText(
+                                            "실행 기록",
+                                            state.logs.joinToString("\n\n"),
+                                        )
                                     )
+                                },
+                                enabled = state.logs.isNotEmpty(),
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_content_copy_24),
+                                    contentDescription = "실행 기록 복사",
+                                    modifier = Modifier.size(18.dp),
                                 )
-                            },
-                            enabled = state.logs.isNotEmpty(),
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_content_copy_24),
-                                contentDescription = "실행 기록 복사",
-                            )
+                            }
                         }
                     }
                     HorizontalDivider()
