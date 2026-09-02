@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "packageName": "com.feimo.astralpartyjpn",
+  "versionName": "3.2.0",
+  "versionCode": 555,
+  "certificateSha256": "3b151460f9d40e9382bfb6206ee7ffa344a79292dd254eda2b40f8175b5bfad6",
+  "deviceProfile": "px_9a",
+  "releaseTag": "android-game-v555",
+  "files": [
+    {
+      "name": "base.apk",
+      "splitName": null,
+      "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/android-game-v555/base.apk",
+      "sha256": "89e5b0312c5035c83690667a83a69469fc6f996525a326f6d0099b3643f9d09a",
+      "size": 72266484
+    },
+    {
+      "name": "split-001-config.arm64_v8a.apk",
+      "splitName": "config.arm64_v8a",
+      "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/android-game-v555/split-001-config.arm64_v8a.apk",
+      "sha256": "12553fd0a3392b377c6dfa8c567f41b3df123e07301494cd68f03a88d6d8d8bf",
+      "size": 30503955
+    }
+  ]
+}
