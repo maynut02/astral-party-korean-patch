@@ -15,6 +15,8 @@ const val SHIZUKU_RELEASE_API =
     "https://api.github.com/repos/thedjchi/Shizuku/releases/latest"
 const val MOBILE_PATCHER_INDEX_URL =
     "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/mobile-patcher-index.json"
+const val ORIGINAL_GAME_INDEX_URL =
+    "https://raw.githubusercontent.com/maynut02/astral-party-korean-patch/distribution/android-game-index.json"
 
 data class CatalogIdentity(
     val gameVersion: String,
@@ -416,6 +418,12 @@ object TrustedUrls {
     fun requireMobilePatcherIndex(value: String) {
         require(value == MOBILE_PATCHER_INDEX_URL) {
             "신뢰하지 않는 AndroidPatcher index 주소입니다."
+        }
+    }
+
+    fun requireOriginalGameIndex(value: String) {
+        require(value == ORIGINAL_GAME_INDEX_URL) {
+            "신뢰하지 않는 원본 게임 APK index 주소입니다."
         }
     }
 

@@ -11,12 +11,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.SyncFailedException
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 @Keep
 class PatchUserService : IPatchService.Stub() {
@@ -28,9 +30,92 @@ class PatchUserService : IPatchService.Stub() {
     private val backupsRoot = File(stateRoot, "backups")
     private val stateFile = File(stateRoot, "state.json")
     private val diagnosticsFile = File(stateRoot, "patch-diagnostics.jsonl")
+    private val gameInstallRoot = File("/data/local/tmp/astral-original-installer")
+    private var activeGameInstallId: String? = null
+    private var expectedGameApkCount = 0
+    private var gameInstallStatus = "idle"
 
     override fun getServiceInfo(): String =
-        "AstralPatchService/3 uid=${android.os.Process.myUid()} pid=${android.os.Process.myPid()}"
+        "AstralPatchService/4 uid=${android.os.Process.myUid()} pid=${android.os.Process.myPid()} " +
+            "installer=$gameInstallStatus"
+
+    @Synchronized
+    override fun beginGameInstall(installId: String, fileCount: Int) {
+        val safeId = requireTransactionId(installId)
+        require(activeGameInstallId == null) { "다른 게임 설치가 이미 진행 중입니다." }
+        require(fileCount in 1..MAX_GAME_APK_FILES) { "설치할 게임 APK 파일 수가 올바르지 않습니다." }
+        cleanupGameInstallRoot()
+        require(gameInstallRoot.isDirectory || gameInstallRoot.mkdirs()) {
+            "게임 APK staging root를 만들 수 없습니다."
+        }
+        val staging = gameInstallDirectory(safeId)
+        require(staging.mkdir()) { "게임 APK staging 디렉터리를 만들 수 없습니다." }
+        activeGameInstallId = safeId
+        expectedGameApkCount = fileCount
+        gameInstallStatus = "staging 0/$fileCount"
+    }
+
+    @Synchronized
+    override fun stageGameApk(
+        installId: String,
+        name: String,
+        apk: ParcelFileDescriptor,
+        size: Long,
+        sha256: String,
+    ) {
+        val safeId = requireActiveGameInstall(installId)
+        require(name.matches(SAFE_APK_NAME)) { "게임 APK 파일 이름이 안전하지 않습니다." }
+        val expectedSize = requirePositive(size, "게임 APK 크기")
+        val expectedSha = requireSha256(sha256)
+        val staging = gameInstallDirectory(safeId)
+        val target = File(staging, name)
+        require(target.parentFile == staging && !target.exists()) {
+            "게임 APK staging 경로가 올바르지 않거나 중복되었습니다."
+        }
+        receiveGameApk(apk, target, expectedSize, expectedSha)
+        Os.chmod(target.path, 0b110100100)
+        val stagedCount = stagedGameApks(staging).size
+        require(stagedCount <= expectedGameApkCount) { "예상보다 많은 게임 APK가 전달되었습니다." }
+        gameInstallStatus = "staging $stagedCount/$expectedGameApkCount"
+    }
+
+    @Synchronized
+    override fun commitGameInstall(installId: String): String {
+        val safeId = requireActiveGameInstall(installId)
+        val staging = gameInstallDirectory(safeId)
+        val apks = stagedGameApks(staging)
+        require(apks.size == expectedGameApkCount) {
+            "게임 APK 파일 수가 다릅니다: ${apks.size}/$expectedGameApkCount"
+        }
+        require(apks.any { it.name == "base.apk" }) { "base APK가 staging에 없습니다." }
+        gameInstallStatus = "installing ${apks.size} files"
+        return try {
+            val command = mutableListOf(
+                "/system/bin/pm",
+                "install-multiple",
+                "-r",
+                "-i",
+                PLAY_STORE_PACKAGE,
+            )
+            command += apks.map(File::getAbsolutePath)
+            val result = runInstallCommand(command)
+            gameInstallStatus = "success ${apks.size} files"
+            result
+        } catch (error: Exception) {
+            gameInstallStatus = "failed ${error.message.orEmpty().take(MAX_STATUS_OUTPUT_CHARS)}"
+            throw error
+        } finally {
+            finishGameInstall(staging)
+        }
+    }
+
+    @Synchronized
+    override fun cancelGameInstall(installId: String) {
+        val safeId = requireTransactionId(installId)
+        if (activeGameInstallId != safeId) return
+        finishGameInstall(gameInstallDirectory(safeId))
+        gameInstallStatus = "cancelled"
+    }
 
     @Synchronized
     override fun inspectGame(): String {
@@ -350,7 +435,99 @@ class PatchUserService : IPatchService.Stub() {
     }
 
     override fun destroy() {
+        activeGameInstallId?.let { finishGameInstall(gameInstallDirectory(it)) }
         System.exit(0)
+    }
+
+    private fun receiveGameApk(
+        descriptor: ParcelFileDescriptor,
+        target: File,
+        expectedSize: Long,
+        expectedSha: String,
+    ) {
+        val digest = MessageDigest.getInstance("SHA-256")
+        var total = 0L
+        ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+            FileOutputStream(target).use { output ->
+                val buffer = ByteArray(BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    require(total <= expectedSize) { "게임 APK stream이 예상 크기를 초과했습니다." }
+                    output.write(buffer, 0, read)
+                    digest.update(buffer, 0, read)
+                }
+                output.flush()
+                output.fd.sync()
+            }
+        }
+        require(total == expectedSize) { "게임 APK stream 크기가 다릅니다." }
+        require(digest.digest().toHex() == expectedSha) { "게임 APK stream SHA-256이 다릅니다." }
+        verifyFile(target, expectedSize, expectedSha, "staging된 게임 APK")
+    }
+
+    private fun runInstallCommand(command: List<String>): String {
+        val process = ProcessBuilder(command).redirectErrorStream(true).start()
+        val captured = ByteArrayOutputStream()
+        val reader = Thread(
+            {
+                process.inputStream.use { input ->
+                    val buffer = ByteArray(4 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        val remaining = MAX_INSTALL_OUTPUT_BYTES - captured.size()
+                        if (remaining > 0) captured.write(buffer, 0, minOf(read, remaining))
+                    }
+                }
+            },
+            "pm-install-output",
+        ).apply { start() }
+        try {
+            if (!process.waitFor(INSTALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                error("게임 APK 설치 시간이 초과되었습니다.")
+            }
+            reader.join(OUTPUT_READER_JOIN_TIMEOUT_MS)
+            val output = captured.toString(Charsets.UTF_8.name()).trim()
+            require(process.exitValue() == 0) {
+                "pm install-multiple 실패(exit=${process.exitValue()}): " +
+                    output.take(MAX_STATUS_OUTPUT_CHARS)
+            }
+            return output.ifBlank { "Success" }.take(MAX_STATUS_OUTPUT_CHARS)
+        } finally {
+            if (process.isAlive) process.destroyForcibly()
+            if (reader.isAlive) reader.join(OUTPUT_READER_JOIN_TIMEOUT_MS)
+        }
+    }
+
+    private fun requireActiveGameInstall(installId: String): String {
+        val safeId = requireTransactionId(installId)
+        require(activeGameInstallId == safeId) { "활성 게임 설치 session이 아닙니다." }
+        return safeId
+    }
+
+    private fun gameInstallDirectory(installId: String): File {
+        val target = File(gameInstallRoot, requireTransactionId(installId))
+        require(target.parentFile == gameInstallRoot) { "게임 설치 경로가 안전하지 않습니다." }
+        return target
+    }
+
+    private fun stagedGameApks(staging: File): List<File> =
+        staging.listFiles()
+            ?.filter { it.isFile && it.name.matches(SAFE_APK_NAME) }
+            ?.sortedWith(compareBy<File> { it.name != "base.apk" }.thenBy(File::getName))
+            .orEmpty()
+
+    private fun finishGameInstall(staging: File) {
+        deleteRecursively(staging)
+        activeGameInstallId = null
+        expectedGameApkCount = 0
+    }
+
+    private fun cleanupGameInstallRoot() {
+        gameInstallRoot.listFiles()?.forEach(::deleteRecursively)
     }
 
     private fun discoverCatalog(): Pair<String, String> {
@@ -734,6 +911,13 @@ class PatchUserService : IPatchService.Stub() {
         private const val MAX_DIAGNOSTIC_EVENTS = 512
         private const val MAX_DIAGNOSTIC_DETAIL_CHARS = 4_096
         private const val MAX_DIAGNOSTIC_FILE_BYTES = 512 * 1024L
+        private const val MAX_GAME_APK_FILES = 64
+        private const val MAX_INSTALL_OUTPUT_BYTES = 64 * 1024
+        private const val MAX_STATUS_OUTPUT_CHARS = 1_024
+        private const val INSTALL_TIMEOUT_SECONDS = 300L
+        private const val OUTPUT_READER_JOIN_TIMEOUT_MS = 5_000L
+        private const val PLAY_STORE_PACKAGE = "com.android.vending"
+        private val SAFE_APK_NAME = Regex("^[A-Za-z0-9._-]+\\.apk$")
     }
 }
 

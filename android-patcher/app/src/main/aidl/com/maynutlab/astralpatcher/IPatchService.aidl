@@ -32,5 +32,15 @@ interface IPatchService {
         String sourceSha256,
         String relativePath
     ) = 9;
+    void beginGameInstall(String installId, int fileCount) = 10;
+    void stageGameApk(
+        String installId,
+        String name,
+        in ParcelFileDescriptor apk,
+        long size,
+        String sha256
+    ) = 11;
+    String commitGameInstall(String installId) = 12;
+    void cancelGameInstall(String installId) = 13;
     void destroy() = 16777114;
 }

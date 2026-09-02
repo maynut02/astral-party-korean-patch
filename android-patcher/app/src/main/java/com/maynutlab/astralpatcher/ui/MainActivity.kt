@@ -68,6 +68,7 @@ import com.maynutlab.astralpatcher.R
 import com.maynutlab.astralpatcher.core.CatalogIdentity
 import com.maynutlab.astralpatcher.core.GAME_PACKAGE
 import com.maynutlab.astralpatcher.core.MobilePatcherRelease
+import com.maynutlab.astralpatcher.core.OriginalGameRelease
 import com.maynutlab.astralpatcher.core.PatchHttpClient
 import com.maynutlab.astralpatcher.core.PatchManifest
 import com.maynutlab.astralpatcher.core.PatchProtocol
@@ -75,6 +76,7 @@ import com.maynutlab.astralpatcher.core.SHIZUKU_PACKAGE
 import com.maynutlab.astralpatcher.shizuku.PatchUserService
 import rikka.shizuku.Shizuku
 import java.io.File
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -119,6 +121,7 @@ class MainActivity : ComponentActivity() {
 private data class PatchUiState(
     val gameStatus: String = "확인 중",
     val gameReady: Boolean = false,
+    val gameActionLabel: String = "설정",
     val shizukuStatus: String = "확인 중",
     val shizukuReady: Boolean = false,
     val shizukuActionLabel: String = "설정",
@@ -247,6 +250,7 @@ private class PatchController(private val activity: MainActivity) {
                 else -> "Google Play 설치본이 아님 · 재설치 필요"
             },
             gameReady = gameReady,
+            gameActionLabel = if (gameReady) "실행" else "원본 설치",
             shizukuStatus = when {
                 !shizukuInstalled -> "Shizuku가 설치되지 않음"
                 !binderReady -> "설치됨 · 서비스를 시작해야 함"
@@ -279,13 +283,14 @@ private class PatchController(private val activity: MainActivity) {
         catalog = null
         manifest = null
         checkPatcherUpdate()
-        if (!gameReady || !permissionGranted) {
+        if (!permissionGranted) {
             return
         }
         if (service == null) {
             bindPatchService()
             return
         }
+        if (!gameReady) return
         inspectAndResolve()
     }
 
@@ -314,10 +319,82 @@ private class PatchController(private val activity: MainActivity) {
     }
 
     fun handleGame() {
-        if (installedGame()?.installedFromPlay != true) {
-            openUrl("https://play.google.com/store/apps/details?id=$GAME_PACKAGE")
-        } else {
+        if (installedGame()?.installedFromPlay == true) {
             launchGame()
+            return
+        }
+        if (!state.shizukuReady) {
+            appendLog("원본 게임을 설치하려면 먼저 Shizuku를 실행하고 권한을 허용해 주세요.")
+            handleShizuku()
+            return
+        }
+        val patchService = service
+        if (patchService == null) {
+            appendLog("Shizuku 설치 서비스에 연결한 뒤 다시 시도해 주세요.")
+            bindPatchService()
+            return
+        }
+        installOriginalGame(patchService)
+    }
+
+    private fun installOriginalGame(patchService: IPatchService) {
+        if (state.busy) return
+        setBusy("Google Play 원본 게임 정보를 확인하는 중", 0f)
+        executor.execute {
+            val installId = UUID.randomUUID().toString()
+            var installStarted = false
+            var downloaded = emptyList<File>()
+            try {
+                require(patchService.getServiceInfo().startsWith("AstralPatchService/4 ")) {
+                    "지원하지 않는 게임 설치 서비스입니다."
+                }
+                val release = PatchHttpClient.getLatestOriginalGameRelease()
+                appendLog(
+                    "원본 게임 ${release.versionName}(${release.versionCode}) · " +
+                        "${release.files.size}개 split · profile=${release.deviceProfile}"
+                )
+                downloaded = PatchHttpClient.downloadOriginalGameApks(
+                    activity.cacheDir,
+                    release,
+                ) { name, percent ->
+                    updateBusy("원본 게임 APK 다운로드 · $name", percent / 100f * 0.8f)
+                }
+                verifyOriginalGameApks(downloaded, release)
+                appendLog("원본 게임 APK 해시, packageName, versionCode 및 Play 인증서를 확인했습니다.")
+
+                patchService.beginGameInstall(installId, downloaded.size)
+                installStarted = true
+                downloaded.forEachIndexed { index, apk ->
+                    val metadata = release.files[index]
+                    updateBusy(
+                        "원본 게임 APK staging ${index + 1}/${downloaded.size}",
+                        0.8f + (index.toFloat() / downloaded.size) * 0.15f,
+                    )
+                    ParcelFileDescriptor.open(apk, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
+                        patchService.stageGameApk(
+                            installId,
+                            metadata.name,
+                            descriptor,
+                            metadata.size,
+                            metadata.sha256,
+                        )
+                    }
+                }
+                updateBusy("원본 split APK를 설치하는 중", 0.96f)
+                val result = patchService.commitGameInstall(installId)
+                installStarted = false
+                verifyInstalledOriginalGame(release)
+                main.post {
+                    appendLog("원본 게임 설치 완료 · $result")
+                    setIdle()
+                    refresh()
+                }
+            } catch (error: Exception) {
+                if (installStarted) runCatching { patchService.cancelGameInstall(installId) }
+                showError("원본 게임 설치에 실패했습니다.", error)
+            } finally {
+                downloaded.forEach(File::delete)
+            }
         }
     }
 
@@ -593,7 +670,7 @@ private class PatchController(private val activity: MainActivity) {
             var inspected: CatalogIdentity? = null
             var checkingTargets = false
             try {
-                require(patchService.getServiceInfo().startsWith("AstralPatchService/3 ")) {
+                require(patchService.getServiceInfo().startsWith("AstralPatchService/4 ")) {
                     "지원하지 않는 patch 서비스입니다."
                 }
                 val catalogIdentity = PatchProtocol.parseInspection(patchService.inspectGame())
@@ -739,6 +816,56 @@ private class PatchController(private val activity: MainActivity) {
         val installer = activity.packageManager.getInstallSourceInfo(GAME_PACKAGE).installingPackageName
         GameInstall(version, installer == PLAY_STORE_PACKAGE)
     }.getOrNull()
+
+    @Suppress("DEPRECATION")
+    private fun verifyOriginalGameApks(apks: List<File>, release: OriginalGameRelease) {
+        require(apks.size == release.files.size) { "다운로드한 원본 게임 APK 파일 수가 다릅니다." }
+        apks.forEachIndexed { index, apk ->
+            val expected = release.files[index]
+            require(apk.name == expected.name && apk.isFile && apk.length() == expected.size) {
+                "다운로드한 원본 게임 APK 파일 정보가 다릅니다: ${expected.name}"
+            }
+            val info = activity.packageManager.getPackageArchiveInfo(
+                apk.absolutePath,
+                PackageManager.GET_SIGNING_CERTIFICATES,
+            ) ?: error("원본 게임 APK를 해석할 수 없습니다: ${expected.name}")
+            require(info.packageName == GAME_PACKAGE) {
+                "원본 게임 APK packageName이 다릅니다: ${expected.name}"
+            }
+            require(info.longVersionCode == release.versionCode) {
+                "원본 게임 APK versionCode가 다릅니다: ${expected.name}"
+            }
+            require(certificateSha256(info) == release.certificateSha256) {
+                "원본 게임 APK Play 인증서가 다릅니다: ${expected.name}"
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun verifyInstalledOriginalGame(release: OriginalGameRelease) {
+        val info = activity.packageManager.getPackageInfo(
+            GAME_PACKAGE,
+            PackageManager.GET_SIGNING_CERTIFICATES,
+        )
+        require(info.longVersionCode == release.versionCode) {
+            "설치된 게임 versionCode가 원본 release와 다릅니다."
+        }
+        require(certificateSha256(info) == release.certificateSha256) {
+            "설치된 게임 인증서가 Google Play 원본과 다릅니다."
+        }
+        val source = activity.packageManager.getInstallSourceInfo(GAME_PACKAGE)
+        require(source.installingPackageName == PLAY_STORE_PACKAGE) {
+            "설치자 기록이 Google Play로 설정되지 않았습니다: ${source.installingPackageName}"
+        }
+    }
+
+    private fun certificateSha256(info: PackageInfo): String {
+        val signers = info.signingInfo?.apkContentsSigners.orEmpty()
+        require(signers.size == 1) { "APK의 현재 signing certificate 수가 올바르지 않습니다." }
+        return MessageDigest.getInstance("SHA-256")
+            .digest(signers.single().toByteArray())
+            .joinToString(separator = "") { "%02x".format(it.toInt() and 0xff) }
+    }
 
     private fun isPackageInstalled(packageName: String): Boolean = runCatching {
         activity.packageManager.getApplicationInfo(packageName, 0).enabled
@@ -984,6 +1111,7 @@ private fun PatchManagerScreen(
                     else -> StatusIndicator.PENDING
                 },
                 onGame,
+                state.gameActionLabel,
             )
             StatusCard(
                 "Shizuku",

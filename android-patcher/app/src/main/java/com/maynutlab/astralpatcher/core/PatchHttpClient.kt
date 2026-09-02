@@ -38,6 +38,12 @@ object PatchHttpClient {
         return MobilePatcherReleaseProtocol.parse(json)
     }
 
+    fun getLatestOriginalGameRelease(): OriginalGameRelease {
+        TrustedUrls.requireOriginalGameIndex(ORIGINAL_GAME_INDEX_URL)
+        val json = getBytes(ORIGINAL_GAME_INDEX_URL, MAX_METADATA_BYTES).toString(Charsets.UTF_8)
+        return OriginalGameReleaseProtocol.parse(json)
+    }
+
     fun downloadShizukuApk(
         cacheDir: File,
         release: ShizukuRelease,
@@ -68,6 +74,41 @@ object PatchHttpClient {
             release.sha256,
             onProgress,
         )
+    }
+
+    fun downloadOriginalGameApks(
+        cacheDir: File,
+        release: OriginalGameRelease,
+        onProgress: (String, Int) -> Unit,
+    ): List<File> {
+        val root = File(cacheDir, "original-game/${release.versionCode}")
+        root.deleteRecursively()
+        require(root.mkdirs()) { "원본 게임 APK 다운로드 디렉터리를 만들 수 없습니다." }
+        val totalBytes = release.files.sumOf(OriginalGameApk::size)
+        var completedBytes = 0L
+        val downloaded = mutableListOf<File>()
+        try {
+            release.files.forEach { item ->
+                TrustedUrls.requireReleaseAsset(item.downloadUrl)
+                val target = File(root, item.name)
+                require(target.parentFile == root && !target.exists()) {
+                    "원본 게임 APK 다운로드 경로가 올바르지 않습니다."
+                }
+                downloadTo(target, item.downloadUrl, item.size, item.sha256) { filePercent ->
+                    val currentBytes = item.size * filePercent / 100L
+                    val overall = ((completedBytes + currentBytes) * 100L / totalBytes)
+                        .toInt()
+                        .coerceIn(0, 100)
+                    onProgress(item.name, overall)
+                }
+                downloaded += target
+                completedBytes += item.size
+            }
+            return downloaded
+        } catch (error: Exception) {
+            root.deleteRecursively()
+            throw error
+        }
     }
 
     fun downloadPayload(
