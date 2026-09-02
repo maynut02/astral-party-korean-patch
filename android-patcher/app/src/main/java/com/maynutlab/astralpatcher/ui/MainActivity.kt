@@ -253,10 +253,10 @@ private class PatchController(private val activity: MainActivity) {
                 else -> "Google Play 설치본이 아님 · 재설치 필요"
             },
             gameReady = gameReady,
-            gameActionLabel = if (gameReady) "실행" else "설치",
+            gameActionLabel = if (gameReady) "실행" else "게임 설치",
             shizukuStatus = when {
                 !shizukuInstalled -> "Shizuku가 설치되지 않음"
-                !binderReady -> "설치됨 · 서비스를 시작해야 함"
+                !binderReady -> "설치됨 · 페어링 및 서비스 시작 필요"
                 !permissionGranted -> "연결됨 · 권한 허용 필요"
                 else -> "연결 및 권한 확인 완료"
             },
