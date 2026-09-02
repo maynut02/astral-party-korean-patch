@@ -178,7 +178,7 @@ private class PatchController(private val activity: MainActivity) {
         ComponentName(activity, PatchUserService::class.java)
     )
         .daemon(false)
-        .tag("astral-cache-patcher-v3")
+        .tag("astral-cache-patcher-v5")
         .version(BuildConfig.VERSION_CODE)
         .processNameSuffix("patch")
 
@@ -348,7 +348,7 @@ private class PatchController(private val activity: MainActivity) {
             var installStarted = false
             var downloaded = emptyList<File>()
             try {
-                require(patchService.getServiceInfo().startsWith("AstralPatchService/4 ")) {
+                require(patchService.getServiceInfo().startsWith("AstralPatchService/5 ")) {
                     "지원하지 않는 게임 설치 서비스입니다."
                 }
                 val release = PatchHttpClient.getLatestOriginalGameRelease()
@@ -673,7 +673,7 @@ private class PatchController(private val activity: MainActivity) {
             var inspected: CatalogIdentity? = null
             var checkingTargets = false
             try {
-                require(patchService.getServiceInfo().startsWith("AstralPatchService/4 ")) {
+                require(patchService.getServiceInfo().startsWith("AstralPatchService/5 ")) {
                     "지원하지 않는 patch 서비스입니다."
                 }
                 val catalogIdentity = PatchProtocol.parseInspection(patchService.inspectGame())

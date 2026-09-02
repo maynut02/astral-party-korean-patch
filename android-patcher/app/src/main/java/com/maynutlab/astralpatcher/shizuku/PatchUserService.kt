@@ -36,7 +36,7 @@ class PatchUserService : IPatchService.Stub() {
     private var gameInstallStatus = "idle"
 
     override fun getServiceInfo(): String =
-        "AstralPatchService/4 uid=${android.os.Process.myUid()} pid=${android.os.Process.myPid()} " +
+        "AstralPatchService/5 uid=${android.os.Process.myUid()} pid=${android.os.Process.myPid()} " +
             "installer=$gameInstallStatus"
 
     @Synchronized
@@ -89,19 +89,63 @@ class PatchUserService : IPatchService.Stub() {
         }
         require(apks.any { it.name == "base.apk" }) { "base APK가 staging에 없습니다." }
         gameInstallStatus = "installing ${apks.size} files"
+        var packageSessionId: Int? = null
         return try {
-            val command = mutableListOf(
-                "/system/bin/pm",
-                "install-multiple",
-                "-r",
-                "-i",
-                PLAY_STORE_PACKAGE,
+            val totalSize = apks.sumOf(File::length)
+            val createResult = runInstallCommand(
+                listOf(
+                    "/system/bin/pm",
+                    "install-create",
+                    "-S",
+                    totalSize.toString(),
+                    "-r",
+                    "-i",
+                    PLAY_STORE_PACKAGE,
+                )
             )
-            command += apks.map(File::getAbsolutePath)
-            val result = runInstallCommand(command)
+            val sessionId = INSTALL_SESSION_ID.find(createResult)
+                ?.groupValues
+                ?.get(1)
+                ?.toIntOrNull()
+                ?: error("package install session ID를 확인할 수 없습니다: $createResult")
+            packageSessionId = sessionId
+            apks.forEachIndexed { index, apk ->
+                gameInstallStatus = "writing ${index + 1}/${apks.size} session=$sessionId"
+                runInstallCommand(
+                    listOf(
+                        "/system/bin/pm",
+                        "install-write",
+                        "-S",
+                        apk.length().toString(),
+                        sessionId.toString(),
+                        apk.name,
+                        apk.absolutePath,
+                    )
+                )
+            }
+            gameInstallStatus = "committing session=$sessionId"
+            val result = runInstallCommand(
+                listOf(
+                    "/system/bin/pm",
+                    "install-commit",
+                    sessionId.toString(),
+                )
+            )
+            packageSessionId = null
             gameInstallStatus = "success ${apks.size} files"
             result
         } catch (error: Exception) {
+            packageSessionId?.let { sessionId ->
+                runCatching {
+                    runInstallCommand(
+                        listOf(
+                            "/system/bin/pm",
+                            "install-abandon",
+                            sessionId.toString(),
+                        )
+                    )
+                }
+            }
             gameInstallStatus = "failed ${error.message.orEmpty().take(MAX_STATUS_OUTPUT_CHARS)}"
             throw error
         } finally {
@@ -491,8 +535,9 @@ class PatchUserService : IPatchService.Stub() {
             }
             reader.join(OUTPUT_READER_JOIN_TIMEOUT_MS)
             val output = captured.toString(Charsets.UTF_8.name()).trim()
+            val operation = command.getOrNull(1) ?: "install"
             require(process.exitValue() == 0) {
-                "pm install-multiple 실패(exit=${process.exitValue()}): " +
+                "pm $operation 실패(exit=${process.exitValue()}): " +
                     output.take(MAX_STATUS_OUTPUT_CHARS)
             }
             return output.ifBlank { "Success" }.take(MAX_STATUS_OUTPUT_CHARS)
@@ -918,6 +963,7 @@ class PatchUserService : IPatchService.Stub() {
         private const val OUTPUT_READER_JOIN_TIMEOUT_MS = 5_000L
         private const val PLAY_STORE_PACKAGE = "com.android.vending"
         private val SAFE_APK_NAME = Regex("^[A-Za-z0-9._-]+\\.apk$")
+        private val INSTALL_SESSION_ID = Regex("\\[([0-9]+)]")
     }
 }
 

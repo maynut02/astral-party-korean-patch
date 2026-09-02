@@ -42,7 +42,7 @@ Shizuku가 설치되지 않았으면 앱이 기존 방식대로 GitHub 최신 �
 - payload는 앱 프로세스와 shell 서비스 양쪽에서 SHA-256/크기를 검증합니다.
 - patch 시작 전에 게임을 강제 종료합니다.
 - crash가 남긴 transaction은 다음 진단 시 원래 파일로 복구합니다.
-- 원본 게임 설치 서비스는 고정된 `pm install-multiple -r -i com.android.vending` 동작만 제공하며 임의 shell command를 받지 않습니다.
+- 원본 게임 설치 서비스는 고정된 `pm install-create/install-write/install-commit` session 동작만 제공하고 installer를 `com.android.vending`으로 지정하며, 임의 shell command를 받지 않습니다.
 - 설치 전후에 모든 APK의 Google Play 서명 인증서와 versionCode를 다시 확인합니다.
 
 ## 원본 게임 APK Release
