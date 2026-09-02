@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate untouched Google Play split APKs and prepare release metadata."""
 
 from __future__ import annotations
