@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "0.10.0",
-  "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/windows-patcher-v0.10.0/AstralWindowsPatcher.exe",
-  "sha256": "7b307130474df3fa9120c24b978fa13282853b203452184d67084533c7f016a4",
-  "size": 4476928
+  "version": "0.10.1",
+  "downloadUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/windows-patcher-v0.10.1/AstralWindowsPatcher.exe",
+  "sha256": "f9ee67dcd3cbbe2e5b624b9b0c950acc31ef7caeb35cf6ee8048c12234fffae6",
+  "size": 4481024
 }
