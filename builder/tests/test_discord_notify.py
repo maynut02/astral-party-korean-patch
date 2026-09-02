@@ -25,36 +25,48 @@ def _payload(updated_routes: str = "INT_STEAM,INT_ANDROID") -> dict[str, object]
     )
 
 
-def _fields(payload: dict[str, object]) -> dict[str, str]:
+def _embed(payload: dict[str, object]) -> dict[str, object]:
     embeds = payload["embeds"]
     assert isinstance(embeds, list)
     embed = embeds[0]
     assert isinstance(embed, dict)
-    fields = embed["fields"]
-    assert isinstance(fields, list)
-    return {str(field["name"]): str(field["value"]) for field in fields}
+    return embed
 
 
-def test_payload_contains_requested_release_information() -> None:
+def test_payload_uses_compact_description_style() -> None:
     payload = _payload()
-    fields = _fields(payload)
+    embed = _embed(payload)
+    description = str(embed["description"])
 
-    assert fields["버전"] == "`v3.3.0_r001_p0`"
-    assert "Steam 글로벌" in fields["변경된 플랫폼"]
-    assert "Android 일본" in fields["변경된 플랫폼"]
-    assert "Steam 중국" not in fields["변경된 플랫폼"]
-    assert "`v3.3.0 / r1`" in fields["현재 플랫폼별 버전"]
-    assert "`v3.3.0 / r2`" in fields["현재 플랫폼별 버전"]
-    assert "https://astral.maynutlab.com/patcher/INT_STEAM/install" in fields["패치 프로그램 / 앱"]
-    assert "https://astral.maynutlab.com/patcher/CN_STEAM/install" in fields["패치 프로그램 / 앱"]
-    assert "https://astral.maynutlab.com/android" in fields["패치 프로그램 / 앱"]
-    assert "https://github.com/owner/repo/actions/runs/123" in fields["정보"]
-    assert "https://github.com/owner/repo/releases/tag/v3.3.0_r001_p0" in fields["정보"]
+    assert payload["content"] == (
+        "@everyone\n새로운 한글패치 릴리즈가 등록되었습니다.\n`v3.3.0_r001_p0`"
+    )
+    assert payload["allowed_mentions"] == {"parse": ["everyone"]}
+    assert description.startswith("# v3.3.0\\_r001\\_p0")
+    assert "**변경된 플랫폼**" in description
+    assert "✦ Steam 글로벌 버전" in description
+    assert "✦ Android 일본 버전" in description
+    changed_section = description.split("**변경된 플랫폼**", 1)[1].split(
+        "**현재 플랫폼 버전**", 1
+    )[0]
+    assert "Steam 중국 버전" not in changed_section
+    assert "✦ Steam 글로벌: `v3.3.0_r1`" in description
+    assert "✦ Steam 중국: `v3.3.0_r1`" in description
+    assert "✦ Android 일본: `v3.3.0_r2`" in description
+    assert "https://astral.maynutlab.com/patcher/INT_STEAM/install" in description
+    assert "https://astral.maynutlab.com/patcher/CN_STEAM/install" in description
+    assert "https://astral.maynutlab.com/android" in description
+    assert "https://astral.maynutlab.com/download" in description
+    assert "https://github.com/owner/repo/actions/runs/123" in description
+    assert "https://github.com/owner/repo/releases/tag/v3.3.0_r001_p0" in description
+    assert embed["color"] == 14509728
+    assert embed["timestamp"] == "2026-09-03T00:00:00Z"
+    assert "fields" not in embed
 
 
 def test_manual_rebuild_reports_no_platform_revision_change() -> None:
-    fields = _fields(_payload(updated_routes=""))
-    assert fields["변경된 플랫폼"] == "없음 (수동 재빌드)"
+    description = str(_embed(_payload(updated_routes=""))["description"])
+    assert "✦ 없음 (수동 재빌드)" in description
 
 
 def test_payload_rejects_unknown_platform() -> None:

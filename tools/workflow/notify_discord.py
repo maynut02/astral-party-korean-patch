@@ -8,9 +8,9 @@ import urllib.request
 from datetime import UTC, datetime
 
 ROUTE_LABELS = {
-    "INT_STEAM": "Steam 글로벌",
-    "CN_STEAM": "Steam 중국",
-    "INT_ANDROID": "Android 일본",
+    "INT_STEAM": "Steam 글로벌 버전",
+    "CN_STEAM": "Steam 중국 버전",
+    "INT_ANDROID": "Android 일본 버전",
 }
 ROUTES = tuple(ROUTE_LABELS)
 
@@ -19,6 +19,12 @@ WINDOWS_LINKS = {
     "CN_STEAM": "https://astral.maynutlab.com/patcher/CN_STEAM/install",
 }
 ANDROID_APP_URL = "https://astral.maynutlab.com/android"
+DOWNLOAD_URL = "https://astral.maynutlab.com/download"
+EMBED_COLOR = 14509728
+
+
+def _escape_markdown(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("_", "\\_")
 
 
 def _changed_platforms(updated_routes: str) -> str:
@@ -27,8 +33,8 @@ def _changed_platforms(updated_routes: str) -> str:
     if unknown:
         raise ValueError(f"unknown updated routes: {', '.join(unknown)}")
     if not routes:
-        return "없음 (수동 재빌드)"
-    return "\n".join(f"- {ROUTE_LABELS[route]} (`{route}`)" for route in routes)
+        return "✦ 없음 (수동 재빌드)"
+    return "\n".join(f"✦ {ROUTE_LABELS[route]}" for route in routes)
 
 
 def _platform_versions(game_version: str, revisions: dict[str, str]) -> str:
@@ -36,7 +42,8 @@ def _platform_versions(game_version: str, revisions: dict[str, str]) -> str:
     if missing:
         raise ValueError(f"missing route revisions: {', '.join(missing)}")
     return "\n".join(
-        f"- {ROUTE_LABELS[route]}: `v{game_version} / r{revisions[route]}`" for route in ROUTES
+        f"✦ {ROUTE_LABELS[route].removesuffix(' 버전')}: `v{game_version}_r{revisions[route]}`"
+        for route in ROUTES
     )
 
 
@@ -56,42 +63,39 @@ def build_payload(
     release_url = f"https://github.com/{repository}/releases/tag/{tag}"
     actions_url = f"https://github.com/{repository}/actions/runs/{run_id}"
     run_timestamp = timestamp or datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    display_tag = _escape_markdown(tag)
 
-    program_links = (
-        f"[Steam 글로벌 실행]({WINDOWS_LINKS['INT_STEAM']}) | "
-        f"[Steam 중국 실행]({WINDOWS_LINKS['CN_STEAM']})\n"
-        f"[Android 패치 앱]({ANDROID_APP_URL})"
+    description = "\n".join(
+        [
+            f"# {display_tag}",
+            "",
+            "**변경된 플랫폼**",
+            _changed_platforms(updated_routes),
+            "",
+            "**현재 플랫폼 버전**",
+            _platform_versions(game_version, revisions),
+            "",
+            "**패치 프로그램/앱 실행**",
+            f"✦ [Steam 글로벌 패치 실행]({WINDOWS_LINKS['INT_STEAM']})",
+            f"✦ [Steam 중국 패치 실행]({WINDOWS_LINKS['CN_STEAM']})",
+            f"✦ [Android 패치 앱 페이지]({ANDROID_APP_URL})",
+            "",
+            "**다운로드**",
+            f"✦ [다운로드 페이지]({DOWNLOAD_URL})",
+            "",
+            "**패치 정보**",
+            f"✦ [작업 상태]({actions_url})",
+            f"✦ [릴리즈 정보]({release_url})",
+        ]
     )
 
     return {
-        "content": "새로운 한글패치 릴리즈가 등록되었습니다.",
+        "content": f"@everyone\n새로운 한글패치 릴리즈가 등록되었습니다.\n`{tag}`",
+        "allowed_mentions": {"parse": ["everyone"]},
         "embeds": [
             {
-                "title": tag,
-                "url": release_url,
-                "fields": [
-                    {"name": "버전", "value": f"`{tag}`", "inline": False},
-                    {
-                        "name": "변경된 플랫폼",
-                        "value": _changed_platforms(updated_routes),
-                        "inline": False,
-                    },
-                    {
-                        "name": "현재 플랫폼별 버전",
-                        "value": _platform_versions(game_version, revisions),
-                        "inline": False,
-                    },
-                    {
-                        "name": "패치 프로그램 / 앱",
-                        "value": program_links,
-                        "inline": False,
-                    },
-                    {
-                        "name": "정보",
-                        "value": f"[GitHub Actions]({actions_url}) | [Release]({release_url})",
-                        "inline": False,
-                    },
-                ],
+                "description": description,
+                "color": EMBED_COLOR,
                 "timestamp": run_timestamp,
             }
         ],
