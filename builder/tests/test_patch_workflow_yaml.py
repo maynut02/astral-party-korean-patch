@@ -57,8 +57,13 @@ def test_patch_workflow_uses_only_immutable_release_tags() -> None:
     assert "immutable release tag already exists" in publish_script
 
 
-def test_patch_workflow_builds_against_immutable_original_releases() -> None:
+def test_patch_workflow_uses_one_unified_original_release() -> None:
     jobs = _workflow()["jobs"]
+    plan_script = next(
+        step["run"]
+        for step in jobs["plan"]["steps"]
+        if step.get("name") == "Define immutable release identity"
+    )
     steam_build = next(
         step["run"]
         for step in jobs["build-steam"]["steps"]
@@ -72,27 +77,31 @@ def test_patch_workflow_builds_against_immutable_original_releases() -> None:
     original_publish = next(
         step["run"]
         for step in jobs["publish"]["steps"]
-        if step.get("name") == "Publish immutable original releases"
+        if step.get("name") == "Publish or verify unified original release"
     )
 
+    assert 'original_tag="${base}-original"' in plan_script
+    assert 'if [ "$tag" = "${base}_p0" ]; then' in plan_script
+    assert "original_mode=unified" in plan_script
+    assert "original_mode=legacy" in plan_script
+    assert "publish_original=true" in plan_script
+    assert "publish_original=false" in plan_script
+    assert '${base}_p*-original' not in plan_script
     assert "--source-asset-base-url" in steam_build
     assert "--source-asset-base-url" in android_build
+    assert "needs.plan.outputs.original_tag" in steam_build
+    assert "needs.plan.outputs.original_tag" in android_build
+    assert "needs.plan.outputs.original_mode" in steam_build
+    assert "needs.plan.outputs.original_mode" in android_build
     assert 'source_tag="original-${{ matrix.route }}-' in steam_build
     assert 'source_tag="original-INT_ANDROID-' in android_build
-    assert (
-        'original_tag="original-${route}-${game_version}_r${revision_number}"'
-        in original_publish
-    )
-    assert 'if gh release view "$original_tag"' in original_publish
-    assert "reusing immutable original release" in original_publish
-    assert 'gh release create "$original_tag"' in original_publish
-    assert (
-        'original_title="original-${route} v${game_version}_r${revision_number}"'
-        in original_publish
-    )
-    assert "tools/workflow/release_notes.py original-backup" in original_publish
-    assert '--notes-file "$notes_file"' in original_publish
-    assert "--clobber" not in original_publish
+    assert "for route in INT_STEAM CN_STEAM INT_ANDROID" in original_publish
+    assert 'if [ "$ORIGINAL_MODE" = legacy ]; then' in original_publish
+    assert "reusing legacy per-route original releases" in original_publish
+    assert 'gh release create "$ORIGINAL_TAG"' in original_publish
+    assert "verify_original_release" in original_publish
+    assert "earlier pipeline attempt" in original_publish
+    assert "reusing unified original release" in original_publish
     assert "immutable original release is incomplete" in original_publish
 
 

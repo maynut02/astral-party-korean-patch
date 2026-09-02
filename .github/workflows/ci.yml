@@ -30,46 +30,9 @@ jobs:
           GITHUB_TOKEN: ci-token
         run: docker compose config --quiet
 
-  patcher:
-    runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: windows-patcher
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Rust format
-        run: cargo fmt --all -- --check
-      - name: Rust tests
-        run: cargo test --locked --all-targets --all-features
-      - name: Rust clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
-
-  android-patcher:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: android-patcher
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@v6
-        with:
-          gradle-version: "9.4.1"
-      - uses: android-actions/setup-android@v4
-      - name: Install Android SDK 36
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
-      - name: Unit test, lint and assemble
-        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
-
   deploy-watcher:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [builder, patcher, android-patcher]
+    needs: builder
     runs-on: ubuntu-latest
     steps:
       - name: Configure SSH

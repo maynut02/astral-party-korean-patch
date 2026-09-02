@@ -57,128 +57,32 @@ def render_patch_notes(
     return "\n".join(lines)
 
 
-def render_windows_patcher_notes(
-    *,
-    version: str,
-    sha256: str,
-    repository: str,
-    run_id: str,
-    run_number: str,
-) -> str:
-    return "\n".join(
-        [
-            "## WindowsPatcher",
-            "",
-            f"- 버전: `{version}`",
-            "- 대상: Windows x64",
-            "- Steam 글로벌/중국판 한글패치 설치와 제거를 지원합니다.",
-            "",
-            "## 사용 방법",
-            "",
-            "- `AstralWindowsPatcher.exe`를 내려받아 바로 실행하면 됩니다.",
-            "",
-            "## 파일 확인",
-            "",
-            "- 파일: `AstralWindowsPatcher.exe`",
-            f"- SHA-256: `{sha256}`",
-            "",
-            "## 빌드",
-            "",
-            f"- {_run_link(repository, run_id, run_number)}",
-            "",
-        ]
-    )
-
-
-def render_android_patcher_notes(
-    *,
-    version: str,
-    version_code: str,
-    sha256: str,
-    size: str,
-    repository: str,
-    run_id: str,
-    run_number: str,
-) -> str:
-    return "\n".join(
-        [
-            "## AndroidPatcher",
-            "",
-            f"- 버전: `{version}` (`versionCode {version_code}`)",
-            "- 대상: Android 11 이상",
-            "- Google Play 원본 게임을 유지하고 Shizuku로 외부 Addressables 캐시만 패치합니다.",
-            "- LANG, STR, TMP 폰트 bundle을 현재 게임 catalog에 맞춰 검증·백업·교체합니다.",
-            "- APK 내부 legacy 폰트는 수정하지 않습니다.",
-            "",
-            "## 설치 전 확인",
-            "",
-            "- Shizuku를 설치하고 무선 디버깅 또는 ADB로 Shizuku 서비스를 시작해야 합니다.",
-            "- 원본 게임을 한 번 실행해 최신 리소스 다운로드를 완료해야 합니다.",
-            "- AndroidPatcher에 Shizuku 권한을 허용해야 게임 캐시를 패치할 수 있습니다.",
-            "",
-            "## 파일 확인",
-            "",
-            "- 파일: `AstralAndroidPatcher.apk`",
-            f"- 크기: `{size}` bytes",
-            f"- SHA-256: `{sha256}`",
-            "",
-            "## 빌드",
-            "",
-            f"- {_run_link(repository, run_id, run_number)}",
-            "",
-        ]
-    )
-
-
-def render_android_apk_notes(
-    *,
-    version: str,
-    version_code: str,
-    file_count: str,
-    device_profile: str,
-    certificate_sha256: str,
-    repository: str,
-    run_id: str,
-    run_number: str,
-) -> str:
-    return "\n".join(
-        [
-            "## Astral Party APK 원본",
-            "",
-            "- 플랫폼: `INT_ANDROID`",
-            f"- 버전: `{version}` (`versionCode {version_code}`)",
-            f"- 구성: Google Play split APK `{file_count}개`",
-            f"- 기기 프로필: `{device_profile}`",
-            "",
-            "## 파일 확인",
-            "",
-            f"- APK 인증서 SHA-256: `{certificate_sha256}`",
-            "",
-            "## 빌드",
-            "",
-            f"- {_run_link(repository, run_id, run_number)}",
-            "",
-        ]
-    )
-
-
 def render_original_backup_notes(
     *,
-    platform: str,
     version: str,
-    revision: str,
+    revisions: dict[str, str],
     repository: str,
     run_id: str,
     run_number: str,
 ) -> str:
-    return "\n".join(
+    missing = [route for route in ROUTES if not revisions.get(route, "").strip()]
+    if missing:
+        raise ValueError(f"missing route revisions: {', '.join(missing)}")
+    lines = [
+        "## 패치 복원용 원본",
+        "",
+        f"- 게임 버전: `{version}`",
+        "- 한글패치를 제거할 때 복원하는 세 플랫폼의 변경 전 원본 파일입니다.",
+        "",
+        "## 플랫폼별 리비전",
+        "",
+        "| 플랫폼 | 리비전 |",
+        "| --- | --- |",
+    ]
+    for route in ROUTES:
+        lines.append(f"| `{route}` | `r{revisions[route]}` |")
+    lines.extend(
         [
-            "## 패치 복원용 원본",
-            "",
-            f"- 플랫폼: `{platform}`",
-            f"- 버전: `{version}`",
-            f"- 리비전: `{revision}`",
-            "- 한글패치를 제거할 때 복원하는 변경 전 원본 파일입니다.",
             "",
             "## 빌드",
             "",
@@ -186,6 +90,7 @@ def render_original_backup_notes(
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def _write(path: str, text: str) -> None:
@@ -213,27 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
     patch.add_argument("--cn-steam-revision", required=True)
     patch.add_argument("--int-android-revision", required=True)
 
-    windows_patcher = sub.add_parser("windows-patcher", parents=[common])
-    windows_patcher.add_argument("--version", required=True)
-    windows_patcher.add_argument("--sha256", required=True)
-
-    android_patcher = sub.add_parser("android-patcher", parents=[common])
-    android_patcher.add_argument("--version", required=True)
-    android_patcher.add_argument("--version-code", required=True)
-    android_patcher.add_argument("--sha256", required=True)
-    android_patcher.add_argument("--size", required=True)
-
-    android_apk = sub.add_parser("android-apk", parents=[common])
-    android_apk.add_argument("--version", required=True)
-    android_apk.add_argument("--version-code", required=True)
-    android_apk.add_argument("--file-count", required=True)
-    android_apk.add_argument("--device-profile", required=True)
-    android_apk.add_argument("--certificate-sha256", required=True)
-
     original_backup = sub.add_parser("original-backup", parents=[common])
-    original_backup.add_argument("--platform", choices=ROUTES, required=True)
     original_backup.add_argument("--version", required=True)
-    original_backup.add_argument("--revision", required=True)
+    original_backup.add_argument("--int-steam-revision", required=True)
+    original_backup.add_argument("--cn-steam-revision", required=True)
+    original_backup.add_argument("--int-android-revision", required=True)
 
     return parser
 
@@ -253,40 +142,14 @@ def main(argv: list[str] | None = None) -> int:
             run_id=args.run_id,
             run_number=args.run_number,
         )
-    elif args.kind == "windows-patcher":
-        text = render_windows_patcher_notes(
-            version=args.version,
-            sha256=args.sha256,
-            repository=args.repository,
-            run_id=args.run_id,
-            run_number=args.run_number,
-        )
-    elif args.kind == "android-patcher":
-        text = render_android_patcher_notes(
-            version=args.version,
-            version_code=args.version_code,
-            sha256=args.sha256,
-            size=args.size,
-            repository=args.repository,
-            run_id=args.run_id,
-            run_number=args.run_number,
-        )
-    elif args.kind == "android-apk":
-        text = render_android_apk_notes(
-            version=args.version,
-            version_code=args.version_code,
-            file_count=args.file_count,
-            device_profile=args.device_profile,
-            certificate_sha256=args.certificate_sha256,
-            repository=args.repository,
-            run_id=args.run_id,
-            run_number=args.run_number,
-        )
     elif args.kind == "original-backup":
         text = render_original_backup_notes(
-            platform=args.platform,
             version=args.version,
-            revision=args.revision,
+            revisions={
+                "INT_STEAM": args.int_steam_revision,
+                "CN_STEAM": args.cn_steam_revision,
+                "INT_ANDROID": args.int_android_revision,
+            },
             repository=args.repository,
             run_id=args.run_id,
             run_number=args.run_number,

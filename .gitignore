@@ -7,9 +7,6 @@ dist/
 build/
 *.egg-info/
 
-# Rust
-windows-patcher/target/
-
 # Environment / secrets
 .env
 .env.*
@@ -31,9 +28,6 @@ windows-patcher/target/
 .vscode/
 .idea/
 .agent/
-.gradle/
-local.properties
-android-patcher/AstralAndroidPatcher.apk
 .DS_Store
 Thumbs.db
 

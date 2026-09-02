@@ -1,6 +1,6 @@
 # Astral Party Korean Patch
 
-Astral Party 비공식 한국어 패치 프로젝트입니다. 게임 업데이트를 감지해 route별 패치 파일을 생성하고, Windows의 `WindowsPatcher`와 Android의 `AndroidPatcher`로 설치·업데이트합니다.
+Astral Party 비공식 한국어 패치의 게임 업데이트 감지, 번역 동기화, 패치 생성·검증·배포를 관리합니다. 설치 클라이언트와 원본 Android APK 배포는 `astral-party-auto-patcher` 저장소에서 관리합니다.
 
 ## 지원 환경
 
@@ -14,15 +14,11 @@ Astral Party 비공식 한국어 패치 프로젝트입니다. 게임 업데이�
 
 ### Android
 
-Android판은 Google Play 서명의 원본 게임을 유지합니다. 게임이 없으면 `AndroidPatcher`가 Actions에서 검증·배포한 무변조 원본 split APK를 받아 Shizuku로 설치할 수 있습니다. 패치 자체는 Shizuku shell 권한으로 외부 Addressables 캐시만 검증·교체하며, 복원용 원본은 동일 게임 버전/revision에 고정된 GitHub Release에서 내려받아 보관합니다. LANG, STR, TMP 폰트 bundle이 패치 대상이며 APK 내부 legacy 폰트는 수정하지 않습니다.
-
-게임을 먼저 실행해 최신 리소스 다운로드를 완료한 뒤 `AndroidPatcher`에서 Shizuku 권한을 허용하고 한글패치를 적용해야 합니다. 게임 업데이트 후에는 새 리소스를 내려받은 다음 패치를 다시 적용합니다.
+Android 패치는 Google Play 서명의 원본 게임 APK를 수정하지 않고 외부 Addressables 캐시의 LANG, STR, TMP 폰트 bundle만 대상으로 생성합니다. 실제 설치·복원과 원본 split APK 배포는 `maynut02/astral-party-auto-patcher`의 AndroidPatcher에서 담당합니다.
 
 ## 저장소 구성
 
 - `builder/` — 게임 리소스 확인, DB 동기화, 패치 생성·검증
-- `windows-patcher/` — Windows용 `WindowsPatcher` 소스
-- `android-patcher/` — Android용 `AndroidPatcher` 소스
 - `routes/` — route별 게임/번역/리소스 설정
 - `resources/` — 패치 생성에 필요한 route별 리소스
 - `schemas/` — release/manifest 설정 스키마
@@ -31,7 +27,7 @@ Android판은 Google Play 서명의 원본 게임을 유지합니다. 게임이 
 
 ## Patch watcher
 
-DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 실행합니다. 새 게임 version/revision의 첫 패치는 `_p0` 정식 Release로 생성되며, 같은 revision을 다시 수동 빌드하면 `_p1`, `_p2` 순서로 새 immutable Release가 생성됩니다.
+DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 실행합니다. 새 게임 version/revision의 첫 패치는 `_p0` 정식 Release로 생성되며, 같은 revision을 다시 수동 빌드하면 `_p1`, `_p2` 순서로 새 immutable Release가 생성됩니다. 복원용 원본은 새 게임 version/revision의 최초 `_p0` 자동 패치에서만 세 route를 하나의 `v<game-version>_r<revision>-original` Release로 생성합니다. 같은 revision의 `_p1`, `_p2` 등 수동 재빌드는 이 원본 Release를 그대로 재사용합니다.
 
 ```sql
 UPDATE patch_watch_config
@@ -50,18 +46,12 @@ docker compose -p astral-patch-watcher logs -f patch-watcher
 
 ## 개발
 
-Builder는 Python 3.12+, WindowsPatcher는 stable Rust toolchain, AndroidPatcher는 JDK 17/Gradle 9.4.1/Android SDK 36을 사용합니다.
-필요한 환경변수와 GitHub Actions Secret/Variable 목록은 [`.env.example`](.env.example)에 정리되어 있습니다.
+Builder는 Python 3.12+를 사용합니다. 필요한 환경변수와 GitHub Actions Secret/Variable 목록은 [`.env.example`](.env.example)에 정리되어 있습니다.
 
 ```bash
 python -m pip install -e './builder[dev]'
 python -m ruff check builder tools
 python -m pytest builder/tests
-
-cd windows-patcher
-cargo fmt --all -- --check
-cargo test --locked --all-targets --all-features
-cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 ## 라이선스

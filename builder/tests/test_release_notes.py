@@ -41,71 +41,17 @@ def test_patch_notes_reject_unknown_route() -> None:
         )
 
 
-def test_windows_patcher_notes_are_concise_and_include_hash_and_run() -> None:
-    text = MODULE.render_windows_patcher_notes(
-        version="0.8.7",
-        sha256="a" * 64,
-        repository="owner/repo",
-        run_id="10",
-        run_number="2",
-    )
-    assert "Windows x64" in text
-    assert "AstralWindowsPatcher.exe" in text
-    assert "a" * 64 in text
-    assert "/actions/runs/10" in text
-
-
-def test_android_patcher_notes_include_requirements_and_artifact_details() -> None:
-    text = MODULE.render_android_patcher_notes(
-        version="0.1.0",
-        version_code="1000",
-        sha256="c" * 64,
-        size="123456",
-        repository="owner/repo",
-        run_id="12",
-        run_number="4",
-    )
-    assert "Android 11" in text
-    assert "Shizuku" in text
-    assert "원본 게임" in text
-    assert "Addressables" in text
-    assert "AstralAndroidPatcher.apk" in text
-    assert "123456" in text
-    assert "c" * 64 in text
-    assert "/actions/runs/12" in text
-
-
-def test_android_apk_notes_use_original_title_and_artifact_details() -> None:
-    text = MODULE.render_android_apk_notes(
-        version="3.2.0",
-        version_code="555",
-        file_count="2",
-        device_profile="px_9a",
-        certificate_sha256="d" * 64,
-        repository="owner/repo",
-        run_id="13",
-        run_number="5",
-    )
-    assert text.startswith("## Astral Party APK 원본\n")
-    assert "Google Play 원본" not in text
-    assert "병합, 압축 해제" not in text
-    assert "`3.2.0` (`versionCode 555`)" in text
-    assert "`2개`" in text
-    assert "d" * 64 in text
-    assert "/actions/runs/13" in text
-
-
-def test_original_backup_notes_include_platform_version_and_revision() -> None:
+def test_original_backup_notes_include_all_platform_revisions() -> None:
     text = MODULE.render_original_backup_notes(
-        platform="INT_ANDROID",
         version="3.2.0",
-        revision="r116",
+        revisions={"INT_STEAM": "116", "CN_STEAM": "115", "INT_ANDROID": "116"},
         repository="owner/repo",
         run_id="14",
         run_number="6",
     )
     assert "## 패치 복원용 원본" in text
-    assert "- 플랫폼: `INT_ANDROID`" in text
-    assert "- 버전: `3.2.0`" in text
-    assert "- 리비전: `r116`" in text
+    assert "- 게임 버전: `3.2.0`" in text
+    assert "| `INT_STEAM` | `r116` |" in text
+    assert "| `CN_STEAM` | `r115` |" in text
+    assert "| `INT_ANDROID` | `r116` |" in text
     assert "/actions/runs/14" in text
