@@ -1,4 +1,4 @@
-name: Android Game Original
+name: Android APK
 
 on:
   workflow_dispatch:
@@ -115,16 +115,16 @@ jobs:
           FILE_COUNT: ${{ steps.metadata.outputs.file_count }}
         run: |
           set -euo pipefail
-          {
-            echo '# Astral Party Google Play 원본'
-            echo
-            echo "- 게임 버전: ${VERSION_NAME} (${VERSION_CODE})"
-            echo "- Google Play split APK: ${FILE_COUNT}개"
-            echo "- 기기 프로필: ${DEVICE_PROFILE}"
-            echo "- APK 인증서 SHA-256: \`${CERTIFICATE_SHA256}\`"
-            echo
-            echo 'APK는 병합, 압축 해제, 수정 또는 재서명하지 않았습니다.'
-          } > "$RUNNER_TEMP/android-game-release-notes.md"
+          python tools/workflow/release_notes.py android-apk \
+            --output "$RUNNER_TEMP/android-game-release-notes.md" \
+            --version "$VERSION_NAME" \
+            --version-code "$VERSION_CODE" \
+            --file-count "$FILE_COUNT" \
+            --device-profile "$DEVICE_PROFILE" \
+            --certificate-sha256 "$CERTIFICATE_SHA256" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-number "$GITHUB_RUN_NUMBER"
 
       - name: Publish immutable original APK release
         shell: bash
@@ -136,7 +136,7 @@ jobs:
           gh release create "$TAG" \
             .work/release/* \
             --target "$GITHUB_SHA" \
-            --title "Astral Party Android original ${VERSION_NAME}" \
+            --title "apk-INT_ANDROID v${VERSION_NAME}" \
             --notes-file "$RUNNER_TEMP/android-game-release-notes.md"
 
       - name: Update original game distribution index

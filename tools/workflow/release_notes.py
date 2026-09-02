@@ -36,9 +36,9 @@ def render_patch_notes(
     lines.extend(
         [
             "",
-            "## 현재 Route 상태",
+            "## 플랫폼별 상태",
             "",
-            "| Route | 게임 버전 | Revision |",
+            "| 플랫폼 | 버전 | 리비전 |",
             "| --- | --- | --- |",
         ]
     )
@@ -71,11 +71,15 @@ def render_windows_patcher_notes(
             "",
             f"- 버전: `{version}`",
             "- 대상: Windows x64",
-            "- `AstralWindowsPatcher.exe`를 내려받아 바로 실행하면 됩니다.",
             "- Steam 글로벌/중국판 한글패치 설치와 제거를 지원합니다.",
             "",
-            "## 확인",
+            "## 사용 방법",
             "",
+            "- `AstralWindowsPatcher.exe`를 내려받아 바로 실행하면 됩니다.",
+            "",
+            "## 파일 확인",
+            "",
+            "- 파일: `AstralWindowsPatcher.exe`",
             f"- SHA-256: `{sha256}`",
             "",
             "## 빌드",
@@ -126,6 +130,64 @@ def render_android_patcher_notes(
     )
 
 
+def render_android_apk_notes(
+    *,
+    version: str,
+    version_code: str,
+    file_count: str,
+    device_profile: str,
+    certificate_sha256: str,
+    repository: str,
+    run_id: str,
+    run_number: str,
+) -> str:
+    return "\n".join(
+        [
+            "## Astral Party APK 원본",
+            "",
+            "- 플랫폼: `INT_ANDROID`",
+            f"- 버전: `{version}` (`versionCode {version_code}`)",
+            f"- 구성: Google Play split APK `{file_count}개`",
+            f"- 기기 프로필: `{device_profile}`",
+            "",
+            "## 파일 확인",
+            "",
+            f"- APK 인증서 SHA-256: `{certificate_sha256}`",
+            "",
+            "## 빌드",
+            "",
+            f"- {_run_link(repository, run_id, run_number)}",
+            "",
+        ]
+    )
+
+
+def render_original_backup_notes(
+    *,
+    platform: str,
+    version: str,
+    revision: str,
+    repository: str,
+    run_id: str,
+    run_number: str,
+) -> str:
+    return "\n".join(
+        [
+            "## 패치 복원용 원본",
+            "",
+            f"- 플랫폼: `{platform}`",
+            f"- 버전: `{version}`",
+            f"- 리비전: `{revision}`",
+            "- 한글패치를 제거할 때 복원하는 변경 전 원본 파일입니다.",
+            "",
+            "## 빌드",
+            "",
+            f"- {_run_link(repository, run_id, run_number)}",
+            "",
+        ]
+    )
+
+
 def _write(path: str, text: str) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +223,18 @@ def build_parser() -> argparse.ArgumentParser:
     android_patcher.add_argument("--sha256", required=True)
     android_patcher.add_argument("--size", required=True)
 
+    android_apk = sub.add_parser("android-apk", parents=[common])
+    android_apk.add_argument("--version", required=True)
+    android_apk.add_argument("--version-code", required=True)
+    android_apk.add_argument("--file-count", required=True)
+    android_apk.add_argument("--device-profile", required=True)
+    android_apk.add_argument("--certificate-sha256", required=True)
+
+    original_backup = sub.add_parser("original-backup", parents=[common])
+    original_backup.add_argument("--platform", choices=ROUTES, required=True)
+    original_backup.add_argument("--version", required=True)
+    original_backup.add_argument("--revision", required=True)
+
     return parser
 
 
@@ -193,6 +267,26 @@ def main(argv: list[str] | None = None) -> int:
             version_code=args.version_code,
             sha256=args.sha256,
             size=args.size,
+            repository=args.repository,
+            run_id=args.run_id,
+            run_number=args.run_number,
+        )
+    elif args.kind == "android-apk":
+        text = render_android_apk_notes(
+            version=args.version,
+            version_code=args.version_code,
+            file_count=args.file_count,
+            device_profile=args.device_profile,
+            certificate_sha256=args.certificate_sha256,
+            repository=args.repository,
+            run_id=args.run_id,
+            run_number=args.run_number,
+        )
+    elif args.kind == "original-backup":
+        text = render_original_backup_notes(
+            platform=args.platform,
+            version=args.version,
+            revision=args.revision,
             repository=args.repository,
             run_id=args.run_id,
             run_number=args.run_number,

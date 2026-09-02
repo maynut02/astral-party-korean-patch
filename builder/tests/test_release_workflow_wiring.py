@@ -36,3 +36,12 @@ def test_android_patcher_release_uses_generated_notes_file() -> None:
     assert "android-patcher-v" in text
     assert 'AndroidPatcher v${VERSION}' in text
     assert "AstralAndroidPatcher.apk" in text
+
+
+def test_android_apk_release_uses_consistent_title_and_generated_notes() -> None:
+    text = _text("android-game-original.yml")
+    assert text.startswith("name: Android APK\n")
+    assert "tools/workflow/release_notes.py android-apk" in text
+    assert '--title "apk-INT_ANDROID v${VERSION_NAME}"' in text
+    assert "Astral Party Android original" not in text
+    assert "Astral Party Google Play 원본" not in text

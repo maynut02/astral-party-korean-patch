@@ -1,0 +1,33 @@
+name: astral-patch-watcher
+
+services:
+  patch-watcher:
+    build:
+      context: .
+      dockerfile: tools/patch-watcher.Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN is required}
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-maynut02/astral-party-korean-patch}
+      GITHUB_REF: ${GITHUB_REF:-main}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - site-backend
+
+networks:
+  site-backend:
+    external: true
+    name: ${ASTRAL_DOCKER_NETWORK:-astral-patch_default}

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import signal
 import sys
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -686,7 +690,53 @@ def run() -> int:
             raise
 
 
-def main() -> None:
+def run_forever(interval_seconds: int) -> None:
+    if interval_seconds < 1:
+        raise ValueError("interval_seconds must be positive")
+
+    stopped = threading.Event()
+
+    def request_stop(signum: int, _frame: object) -> None:
+        print(f"patch watcher received signal {signum}; stopping after the current check")
+        stopped.set()
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
+    print(f"patch watcher daemon started; interval={interval_seconds}s")
+    while not stopped.is_set():
+        started = time.monotonic()
+        try:
+            result = run()
+            if result != 0:
+                print(f"patch watcher check completed with exit code {result}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - keep the daemon alive between checks
+            print(f"patch watcher failed: {exc}", file=sys.stderr)
+
+        elapsed = time.monotonic() - started
+        stopped.wait(max(0.0, interval_seconds - elapsed))
+
+    print("patch watcher daemon stopped")
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Watch Astral Party patch source revisions")
+    parser.add_argument(
+        "--interval-seconds",
+        type=int,
+        help="keep running and check again after this interval",
+    )
+    args = parser.parse_args(argv)
+    if args.interval_seconds is not None and args.interval_seconds < 1:
+        parser.error("--interval-seconds must be positive")
+    return args
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    if args.interval_seconds is not None:
+        run_forever(args.interval_seconds)
+        return
     try:
         raise SystemExit(run())
     except Exception as exc:

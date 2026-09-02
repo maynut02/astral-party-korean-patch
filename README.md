@@ -23,7 +23,6 @@ Android판은 Google Play 서명의 원본 게임을 유지합니다. 게임이 
 - `builder/` — 게임 리소스 확인, DB 동기화, 패치 생성·검증
 - `windows-patcher/` — Windows용 `WindowsPatcher` 소스
 - `android-patcher/` — Android용 `AndroidPatcher` 소스
-- `database/` — PostgreSQL migration
 - `routes/` — route별 게임/번역/리소스 설정
 - `resources/` — 패치 생성에 필요한 route별 리소스
 - `schemas/` — release/manifest 설정 스키마
@@ -32,7 +31,7 @@ Android판은 Google Play 서명의 원본 게임을 유지합니다. 게임이 
 
 ## Patch watcher
 
-`database/migrations/0005_patch_watcher.sql` 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 `release` 모드로 실행합니다.
+DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때만 `patch.yml`을 `release` 모드로 실행합니다.
 
 ```sql
 UPDATE patch_watch_config
@@ -40,11 +39,13 @@ SET game_version = '3.3.0', updated_at = now()
 WHERE singleton = true;
 ```
 
-서버에서는 `DATABASE_URL`과 repository Actions 실행 권한이 있는 `GITHUB_TOKEN`만 필요합니다. Builder 전체를 설치할 필요 없이 아래처럼 PostgreSQL 드라이버 하나만 설치하고 watcher를 5분 주기로 실행하면 됩니다. 동일 변경의 workflow가 아직 DB에 처리되지 않은 경우 30분 뒤 한 번 더 dispatch할 수 있습니다.
+운영 서버에서는 이 저장소의 Docker Compose가 watcher 컨테이너를 실행합니다. watcher는 site 저장소의 `astral-patch_default` Docker 네트워크에 참여해 `postgres-db:5432`로 DB에 접근하고, `GITHUB_TOKEN`으로 Patch workflow를 실행합니다. 5분마다 검사하며 동일 변경의 workflow가 아직 DB에 처리되지 않은 경우 30분 뒤 한 번 더 dispatch할 수 있습니다.
+
+`main` push의 CI가 모두 통과하면 기존 DB SSH 접속 정보와 `PATCH_SERVER_WORK_DIR`을 사용해 서버의 이 저장소를 해당 commit으로 전환하고 watcher 이미지만 직접 다시 빌드합니다. site 저장소의 배포 workflow를 경유하지 않습니다.
 
 ```bash
-python -m pip install -r tools/patch_watcher_requirements.txt
-python tools/patch_watcher.py
+docker compose -p astral-patch-watcher up -d --build patch-watcher
+docker compose -p astral-patch-watcher logs -f patch-watcher
 ```
 
 ## 개발
@@ -54,7 +55,7 @@ Builder는 Python 3.12+, WindowsPatcher는 stable Rust toolchain, AndroidPatcher
 
 ```bash
 python -m pip install -e './builder[dev]'
-python -m ruff check builder tools database
+python -m ruff check builder tools
 python -m pytest builder/tests
 
 cd windows-patcher

@@ -571,6 +571,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p .work
           for route in INT_STEAM CN_STEAM INT_ANDROID; do
             manifest="output/release/${route}_manifest.json"
             original_dir="output/originals/${route}"
@@ -578,6 +579,8 @@ jobs:
             revision="$(jq -r '.game.revision' "$manifest")"
             revision_number="${revision#r}"
             original_tag="original-${route}-${game_version}_r${revision_number}"
+            original_title="original-${route} v${game_version}_r${revision_number}"
+            notes_file=".work/original-${route}-release-notes.md"
             source_prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/${original_tag}/"
 
             mapfile -t expected_assets < <(
@@ -614,11 +617,20 @@ jobs:
               exit 1
             fi
 
+            python tools/workflow/release_notes.py original-backup \
+              --output "$notes_file" \
+              --platform "$route" \
+              --version "$game_version" \
+              --revision "$revision" \
+              --repository "$GITHUB_REPOSITORY" \
+              --run-id "$GITHUB_RUN_ID" \
+              --run-number "$GITHUB_RUN_NUMBER"
+
             gh release create "$original_tag" \
               --draft \
               --target "$GITHUB_SHA" \
-              --title "$original_tag" \
-              --notes "Immutable original files for ${route} ${game_version} revision ${revision_number}."
+              --title "$original_title" \
+              --notes-file "$notes_file"
             cleanup_original() {
               gh release delete "$original_tag" --yes --cleanup-tag >/dev/null 2>&1 || true
             }

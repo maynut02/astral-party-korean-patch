@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from tools.patch_watcher import (
     DISPATCH_RETRY_AFTER,
     DispatchRecord,
@@ -9,8 +10,19 @@ from tools.patch_watcher import (
     _dispatch_due,
     _is_route_baseline,
     _needs_processing,
+    _parse_args,
     _route_status,
 )
+
+
+def test_interval_argument_enables_daemon_mode() -> None:
+    args = _parse_args(["--interval-seconds", "300"])
+    assert args.interval_seconds == 300
+
+
+def test_interval_argument_must_be_positive() -> None:
+    with pytest.raises(SystemExit):
+        _parse_args(["--interval-seconds", "0"])
 
 
 def _state(

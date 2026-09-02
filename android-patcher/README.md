@@ -47,7 +47,7 @@ Shizuku가 설치되지 않았으면 앱이 기존 방식대로 GitHub 최신 �
 
 ## 원본 게임 APK Release
 
-`Android Game Original` workflow는 `PLAY_EMAIL`, `AAS_TOKEN` secrets로 `com.feimo.astralpartyjpn`의 Pixel 9a 기기 프로필용 Google Play split APK를 받습니다. 각 APK를 `apksigner`와 `aapt`로 검증한 뒤 `android-game-v<versionCode>` immutable Release로 발행하고 distribution branch의 `android-game-index.json`을 갱신합니다.
+`Android APK` workflow는 `PLAY_EMAIL`, `AAS_TOKEN` secrets로 `com.feimo.astralpartyjpn`의 Pixel 9a 기기 프로필용 Google Play split APK를 받습니다. 각 APK를 `apksigner`와 `aapt`로 검증한 뒤 `android-game-v<versionCode>` immutable Release로 발행하고 distribution branch의 `android-game-index.json`을 갱신합니다.
 
 현재 원본 묶음은 `px_9a` 프로필 하나를 대상으로 하므로 다른 ABI 또는 일부 기기 구성에서는 Android package manager가 설치를 거부할 수 있습니다. 또한 기록상 installer 지정은 Google Play 계정 라이선스를 부여하지 않습니다.
 

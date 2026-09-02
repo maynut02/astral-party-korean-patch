@@ -80,6 +80,12 @@ def test_patch_workflow_builds_against_immutable_original_releases() -> None:
     assert 'if gh release view "$original_tag"' in original_publish
     assert "reusing immutable original release" in original_publish
     assert 'gh release create "$original_tag"' in original_publish
+    assert (
+        'original_title="original-${route} v${game_version}_r${revision_number}"'
+        in original_publish
+    )
+    assert "tools/workflow/release_notes.py original-backup" in original_publish
+    assert '--notes-file "$notes_file"' in original_publish
     assert "--clobber" not in original_publish
     assert "immutable original release is incomplete" in original_publish
 

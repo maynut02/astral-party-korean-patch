@@ -21,9 +21,14 @@ jobs:
       - name: Install builder
         run: python -m pip install -e './builder[dev]'
       - name: Lint
-        run: python -m ruff check builder tools database
+        run: python -m ruff check builder tools
       - name: Test
         run: python -m pytest builder/tests
+      - name: Validate watcher compose
+        env:
+          DATABASE_URL: postgresql://astral_patch:ci-password@postgres-db:5432/astral_patch
+          GITHUB_TOKEN: ci-token
+        run: docker compose config --quiet
 
   patcher:
     runs-on: windows-latest
@@ -61,3 +66,67 @@ jobs:
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - name: Unit test, lint and assemble
         run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+
+  deploy-watcher:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [builder, patcher, android-patcher]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/patch-watcher-deploy
+          chmod 600 ~/.ssh/patch-watcher-deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy watcher
+        env:
+          SSH_HOST: ${{ secrets.DB_SSH_HOST }}
+          SSH_USER: ${{ secrets.DB_SSH_USER }}
+          SERVER_WORK_DIR: ${{ secrets.PATCH_SERVER_WORK_DIR }}
+          DEPLOY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_HOST"
+          test -n "$SSH_USER"
+          test -n "$SERVER_WORK_DIR"
+          test -n "$DEPLOY_SHA"
+
+          ssh \
+            -i ~/.ssh/patch-watcher-deploy \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            bash -s -- "$SERVER_WORK_DIR" "$DEPLOY_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+
+          SERVER_WORK_DIR="$1"
+          DEPLOY_SHA="$2"
+
+          cd "$SERVER_WORK_DIR"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Patch checkout has local changes; refusing to deploy over them" >&2
+            exit 1
+          fi
+
+          git fetch origin main
+          MAIN_SHA="$(git rev-parse origin/main)"
+          if ! git cat-file -e "${DEPLOY_SHA}^{commit}" 2>/dev/null; then
+            echo "Watcher deployment target does not exist: $DEPLOY_SHA" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$DEPLOY_SHA" "$MAIN_SHA"; then
+            echo "Watcher deployment target $DEPLOY_SHA is not part of origin/main" >&2
+            exit 1
+          fi
+
+          git checkout --detach "$DEPLOY_SHA"
+          docker compose -p astral-patch-watcher up -d --build patch-watcher
+          docker compose -p astral-patch-watcher ps patch-watcher
+          REMOTE
