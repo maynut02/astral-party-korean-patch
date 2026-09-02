@@ -42,7 +42,8 @@ jobs:
           fi
 
           tag="$(
-            gh release list --limit 1000 --json tagName,createdAt,isDraft,isPrerelease \
+            gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+              --json tagName,createdAt,isDraft,isPrerelease \
               --jq '[.[] | select(.isDraft == false and .isPrerelease == false and (.tagName | test("^v.+_r[^_]+(_p[0-9]+)?$")))] | sort_by(.createdAt) | last | .tagName // empty'
           )"
           if [ -z "$tag" ]; then
