@@ -869,3 +869,28 @@ jobs:
             test -n "$build_id"
             astral-builder mark-released --build-id "$build_id"
           done
+
+  notify:
+    name: Notify Discord
+    needs: [plan, state, finalize]
+    if: needs.plan.outputs.should_run == 'true' && needs.finalize.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Send release notification
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: >-
+          python tools/workflow/notify_discord.py
+          --tag '${{ needs.plan.outputs.tag }}'
+          --updated-routes '${{ needs.plan.outputs.updated_routes_csv }}'
+          --game-version '${{ needs.plan.outputs.game_version }}'
+          --int-steam-revision '${{ needs.state.outputs.int_steam_revision }}'
+          --cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}'
+          --int-android-revision '${{ needs.state.outputs.int_android_revision }}'
+          --repository "$GITHUB_REPOSITORY"
+          --run-id "$GITHUB_RUN_ID"

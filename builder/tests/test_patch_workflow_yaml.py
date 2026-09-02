@@ -24,6 +24,7 @@ def test_patch_workflow_is_split_into_parallel_roles() -> None:
         "publish",
         "index",
         "finalize",
+        "notify",
     }
     check_routes = {item["route"] for item in jobs["check"]["strategy"]["matrix"]["include"]}
     sync_routes = {item["route"] for item in jobs["sync"]["strategy"]["matrix"]["include"]}
@@ -141,3 +142,22 @@ def test_patch_workflow_separates_watcher_and_manual_sources() -> None:
         if step.get("name") == "Define immutable release identity"
     )
     assert "manual patch cannot create a new p0 release" in plan_script
+
+
+def test_patch_workflow_notifies_discord_after_successful_finalize() -> None:
+    jobs = _workflow()["jobs"]
+    notify = jobs["notify"]
+    assert set(notify["needs"]) == {"plan", "state", "finalize"}
+    assert "needs.finalize.result == 'success'" in notify["if"]
+
+    step = next(
+        item for item in notify["steps"] if item.get("name") == "Send release notification"
+    )
+    assert step["continue-on-error"] is True
+    assert step["env"]["DISCORD_WEBHOOK"] == "${{ secrets.DISCORD_WEBHOOK }}"
+    assert "tools/workflow/notify_discord.py" in step["run"]
+    assert "needs.plan.outputs.tag" in step["run"]
+    assert "needs.plan.outputs.updated_routes_csv" in step["run"]
+    assert "needs.state.outputs.int_steam_revision" in step["run"]
+    assert "needs.state.outputs.cn_steam_revision" in step["run"]
+    assert "needs.state.outputs.int_android_revision" in step["run"]
