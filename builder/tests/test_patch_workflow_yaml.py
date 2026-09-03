@@ -124,6 +124,8 @@ def test_patch_workflow_separates_watcher_and_manual_sources() -> None:
     assert "WATCHER_GAME_VERSION" in source_script
     assert 'gh release list --repo "$GITHUB_REPOSITORY"' in source_script
     assert "manual patch requires an existing patch release" in source_script
+    assert r'^v.+_r[0-9]+(_p[0-9]+)?$' in source_script
+    assert r'^v.+_r[^_]+(_p[0-9]+)?$' not in source_script
 
     check_steps = jobs["check"]["steps"]
     automatic_check = next(
