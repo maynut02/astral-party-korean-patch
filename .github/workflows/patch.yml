@@ -43,8 +43,8 @@ jobs:
 
           tag="$(
             gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 \
-              --json tagName,createdAt,isDraft,isPrerelease \
-              --jq '[.[] | select(.isDraft == false and .isPrerelease == false and (.tagName | test("^v.+_r[0-9]+(_p[0-9]+)?$")))] | sort_by(.createdAt) | last | .tagName // empty'
+              --json tagName,publishedAt,isDraft,isPrerelease \
+              --jq '[.[] | select(.isDraft == false and .isPrerelease == false and (.tagName | test("^v.+_r[0-9]+(_p[0-9]+)?$")))] | sort_by(.publishedAt) | last | .tagName // empty'
           )"
           if [ -z "$tag" ]; then
             echo 'manual patch requires an existing patch release' >&2
@@ -96,6 +96,7 @@ jobs:
           set -euo pipefail
           mkdir -p .work/reuse
           gh release download '${{ needs.source.outputs.release_tag }}' \
+            --repo "$GITHUB_REPOSITORY" \
             --pattern '${{ matrix.route }}_manifest.json' \
             --dir .work/reuse
       - name: Reuse latest released revision

@@ -123,6 +123,9 @@ def test_patch_workflow_separates_watcher_and_manual_sources() -> None:
     )
     assert "WATCHER_GAME_VERSION" in source_script
     assert 'gh release list --repo "$GITHUB_REPOSITORY"' in source_script
+    assert "publishedAt" in source_script
+    assert "sort_by(.publishedAt)" in source_script
+    assert "createdAt" not in source_script
     assert "manual patch requires an existing patch release" in source_script
     assert r'^v.+_r[0-9]+(_p[0-9]+)?$' in source_script
     assert r'^v.+_r[^_]+(_p[0-9]+)?$' not in source_script
@@ -131,9 +134,13 @@ def test_patch_workflow_separates_watcher_and_manual_sources() -> None:
     automatic_check = next(
         step for step in check_steps if step.get("name") == "Check remote revision and catalog"
     )
+    manual_download = next(
+        step for step in check_steps if step.get("name") == "Download latest released manifest"
+    )
     manual_reuse = next(
         step for step in check_steps if step.get("name") == "Reuse latest released revision"
     )
+    assert '--repo "$GITHUB_REPOSITORY"' in manual_download["run"]
     assert "needs.source.outputs.game_version" in automatic_check["run"]
     assert "astral-builder reuse-release" in manual_reuse["run"]
     assert "needs.source.outputs.automatic != 'true'" == manual_reuse["if"]
