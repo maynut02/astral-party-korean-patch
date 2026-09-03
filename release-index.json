@@ -11,6 +11,16 @@
       "route": "CN_STEAM"
     },
     {
+      "catalogHash": "8ff12c300338510ed28e8dfb671f0d4b",
+      "channel": "release",
+      "gameVersion": "3.2.0",
+      "manifestSha256": "19a000f238eda667a4f0227ec8764be2ab2585c5cce37cb6d413f148729d2134",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r210_p0/CN_STEAM_manifest.json",
+      "patchVersion": "v3.2.0_r210_p0",
+      "revision": "210",
+      "route": "CN_STEAM"
+    },
+    {
       "addressablesPaths": [
         "5b2a285e5e4b6b5be3c0b42d5c7c4636/d37b6920756c110efff54c4bceab7dbd/__data",
         "9c2c156995397d00b52292463263f219/d3be79a3810efc3db86883187a276d24/__data",
@@ -26,6 +36,21 @@
       "route": "INT_ANDROID"
     },
     {
+      "addressablesPaths": [
+        "5b2a285e5e4b6b5be3c0b42d5c7c4636/3d7b7868647ad8df0c7edb0c2f3e7f09/__data",
+        "9c2c156995397d00b52292463263f219/db8ceea149f9d15bce0f4ef0572548ea/__data",
+        "f19f4b57e00618a092c8dfc8aeb8d2fa/ea88794112437816f6c5584e2a112a06/__data"
+      ],
+      "catalogHash": "c1f5b0ffc657951af9f8a48d3625edc4",
+      "channel": "release",
+      "gameVersion": "3.2.0",
+      "manifestSha256": "41157170590a49f4d23e4f0637966e2d9ae167917a9d70596a0a1bb3b77f259e",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r210_p0/INT_ANDROID_manifest.json",
+      "patchVersion": "v3.2.0_r210_p0",
+      "revision": "210",
+      "route": "INT_ANDROID"
+    },
+    {
       "catalogHash": "fd58ba01bbca5e5e389b5b73240df134",
       "channel": "release",
       "gameVersion": "3.2.0",
@@ -33,6 +58,16 @@
       "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r116_p3/INT_STEAM_manifest.json",
       "patchVersion": "v3.2.0_r116_p3",
       "revision": "116",
+      "route": "INT_STEAM"
+    },
+    {
+      "catalogHash": "f560838cb27bef5019bf91b3ff77b85a",
+      "channel": "release",
+      "gameVersion": "3.2.0",
+      "manifestSha256": "d64b28a1ef39763435e50652341448bb331b480aa80faad5be0091bbc5558a91",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.2.0_r210_p0/INT_STEAM_manifest.json",
+      "patchVersion": "v3.2.0_r210_p0",
+      "revision": "210",
       "route": "INT_STEAM"
     }
   ],
