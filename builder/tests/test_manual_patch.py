@@ -85,9 +85,35 @@ def test_builds_manual_zip_with_install_ready_tree(
         assert "WindowsPatcher" in readme
 
 
-def test_rejects_android_manual_package(tmp_path: Path) -> None:
+def test_builds_android_manual_zip_with_install_ready_tree(tmp_path: Path) -> None:
+    manifest, payloads, raw = _write_manifest(tmp_path, "INT_ANDROID")
+    manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_data["files"] = [manifest_data["files"][0]]
+    manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+    output = tmp_path / "INT_ANDROID_manual_patch.zip"
+
+    MODULE.build_manual_patch(manifest, payloads, output)
+
+    package = "com.feimo.astralpartyjpn"
+    with zipfile.ZipFile(output) as archive:
+        assert archive.read(
+            f"{package}/files/com.unity.addressables/AssetBundles/"
+            "bundle-name/bundle-hash/__data"
+        ) == raw["lang.bin"]
+        readme = archive.read("설치방법.txt").decode("utf-8")
+        assert "/storage/emulated/0/Android/data/" in readme
+        assert package in readme
+        assert "__data__" in readme
+        assert "AndroidPatcher" in readme
+
+
+def test_rejects_android_game_data_target(tmp_path: Path) -> None:
     manifest, payloads, _ = _write_manifest(tmp_path, "INT_ANDROID")
-    with pytest.raises(ValueError, match="only supported for Steam routes"):
+    manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_data["files"] = [manifest_data["files"][1]]
+    manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsupported manual patch target/path"):
         MODULE.build_manual_patch(manifest, payloads, tmp_path / "android.zip")
 
 

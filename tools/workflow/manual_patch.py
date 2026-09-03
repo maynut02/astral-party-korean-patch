@@ -16,7 +16,15 @@ class SteamRouteLayout:
     data_dir: str
 
 
-ROUTE_LAYOUTS = {
+@dataclass(frozen=True)
+class AndroidRouteLayout:
+    package_name: str
+
+
+RouteLayout = SteamRouteLayout | AndroidRouteLayout
+
+
+ROUTE_LAYOUTS: dict[str, RouteLayout] = {
     "INT_STEAM": SteamRouteLayout(
         locallow_dir="AstralParty_INT",
         executable_dir="8vJXnINT",
@@ -26,6 +34,9 @@ ROUTE_LAYOUTS = {
         locallow_dir="AstralParty_CN",
         executable_dir="8vJXn6CN",
         data_dir="AstralParty_CN_Data",
+    ),
+    "INT_ANDROID": AndroidRouteLayout(
+        package_name="com.feimo.astralpartyjpn",
     ),
 }
 
@@ -56,17 +67,26 @@ def _payload_name(download_url: str) -> str:
     return name[:-3]
 
 
-def _archive_path(layout: SteamRouteLayout, target: str, relative_path: str) -> PurePosixPath:
+def _archive_path(layout: RouteLayout, target: str, relative_path: str) -> PurePosixPath:
     relative = _safe_relative_path(relative_path)
-    if target == "addressables":
+    if isinstance(layout, SteamRouteLayout):
+        if target == "addressables":
+            return (
+                PurePosixPath(layout.locallow_dir)
+                / "com.unity.addressables"
+                / "AssetBundles"
+                / relative
+            )
+        if target == "game-data" and relative == PurePosixPath("data.unity3d"):
+            return PurePosixPath(layout.executable_dir) / layout.data_dir / relative
+    elif isinstance(layout, AndroidRouteLayout) and target == "addressables":
         return (
-            PurePosixPath(layout.locallow_dir)
+            PurePosixPath(layout.package_name)
+            / "files"
             / "com.unity.addressables"
             / "AssetBundles"
             / relative
         )
-    if target == "game-data" and relative == PurePosixPath("data.unity3d"):
-        return PurePosixPath(layout.executable_dir) / layout.data_dir / relative
     raise ValueError(f"unsupported manual patch target/path: {target}/{relative}")
 
 
@@ -80,7 +100,7 @@ def _readme(route: str, manifest: dict[str, object]) -> str:
     revision = str(game.get("revision", "unknown"))
     patch_version = str(patch.get("version", "unknown"))
 
-    return f"""Astral Party 한국어 패치 - {route} 수동 설치
+    header = f"""Astral Party 한국어 패치 - {route} 수동 설치
 
 패치 버전: {patch_version}
 게임 버전: {game_version}
@@ -89,7 +109,31 @@ def _readme(route: str, manifest: dict[str, object]) -> str:
 [설치 전]
 - 게임을 완전히 종료하세요.
 - 수동 설치는 원본 파일 자동 백업/복구를 제공하지 않습니다. 필요한 경우 원본 파일을 직접 백업하세요.
+"""
 
+    if isinstance(layout, AndroidRouteLayout):
+        return header + f"""
+[설치 방법]
+1. 게임에서 필요한 리소스 다운로드를 먼저 완료한 뒤 게임을 종료합니다.
+
+2. 압축파일 안의 {layout.package_name} 폴더를 아래 경로에 복사하고 기존 파일을 덮어씁니다.
+   /storage/emulated/0/Android/data/
+
+3. 최종 파일 경로는 다음 형태가 됩니다.
+   /storage/emulated/0/Android/data/{layout.package_name}/files/com.unity.addressables/AssetBundles/...
+
+4. 게임을 실행합니다.
+
+[참고]
+- Android 11 이상에서는 일반 파일 관리자가 Android/data 쓰기를 제한할 수 있습니다.
+  ADB, Shizuku, root 또는 Android/data에 쓸 수 있는 파일 관리 방법을 사용하세요.
+- 기기의 기존 Addressables 캐시 파일명이 __data__로 끝나는 경우, 압축파일의 대응 __data 파일을
+  기존 파일명인 __data__에 맞춰 덮어쓰세요. 새 파일을 추가하는 것이 아니라 기존 캐시를 교체해야 합니다.
+- 이 압축파일은 수동 설치용이며 INT_ANDROID({layout.package_name}) 전용입니다.
+- 자동 설치/업데이트 및 원본 복구가 필요하면 AndroidPatcher 사용을 권장합니다.
+"""
+
+    return header + f"""
 [설치 방법]
 1. {layout.locallow_dir} 폴더를 아래 경로에 복사하고 기존 파일을 덮어씁니다.
    %USERPROFILE%\\AppData\\LocalLow\\feimo\\
@@ -117,7 +161,7 @@ def build_manual_patch(manifest_path: Path, payloads_dir: Path, output_path: Pat
 
     route = patch.get("route")
     if not isinstance(route, str) or route not in ROUTE_LAYOUTS:
-        raise ValueError(f"manual patch is only supported for Steam routes: {route!r}")
+        raise ValueError(f"manual patch is not supported for route: {route!r}")
     layout = ROUTE_LAYOUTS[route]
 
     entries: list[tuple[Path, PurePosixPath]] = []
@@ -183,7 +227,7 @@ def build_manual_patch(manifest_path: Path, payloads_dir: Path, output_path: Pat
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a Steam manual-install patch ZIP.")
+    parser = argparse.ArgumentParser(description="Build a manual-install patch ZIP.")
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--payloads-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)

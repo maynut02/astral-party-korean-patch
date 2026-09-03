@@ -566,6 +566,10 @@ jobs:
           cp "$root"/assets/* output/release/
           mkdir -p output/originals/INT_ANDROID
           cp "$root"/originals/* output/originals/INT_ANDROID/
+          python tools/workflow/manual_patch.py \
+            --manifest "$root/manifest.json" \
+            --payloads-dir .work/build-int_android/payloads \
+            --output output/release/INT_ANDROID_manual_patch.zip
           build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
           test -n "$build_id"
           printf '%s\n' "$build_id" > output/release/INT_ANDROID_build_id.txt

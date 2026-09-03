@@ -97,6 +97,8 @@ def test_patch_workflow_uses_one_unified_original_release() -> None:
     assert "needs.plan.outputs.original_mode" in android_build
     assert 'source_tag="original-${{ matrix.route }}-' in steam_build
     assert 'source_tag="original-INT_ANDROID-' in android_build
+    assert "tools/workflow/manual_patch.py" in android_build
+    assert "INT_ANDROID_manual_patch.zip" in android_build
     assert "for route in INT_STEAM CN_STEAM INT_ANDROID" in original_publish
     assert 'if [ "$ORIGINAL_MODE" = legacy ]; then' in original_publish
     assert "reusing legacy per-route original releases" in original_publish
