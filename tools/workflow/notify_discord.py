@@ -34,7 +34,7 @@ def _changed_platforms(updated_routes: str) -> str:
     if unknown:
         raise ValueError(f"unknown updated routes: {', '.join(unknown)}")
     if not routes:
-        return "✦ 없음 (수동 재빌드)"
+        return "✦ 없음"
     return "\n".join(f"✦ {ROUTE_LABELS[route]}" for route in routes)
 
 
