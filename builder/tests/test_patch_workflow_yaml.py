@@ -81,13 +81,16 @@ def test_patch_workflow_uses_one_unified_original_release() -> None:
     original_publish = next(
         step["run"]
         for step in jobs["publish"]["steps"]
-        if step.get("name") == "Publish or verify unified original release"
+        if step.get("name") == "Publish or verify original releases"
     )
 
     assert 'original_tag="${base}-original"' in plan_script
     assert 'if [ "$tag" = "${base}_p0" ]; then' in plan_script
     assert "original_mode=unified" in plan_script
+    assert "original_mode=hybrid" in plan_script
     assert "original_mode=legacy" in plan_script
+    assert "unified_original_routes_csv" in plan_script
+    assert 'gh release view "$original_tag" --json assets' in plan_script
     assert "publish_original=true" in plan_script
     assert "publish_original=false" in plan_script
     assert "${base}_p*-original" not in plan_script
@@ -95,20 +98,22 @@ def test_patch_workflow_uses_one_unified_original_release() -> None:
     assert "--source-asset-base-url" in android_build
     assert "needs.plan.outputs.original_tag" in steam_build
     assert "needs.plan.outputs.original_tag" in android_build
-    assert "needs.plan.outputs.original_mode" in steam_build
-    assert "needs.plan.outputs.original_mode" in android_build
+    assert "needs.plan.outputs.unified_original_routes_csv" in steam_build
+    assert "needs.plan.outputs.unified_original_routes_csv" in android_build
     assert 'source_tag="original-${{ matrix.route }}-' in steam_build
     assert 'source_tag="original-${{ matrix.route }}-' in android_build
     assert "tools/workflow/manual_patch.py" in android_build
     assert "${{ matrix.route }}_manual_patch.zip" in android_build
-    assert "for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID" in original_publish
-    assert 'if [ "$ORIGINAL_MODE" = legacy ]; then' in original_publish
-    assert "reusing legacy per-route original releases" in original_publish
+    assert "routes=(INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID)" in original_publish
+    assert "route_uses_unified" in original_publish
+    assert 'if [ "$ORIGINAL_MODE" != hybrid ]; then' in original_publish
+    assert 'gh release create "$route_tag"' in original_publish
     assert 'gh release create "$ORIGINAL_TAG"' in original_publish
-    assert "verify_original_release" in original_publish
+    assert "verify_release_assets" in original_publish
+    assert "published route original release" in original_publish
     assert "earlier pipeline attempt" in original_publish
     assert "reusing unified original release" in original_publish
-    assert "immutable original release is incomplete" in original_publish
+    assert "immutable original release" in original_publish
 
 
 def test_patch_workflow_separates_watcher_and_manual_sources() -> None:

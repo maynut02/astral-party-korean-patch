@@ -121,6 +121,8 @@ jobs:
     name: Plan patch run
     needs: [source, check]
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     outputs:
       should_run: ${{ steps.aggregate.outputs.should_run }}
       automatic: ${{ needs.source.outputs.automatic }}
@@ -130,6 +132,7 @@ jobs:
       original_tag: ${{ steps.release.outputs.original_tag }}
       original_mode: ${{ steps.release.outputs.original_mode }}
       publish_original: ${{ steps.release.outputs.publish_original }}
+      unified_original_routes_csv: ${{ steps.release.outputs.unified_original_routes_csv }}
       game_version: ${{ steps.aggregate.outputs.game_version }}
       max_revision: ${{ steps.aggregate.outputs.max_revision }}
       updated_routes_csv: ${{ steps.aggregate.outputs.updated_routes_csv }}
@@ -170,28 +173,54 @@ jobs:
           patch_version="$tag"
 
           original_tag="${base}-original"
+          routes=(INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID)
           if [ "$tag" = "${base}_p0" ] && [ "$AUTOMATIC" != true ]; then
             echo 'manual patch cannot create a new p0 release' >&2
             exit 1
           fi
+
+          unified_routes=()
           if [ "$tag" = "${base}_p0" ]; then
             original_mode=unified
             publish_original=true
-          elif git ls-remote --exit-code --tags origin "refs/tags/${original_tag}" >/dev/null 2>&1; then
-            original_mode=unified
+            unified_routes=("${routes[@]}")
+          elif gh release view "$original_tag" >/dev/null 2>&1; then
+            existing_assets="$(mktemp)"
+            gh release view "$original_tag" --json assets --jq '.assets[].name' > "$existing_assets"
+            for route in "${routes[@]}"; do
+              prefix="$(printf '%s' "$route" | tr '[:upper:]_' '[:lower:]-')-"
+              if grep -Fq -- "$prefix" "$existing_assets"; then
+                unified_routes+=("$route")
+              fi
+            done
+            rm -f "$existing_assets"
             publish_original=false
+            if [ "${#unified_routes[@]}" -eq "${#routes[@]}" ]; then
+              original_mode=unified
+            elif [ "${#unified_routes[@]}" -gt 0 ]; then
+              # A route added after the unified original was published uses its own immutable original release.
+              original_mode=hybrid
+            else
+              echo "unified original release has no recognized route assets: $original_tag" >&2
+              exit 1
+            fi
+          elif git ls-remote --exit-code --tags origin "refs/tags/${original_tag}" >/dev/null 2>&1; then
+            echo "immutable original tag exists without a GitHub Release: $original_tag" >&2
+            exit 1
           else
             # Existing revisions created before unified originals keep using their immutable route releases.
             original_mode=legacy
             publish_original=false
           fi
 
+          unified_original_routes_csv="$(IFS=,; echo "${unified_routes[*]}")"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "title=$title" >> "$GITHUB_OUTPUT"
           echo "patch_version=$patch_version" >> "$GITHUB_OUTPUT"
           echo "original_tag=$original_tag" >> "$GITHUB_OUTPUT"
           echo "original_mode=$original_mode" >> "$GITHUB_OUTPUT"
           echo "publish_original=$publish_original" >> "$GITHUB_OUTPUT"
+          echo "unified_original_routes_csv=$unified_original_routes_csv" >> "$GITHUB_OUTPUT"
       - name: No route update detected
         if: steps.aggregate.outputs.should_run != 'true'
         run: echo 'All routes already have a published build for their current revisions.'
@@ -471,10 +500,12 @@ jobs:
           work='.work/build-${{ matrix.slug }}'
           output_file='.work/build-output.env'
           asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
-          if [ '${{ needs.plan.outputs.original_mode }}' = legacy ]; then
-            source_tag="original-${{ matrix.route }}-${{ needs.plan.outputs.game_version }}_r${REVISION#r}"
-          else
+          legacy_source_tag="original-${{ matrix.route }}-${{ needs.plan.outputs.game_version }}_r${REVISION#r}"
+          unified_routes=',${{ needs.plan.outputs.unified_original_routes_csv }},'
+          if [[ "$unified_routes" == *",${{ matrix.route }},"* ]]; then
             source_tag='${{ needs.plan.outputs.original_tag }}'
+          else
+            source_tag="$legacy_source_tag"
           fi
           source_asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${source_tag}"
           astral-builder build \
@@ -567,10 +598,12 @@ jobs:
           work='.work/build-${{ matrix.slug }}'
           output_file='.work/build-output-${{ matrix.slug }}.env'
           asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
-          if [ '${{ needs.plan.outputs.original_mode }}' = legacy ]; then
-            source_tag="original-${{ matrix.route }}-${{ needs.plan.outputs.game_version }}_r${REVISION#r}"
-          else
+          legacy_source_tag="original-${{ matrix.route }}-${{ needs.plan.outputs.game_version }}_r${REVISION#r}"
+          unified_routes=',${{ needs.plan.outputs.unified_original_routes_csv }},'
+          if [[ "$unified_routes" == *",${{ matrix.route }},"* ]]; then
             source_tag='${{ needs.plan.outputs.original_tag }}'
+          else
+            source_tag="$legacy_source_tag"
           fi
           source_asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${source_tag}"
           astral-builder build \
@@ -662,127 +695,184 @@ jobs:
             test -s "output/release/${route}_build_id.txt"
             test -d "output/originals/${route}"
           done
-      - name: Publish or verify unified original release
+      - name: Publish or verify original releases
         shell: bash
         env:
           ORIGINAL_TAG: ${{ needs.plan.outputs.original_tag }}
           ORIGINAL_MODE: ${{ needs.plan.outputs.original_mode }}
           PUBLISH_ORIGINAL: ${{ needs.plan.outputs.publish_original }}
+          UNIFIED_ORIGINAL_ROUTES: ${{ needs.plan.outputs.unified_original_routes_csv }}
         run: |
           set -euo pipefail
           mkdir -p .work
+          routes=(INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID)
 
-          if [ "$ORIGINAL_MODE" = legacy ]; then
-            for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID; do
-              manifest="output/release/${route}_manifest.json"
-              game_version="$(jq -r '.game.version' "$manifest")"
-              revision="$(jq -r '.game.revision' "$manifest")"
-              revision_number="${revision#r}"
-              legacy_tag="original-${route}-${game_version}_r${revision_number}"
-              legacy_prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/${legacy_tag}/"
-              jq -e --arg prefix "$legacy_prefix" \
-                'all(.files[]; (.sourceDownloadUrl | type == "string") and (.sourceDownloadUrl | startswith($prefix)))' \
-                "$manifest" >/dev/null
-              if ! gh release view "$legacy_tag" >/dev/null 2>&1; then
-                echo "legacy original release not found: $legacy_tag" >&2
-                exit 1
-              fi
-              existing_assets="$(mktemp)"
-              gh release view "$legacy_tag" --json assets --jq '.assets[].name' > "$existing_assets"
-              while IFS= read -r asset; do
-                test -n "$asset"
-                if ! grep -Fxq "$asset" "$existing_assets"; then
-                  rm -f "$existing_assets"
-                  echo "legacy original release is incomplete: $legacy_tag missing $asset" >&2
-                  exit 1
-                fi
-              done < <(jq -r '.files[].sourceDownloadUrl // empty | split("/")[-1]' "$manifest" | sort -u)
-              rm -f "$existing_assets"
-            done
-            echo "reusing legacy per-route original releases"
-            exit 0
-          fi
+          route_uses_unified() {
+            local route="$1"
+            [[ ",${UNIFIED_ORIGINAL_ROUTES}," == *",${route},"* ]]
+          }
 
-          source_prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/${ORIGINAL_TAG}/"
-
-          expected_assets_file=.work/original-assets.txt
-          : > "$expected_assets_file"
-          for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID; do
-            manifest="output/release/${route}_manifest.json"
-            jq -e --arg prefix "$source_prefix" \
+          collect_expected_assets() {
+            local manifest="$1"
+            local prefix="$2"
+            local output="$3"
+            jq -e --arg prefix "$prefix" \
               'all(.files[]; (.sourceDownloadUrl | type == "string") and (.sourceDownloadUrl | startswith($prefix)))' \
               "$manifest" >/dev/null
-            jq -r '.files[].sourceDownloadUrl // empty | split("/")[-1]' "$manifest" >> "$expected_assets_file"
-          done
-          sort -u -o "$expected_assets_file" "$expected_assets_file"
-          test -s "$expected_assets_file"
+            jq -r '.files[].sourceDownloadUrl // empty | split("/")[-1]' "$manifest" | sort -u > "$output"
+            test -s "$output"
+          }
 
-          upload_args=()
-          while IFS= read -r asset; do
-            test -n "$asset"
-            matches=(output/originals/*/"$asset")
-            if [ "${#matches[@]}" -ne 1 ] || [ ! -s "${matches[0]}" ]; then
-              echo "original asset missing or ambiguous: $asset" >&2
-              exit 1
-            fi
-            upload_args+=("${matches[0]}")
-          done < "$expected_assets_file"
-
-          verify_original_release() {
+          verify_release_assets() {
+            local tag="$1"
+            local expected="$2"
+            local label="$3"
             local existing_assets
             existing_assets="$(mktemp)"
-            gh release view "$ORIGINAL_TAG" --json assets --jq '.assets[].name' > "$existing_assets"
+            gh release view "$tag" --json assets --jq '.assets[].name' > "$existing_assets"
             while IFS= read -r asset; do
+              test -n "$asset"
               if ! grep -Fxq "$asset" "$existing_assets"; then
                 rm -f "$existing_assets"
-                echo "immutable original release is incomplete: $ORIGINAL_TAG missing $asset" >&2
+                echo "$label is incomplete: $tag missing $asset" >&2
                 return 1
               fi
-            done < "$expected_assets_file"
+            done < "$expected"
             rm -f "$existing_assets"
           }
 
-          if [ "$PUBLISH_ORIGINAL" = true ]; then
-            if gh release view "$ORIGINAL_TAG" >/dev/null 2>&1; then
-              verify_original_release
-              echo "reusing unified original release from an earlier pipeline attempt: $ORIGINAL_TAG"
-            else
-              if git ls-remote --exit-code --tags origin "refs/tags/$ORIGINAL_TAG" >/dev/null 2>&1; then
-                echo "immutable original tag exists without a GitHub Release: $ORIGINAL_TAG" >&2
-                exit 1
-              fi
-
-              python tools/workflow/release_notes.py original-backup \
-                --output .work/original-release-notes.md \
-                --version '${{ needs.plan.outputs.game_version }}' \
-                --int-steam-revision '${{ needs.state.outputs.int_steam_revision }}' \
-                --cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}' \
-                --int-android-revision '${{ needs.state.outputs.int_android_revision }}' \
-                --cn-android-revision '${{ needs.state.outputs.cn_android_revision }}' \
-                --repository "$GITHUB_REPOSITORY" \
-                --run-id "$GITHUB_RUN_ID" \
-                --run-number "$GITHUB_RUN_NUMBER"
-
-              gh release create "$ORIGINAL_TAG" \
-                --draft \
-                --target "$GITHUB_SHA" \
-                --title "${ORIGINAL_TAG}" \
-                --notes-file .work/original-release-notes.md
-              cleanup_original() {
-                gh release delete "$ORIGINAL_TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
-              }
-              trap cleanup_original ERR
-              gh release upload "$ORIGINAL_TAG" "${upload_args[@]}"
-              gh release edit "$ORIGINAL_TAG" --draft=false
-              trap - ERR
+          # Routes absent from an existing unified release keep/use their own immutable originals.
+          for route in "${routes[@]}"; do
+            if route_uses_unified "$route"; then
+              continue
             fi
-          else
-            if ! gh release view "$ORIGINAL_TAG" >/dev/null 2>&1; then
-              echo "reused original release not found: $ORIGINAL_TAG" >&2
+
+            manifest="output/release/${route}_manifest.json"
+            game_version="$(jq -r '.game.version' "$manifest")"
+            revision="$(jq -r '.game.revision' "$manifest")"
+            revision_number="${revision#r}"
+            route_tag="original-${route}-${game_version}_r${revision_number}"
+            route_prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/${route_tag}/"
+            expected=".work/${route}-original-assets.txt"
+            collect_expected_assets "$manifest" "$route_prefix" "$expected"
+
+            if gh release view "$route_tag" >/dev/null 2>&1; then
+              verify_release_assets "$route_tag" "$expected" "immutable route original release"
+              echo "reusing route original release: $route_tag"
+              continue
+            fi
+
+            if [ "$ORIGINAL_MODE" != hybrid ]; then
+              echo "legacy original release not found: $route_tag" >&2
               exit 1
             fi
-            verify_original_release
-            echo "reusing unified original release: $ORIGINAL_TAG"
+            if git ls-remote --exit-code --tags origin "refs/tags/$route_tag" >/dev/null 2>&1; then
+              echo "immutable route original tag exists without a GitHub Release: $route_tag" >&2
+              exit 1
+            fi
+
+            upload_args=()
+            while IFS= read -r asset; do
+              test -n "$asset"
+              path="output/originals/${route}/${asset}"
+              if [ ! -s "$path" ]; then
+                echo "route original asset missing: $route/$asset" >&2
+                exit 1
+              fi
+              upload_args+=("$path")
+            done < "$expected"
+
+            notes=".work/${route}-original-release-notes.md"
+            printf '%s\n\n' '## 패치 복원용 원본' > "$notes"
+            printf -- '- 플랫폼: `%s`\n' "$route" >> "$notes"
+            printf -- '- 게임 버전: `%s`\n' "$game_version" >> "$notes"
+            printf -- '- 게임 리비전: `r%s`\n' "$revision_number" >> "$notes"
+
+            gh release create "$route_tag" \
+              --draft \
+              --target "$GITHUB_SHA" \
+              --title "$route_tag" \
+              --notes-file "$notes"
+            cleanup_route_original() {
+              gh release delete "$route_tag" --yes --cleanup-tag >/dev/null 2>&1 || true
+            }
+            trap cleanup_route_original ERR
+            gh release upload "$route_tag" "${upload_args[@]}"
+            gh release edit "$route_tag" --draft=false
+            trap - ERR
+            echo "published route original release: $route_tag"
+          done
+
+          # Unified originals are verified only against the routes that actually belong to them.
+          if [ -n "$UNIFIED_ORIGINAL_ROUTES" ]; then
+            source_prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/${ORIGINAL_TAG}/"
+            expected_assets_file=.work/unified-original-assets.txt
+            : > "$expected_assets_file"
+            for route in "${routes[@]}"; do
+              if ! route_uses_unified "$route"; then
+                continue
+              fi
+              manifest="output/release/${route}_manifest.json"
+              route_expected=".work/${route}-unified-original-assets.txt"
+              collect_expected_assets "$manifest" "$source_prefix" "$route_expected"
+              cat "$route_expected" >> "$expected_assets_file"
+            done
+            sort -u -o "$expected_assets_file" "$expected_assets_file"
+            test -s "$expected_assets_file"
+
+            if [ "$PUBLISH_ORIGINAL" = true ]; then
+              if gh release view "$ORIGINAL_TAG" >/dev/null 2>&1; then
+                verify_release_assets "$ORIGINAL_TAG" "$expected_assets_file" "immutable original release"
+                echo "reusing unified original release from an earlier pipeline attempt: $ORIGINAL_TAG"
+              else
+                if git ls-remote --exit-code --tags origin "refs/tags/$ORIGINAL_TAG" >/dev/null 2>&1; then
+                  echo "immutable original tag exists without a GitHub Release: $ORIGINAL_TAG" >&2
+                  exit 1
+                fi
+
+                upload_args=()
+                while IFS= read -r asset; do
+                  test -n "$asset"
+                  matches=(output/originals/*/"$asset")
+                  if [ "${#matches[@]}" -ne 1 ] || [ ! -s "${matches[0]}" ]; then
+                    echo "original asset missing or ambiguous: $asset" >&2
+                    exit 1
+                  fi
+                  upload_args+=("${matches[0]}")
+                done < "$expected_assets_file"
+
+                python tools/workflow/release_notes.py original-backup \
+                  --output .work/original-release-notes.md \
+                  --version '${{ needs.plan.outputs.game_version }}' \
+                  --int-steam-revision '${{ needs.state.outputs.int_steam_revision }}' \
+                  --cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}' \
+                  --int-android-revision '${{ needs.state.outputs.int_android_revision }}' \
+                  --cn-android-revision '${{ needs.state.outputs.cn_android_revision }}' \
+                  --repository "$GITHUB_REPOSITORY" \
+                  --run-id "$GITHUB_RUN_ID" \
+                  --run-number "$GITHUB_RUN_NUMBER"
+
+                gh release create "$ORIGINAL_TAG" \
+                  --draft \
+                  --target "$GITHUB_SHA" \
+                  --title "${ORIGINAL_TAG}" \
+                  --notes-file .work/original-release-notes.md
+                cleanup_original() {
+                  gh release delete "$ORIGINAL_TAG" --yes --cleanup-tag >/dev/null 2>&1 || true
+                }
+                trap cleanup_original ERR
+                gh release upload "$ORIGINAL_TAG" "${upload_args[@]}"
+                gh release edit "$ORIGINAL_TAG" --draft=false
+                trap - ERR
+              fi
+            else
+              if ! gh release view "$ORIGINAL_TAG" >/dev/null 2>&1; then
+                echo "reused original release not found: $ORIGINAL_TAG" >&2
+                exit 1
+              fi
+              verify_release_assets "$ORIGINAL_TAG" "$expected_assets_file" "immutable original release"
+              echo "reusing unified original release: $ORIGINAL_TAG"
+            fi
           fi
       - name: Write release notes
         shell: bash

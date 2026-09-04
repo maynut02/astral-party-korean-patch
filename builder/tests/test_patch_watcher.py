@@ -11,6 +11,7 @@ from tools.patch_watcher import (
     _dispatch_due,
     _dispatch_patch,
     _is_route_baseline,
+    _load_latest_processed,
     _needs_processing,
     _parse_args,
     _route_status,
@@ -69,6 +70,36 @@ def _state(
         catalog_hash=catalog_hash,
         source_url=f"https://cdn.example/{revision}",
     )
+
+
+def test_watcher_treats_only_released_builds_as_processed() -> None:
+    class Cursor:
+        query = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query, _params):
+            self.query = query
+
+        def fetchone(self):
+            return None
+
+    class Connection:
+        def __init__(self):
+            self.current = Cursor()
+
+        def cursor(self):
+            return self.current
+
+    conn = Connection()
+    assert _load_latest_processed(conn, "CN_ANDROID", "3.2.0") is None
+    assert "FROM builds AS b" in conn.current.query
+    assert "b.channel = 'release'" in conn.current.query
+    assert "b.status = 'released'" in conn.current.query
 
 
 def test_route_without_processed_or_observed_state_needs_processing() -> None:

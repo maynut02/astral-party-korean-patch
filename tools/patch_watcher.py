@@ -160,12 +160,19 @@ def _load_latest_processed(
         cur.execute(
             """
             SELECT game_version, revision, catalog_build_hash
-            FROM game_revisions
-            WHERE route = %s
-              AND game_version = %s
-              AND processed_at IS NOT NULL
-              AND catalog_build_hash IS NOT NULL
-            ORDER BY detected_at DESC, processed_at DESC, id DESC
+            FROM game_revisions AS gr
+            WHERE gr.route = %s
+              AND gr.game_version = %s
+              AND gr.processed_at IS NOT NULL
+              AND gr.catalog_build_hash IS NOT NULL
+              AND EXISTS (
+                  SELECT 1
+                  FROM builds AS b
+                  WHERE b.revision_id = gr.id
+                    AND b.channel = 'release'
+                    AND b.status = 'released'
+              )
+            ORDER BY gr.detected_at DESC, gr.processed_at DESC, gr.id DESC
             LIMIT 1
             """,
             (route, game_version),

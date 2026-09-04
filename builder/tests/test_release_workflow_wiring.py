@@ -19,7 +19,7 @@ def test_patch_release_uses_generated_notes_file() -> None:
 
 def test_unified_original_release_uses_all_route_revisions() -> None:
     text = _text("patch.yml")
-    assert "Publish or verify unified original release" in text
+    assert "Publish or verify original releases" in text
     assert "tools/workflow/release_notes.py original-backup" in text
     assert "--int-steam-revision '${{ needs.state.outputs.int_steam_revision }}'" in text
     assert "--cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}'" in text
