@@ -78,7 +78,7 @@ def build_payload(
             "**현재 플랫폼 버전**",
             _platform_versions(game_version, revisions),
             "",
-            "**패치 프로그램/앱 실행**",
+            "**자동 패치 실행**",
             f"✦ [Steam 글로벌 패치 실행]({WINDOWS_LINKS['INT_STEAM']})",
             f"✦ [Steam 중국 패치 실행]({WINDOWS_LINKS['CN_STEAM']})",
             f"✦ [Android 패치 앱 실행]({ANDROID_APP_URL})",
