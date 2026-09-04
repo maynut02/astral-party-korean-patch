@@ -32,10 +32,11 @@ def test_plan_uses_highest_route_revision_and_reports_changed_routes() -> None:
         _check(module, "INT_STEAM", "116"),
         _check(module, "CN_STEAM", "116"),
         _check(module, "INT_ANDROID", "117", changed=True, sync=True),
+        _check(module, "CN_ANDROID", "118"),
     )
     plan = module.build_plan(checks)
     assert plan["should_run"] is True
-    assert plan["max_revision"] == "117"
+    assert plan["max_revision"] == "118"
     assert plan["updated_routes"] == ("INT_ANDROID",)
     assert plan["int_android_sync_required"] is True
 
@@ -65,9 +66,9 @@ def test_immutable_release_tag_starts_at_p0_and_increments() -> None:
     base = "v3.2.0_r117"
     assert module.next_immutable_tag(base, ()) == f"{base}_p0"
     assert module.next_immutable_tag(base, (f"{base}_p0",)) == f"{base}_p1"
-    assert module.next_immutable_tag(
-        base, (f"{base}_p0", f"{base}_p2", f"{base}_p4")
-    ) == f"{base}_p5"
+    assert (
+        module.next_immutable_tag(base, (f"{base}_p0", f"{base}_p2", f"{base}_p4")) == f"{base}_p5"
+    )
     # Existing legacy unsuffixed tags are treated as p0 for migration purposes.
     assert module.next_immutable_tag(base, (base,)) == f"{base}_p1"
     assert module.next_immutable_tag(base, ("v3.2.0_r1170", f"{base}_preview")) == f"{base}_p0"

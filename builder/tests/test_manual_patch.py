@@ -75,9 +75,12 @@ def test_builds_manual_zip_with_install_ready_tree(
     MODULE.build_manual_patch(manifest, payloads, output)
 
     with zipfile.ZipFile(output) as archive:
-        assert archive.read(
-            f"{locallow}/com.unity.addressables/AssetBundles/bundle-name/bundle-hash/__data"
-        ) == raw["lang.bin"]
+        assert (
+            archive.read(
+                f"{locallow}/com.unity.addressables/AssetBundles/bundle-name/bundle-hash/__data"
+            )
+            == raw["lang.bin"]
+        )
         assert archive.read(f"{executable}/{data_dir}/data.unity3d") == raw["data.unity3d"]
         readme = archive.read("설치방법.txt").decode("utf-8")
         assert locallow in readme
@@ -96,15 +99,41 @@ def test_builds_android_manual_zip_with_install_ready_tree(tmp_path: Path) -> No
 
     package = "com.feimo.astralpartyjpn"
     with zipfile.ZipFile(output) as archive:
-        assert archive.read(
-            f"{package}/files/com.unity.addressables/AssetBundles/"
-            "bundle-name/bundle-hash/__data"
-        ) == raw["lang.bin"]
+        assert (
+            archive.read(
+                f"{package}/files/com.unity.addressables/AssetBundles/"
+                "bundle-name/bundle-hash/__data"
+            )
+            == raw["lang.bin"]
+        )
         readme = archive.read("설치방법.txt").decode("utf-8")
         assert "/storage/emulated/0/Android/data/" in readme
         assert package in readme
         assert "__data__" in readme
         assert "AndroidPatcher" in readme
+
+
+def test_builds_cn_android_manual_zip_without_duplicate_payload(tmp_path: Path) -> None:
+    manifest, payloads, raw = _write_manifest(tmp_path, "CN_ANDROID")
+    manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_data["files"] = [manifest_data["files"][0]]
+    manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+    output = tmp_path / "CN_ANDROID_manual_patch.zip"
+
+    MODULE.build_manual_patch(manifest, payloads, output)
+
+    with zipfile.ZipFile(output) as archive:
+        payload_name = "files/com.unity.addressables/AssetBundles/bundle-name/bundle-hash/__data"
+        assert archive.read(payload_name) == raw["lang.bin"]
+        payload_entries = [name for name in archive.namelist() if name.endswith("/__data")]
+        assert payload_entries == [payload_name]
+        assert not any(name.startswith("CN_ANDROID/") for name in archive.namelist())
+        readme = archive.read("설치방법.txt").decode("utf-8")
+        assert "com.feimo.astralparty" in readme
+        assert "com.feimo.astralparty.bilibili" in readme
+        assert "압축파일 안의 files 폴더" in readme
+        assert "동일한 패치 payload" in readme
+        assert "CN_ANDROID 전용" in readme
 
 
 def test_rejects_android_game_data_target(tmp_path: Path) -> None:

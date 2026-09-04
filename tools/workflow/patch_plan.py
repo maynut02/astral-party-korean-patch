@@ -6,11 +6,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-ROUTES = ("INT_STEAM", "CN_STEAM", "INT_ANDROID")
+ROUTES = ("INT_STEAM", "CN_STEAM", "INT_ANDROID", "CN_ANDROID")
 SLUGS = {
     "INT_STEAM": "int_steam",
     "CN_STEAM": "cn_steam",
     "INT_ANDROID": "int_android",
+    "CN_ANDROID": "cn_android",
 }
 
 
@@ -63,7 +64,9 @@ def load_check(path: Path) -> RouteCheck:
 
 def revision_key(value: str) -> tuple[tuple[int, int | str], ...]:
     parts = re.findall(r"\d+|\D+", value)
-    return tuple((0, int(part)) if part.isdigit() else (1, part.casefold()) for part in parts)
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.casefold()) for part in parts
+    )
 
 
 def build_plan(checks: tuple[RouteCheck, ...]) -> dict[str, object]:
@@ -71,7 +74,9 @@ def build_plan(checks: tuple[RouteCheck, ...]) -> dict[str, object]:
     if set(by_route) != set(ROUTES):
         missing = sorted(set(ROUTES) - set(by_route))
         extra = sorted(set(by_route) - set(ROUTES))
-        raise ValueError(f"route checks are incomplete: missing={missing} extra={extra}")
+        raise ValueError(
+            f"route checks are incomplete: missing={missing} extra={extra}"
+        )
 
     versions = {item.game_version for item in checks}
     if len(versions) != 1:
@@ -103,7 +108,9 @@ def _write_output(path: Path, plan: dict[str, object]) -> None:
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         for key, value in plan.items():
             if key == "updated_routes":
-                handle.write(f"updated_routes_json={json.dumps(value, separators=(',', ':'))}\n")
+                handle.write(
+                    f"updated_routes_json={json.dumps(value, separators=(',', ':'))}\n"
+                )
                 handle.write(f"updated_routes_csv={','.join(value)}\n")
             elif isinstance(value, bool):
                 handle.write(f"{key}={'true' if value else 'false'}\n")
@@ -112,12 +119,16 @@ def _write_output(path: Path, plan: dict[str, object]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Aggregate per-route patch checks into one run plan.")
+    parser = argparse.ArgumentParser(
+        description="Aggregate per-route patch checks into one run plan."
+    )
     parser.add_argument("--checks-dir", required=True, type=Path)
     parser.add_argument("--github-output", required=True, type=Path)
     args = parser.parse_args(argv)
 
-    checks = tuple(load_check(args.checks_dir / f"{SLUGS[route]}.env") for route in ROUTES)
+    checks = tuple(
+        load_check(args.checks_dir / f"{SLUGS[route]}.env") for route in ROUTES
+    )
     plan = build_plan(checks)
     _write_output(args.github_output, plan)
     print(json.dumps(plan, ensure_ascii=False, sort_keys=True))

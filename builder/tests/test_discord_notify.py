@@ -18,7 +18,12 @@ def _payload(updated_routes: str = "INT_STEAM,INT_ANDROID") -> dict[str, object]
         tag="v3.3.0_r001_p0",
         updated_routes=updated_routes,
         game_version="3.3.0",
-        revisions={"INT_STEAM": "1", "CN_STEAM": "1", "INT_ANDROID": "2"},
+        revisions={
+            "INT_STEAM": "1",
+            "CN_STEAM": "1",
+            "INT_ANDROID": "2",
+            "CN_ANDROID": "3",
+        },
         repository="owner/repo",
         run_id="123",
         timestamp="2026-09-03T00:00:00Z",
@@ -46,13 +51,14 @@ def test_payload_uses_compact_description_style() -> None:
     assert "**변경된 플랫폼**" in description
     assert "✦ Steam 글로벌 버전" in description
     assert "✦ Android 일본 버전" in description
-    changed_section = description.split("**변경된 플랫폼**", 1)[1].split(
-        "**현재 플랫폼 버전**", 1
-    )[0]
+    changed_section = description.split("**변경된 플랫폼**", 1)[1].split("**현재 플랫폼 버전**", 1)[
+        0
+    ]
     assert "Steam 중국 버전" not in changed_section
     assert "✦ Steam 글로벌: `v3.3.0_r1`" in description
     assert "✦ Steam 중국: `v3.3.0_r1`" in description
     assert "✦ Android 일본: `v3.3.0_r2`" in description
+    assert "✦ Android 중국: `v3.3.0_r3`" in description
     assert "https://astral.maynutlab.com/patcher/INT_STEAM/install" in description
     assert "https://astral.maynutlab.com/patcher/CN_STEAM/install" in description
     assert "https://astral.maynutlab.com/android" in description

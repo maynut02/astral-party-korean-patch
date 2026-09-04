@@ -5,13 +5,13 @@ from astral_builder.automation.release import read_release_metadata, update_rele
 from astral_builder.release.index import ReleaseIndex
 
 
-def _manifest(path: Path) -> Path:
+def _manifest(path: Path, route: str = "INT_ANDROID") -> Path:
     data = {
         "schemaVersion": 2,
         "patch": {
             "version": "v1",
             "channel": "release",
-            "route": "INT_ANDROID",
+            "route": route,
             "buildId": "00000000-0000-0000-0000-000000000001",
             "translationFingerprint": "a" * 64,
         },
@@ -58,6 +58,20 @@ def test_updates_release_index_from_exact_manifest_bytes(tmp_path: Path) -> None
         "BundleB/hash/__data",
     ]
     assert ReleaseIndex.from_json(index_path.read_text()) == updated
+
+
+def test_cn_android_release_publishes_watcher_paths(tmp_path: Path) -> None:
+    manifest = _manifest(tmp_path / "manifest.json", route="CN_ANDROID")
+    updated = update_release_index(
+        manifest_path=manifest,
+        manifest_url="https://example.test/v1/manifest.json",
+        index_path=tmp_path / "release-index.json",
+    )
+    assert updated.releases[0].route == "CN_ANDROID"
+    assert updated.releases[0].addressables_paths == (
+        "BundleA/hash/__data",
+        "BundleB/hash/__data",
+    )
 
 
 def test_non_android_release_does_not_publish_watcher_paths(tmp_path: Path) -> None:

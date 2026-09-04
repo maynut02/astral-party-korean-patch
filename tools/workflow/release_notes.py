@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-ROUTES = ("INT_STEAM", "CN_STEAM", "INT_ANDROID")
+ROUTES = ("INT_STEAM", "CN_STEAM", "INT_ANDROID", "CN_ANDROID")
 
 
 def _run_link(repository: str, run_id: str, run_number: str) -> str:
@@ -72,7 +72,7 @@ def render_original_backup_notes(
         "## 패치 복원용 원본",
         "",
         f"- 게임 버전: `{version}`",
-        "- 한글패치를 제거할 때 복원하는 세 플랫폼의 변경 전 원본 파일입니다.",
+        "- 한글패치를 제거할 때 복원하는 각 플랫폼의 변경 전 원본 파일입니다.",
         "",
         "## 플랫폼별 리비전",
         "",
@@ -117,12 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
     patch.add_argument("--int-steam-revision", required=True)
     patch.add_argument("--cn-steam-revision", required=True)
     patch.add_argument("--int-android-revision", required=True)
+    patch.add_argument("--cn-android-revision", required=True)
 
     original_backup = sub.add_parser("original-backup", parents=[common])
     original_backup.add_argument("--version", required=True)
     original_backup.add_argument("--int-steam-revision", required=True)
     original_backup.add_argument("--cn-steam-revision", required=True)
     original_backup.add_argument("--int-android-revision", required=True)
+    original_backup.add_argument("--cn-android-revision", required=True)
 
     return parser
 
@@ -137,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                 "INT_STEAM": args.int_steam_revision,
                 "CN_STEAM": args.cn_steam_revision,
                 "INT_ANDROID": args.int_android_revision,
+                "CN_ANDROID": args.cn_android_revision,
             },
             repository=args.repository,
             run_id=args.run_id,
@@ -149,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
                 "INT_STEAM": args.int_steam_revision,
                 "CN_STEAM": args.cn_steam_revision,
                 "INT_ANDROID": args.int_android_revision,
+                "CN_ANDROID": args.cn_android_revision,
             },
             repository=args.repository,
             run_id=args.run_id,

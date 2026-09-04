@@ -12,7 +12,12 @@ def test_all_route_configs_match_shared_schema() -> None:
     validator = jsonschema.Draft202012Validator(schema)
 
     route_files = sorted((ROOT / "routes").glob("*.yaml"))
-    assert {path.stem for path in route_files} == {"int_steam", "cn_steam", "int_android"}
+    assert {path.stem for path in route_files} == {
+        "int_steam",
+        "cn_steam",
+        "int_android",
+        "cn_android",
+    }
 
     for path in route_files:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))

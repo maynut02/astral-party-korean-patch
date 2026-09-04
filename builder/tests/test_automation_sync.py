@@ -40,6 +40,21 @@ def test_loads_int_android_sync_config() -> None:
     assert config.legacy_font_name == "MochiyPopOne-Regular"
 
 
+def test_loads_cn_android_sync_config() -> None:
+    config = load_route_sync_config(ROOT / "routes/cn_android.yaml")
+    assert config.route == "CN_ANDROID"
+    assert config.platform == "android"
+    assert config.translation_source_route == "INT_STEAM"
+    assert config.lang_assets == {"cn_s": "Simplified Chinese"}
+    assert config.lang_target == "cn_s"
+    assert config.str_catalog_key == "GameData_CN"
+    assert config.str_target_field == "cn_s"
+    assert config.tmp_catalog_key == "JingNanBoBoHei_TMP"
+    assert config.tmp_asset_name == "JingNanBoBoHei_TMP"
+    assert config.legacy_font_name == "JingNanBoBoHei"
+    assert config.resources_root == "resources/cn_steam"
+
+
 def test_route_sync_config_allows_route_specific_language_assets(tmp_path: Path) -> None:
     path = tmp_path / "route.yaml"
     path.write_text(
@@ -71,7 +86,6 @@ resources:
     assert config.str_target_field == "cn_s"
     assert config.translation_source_route == "INT_STEAM"
     assert config.legacy_font_name == "JingNanBoBoHei"
-
 
 
 def test_sync_target_reuses_same_bundle_with_progress(tmp_path: Path) -> None:
@@ -114,6 +128,7 @@ def test_sync_target_reuses_same_bundle_with_progress(tmp_path: Path) -> None:
     assert calls == ["https://example.test/shared.bundle"]
     assert first_result == second_result
     assert any("reuse bundle" in message for message in messages)
+
 
 def test_bundle_locations_disambiguate_multiple_remote_dependencies(tmp_path: Path) -> None:
     bundles = tuple(

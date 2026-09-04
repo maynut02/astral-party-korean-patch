@@ -14,6 +14,7 @@ from tools.patch_watcher import (
     _needs_processing,
     _parse_args,
     _route_status,
+    _should_initialize_route_baseline,
 )
 
 
@@ -180,6 +181,24 @@ def test_route_status_marks_new_remote_state_for_dispatch() -> None:
 
 def test_route_without_any_history_is_treated_as_baseline() -> None:
     assert _is_route_baseline(
+        processed=None,
+        previous_observed=None,
+        last_dispatched=None,
+    )
+
+
+def test_new_route_is_processed_when_watcher_already_has_history() -> None:
+    assert not _should_initialize_route_baseline(
+        watcher_baseline=False,
+        processed=None,
+        previous_observed=None,
+        last_dispatched=None,
+    )
+
+
+def test_all_empty_routes_can_initialize_watcher_baseline() -> None:
+    assert _should_initialize_route_baseline(
+        watcher_baseline=True,
         processed=None,
         previous_observed=None,
         last_dispatched=None,

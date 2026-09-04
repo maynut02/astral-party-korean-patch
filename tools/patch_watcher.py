@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import psycopg
 
 
-ROUTES = ("INT_STEAM", "CN_STEAM", "INT_ANDROID")
+ROUTES = ("INT_STEAM", "CN_STEAM", "INT_ANDROID", "CN_ANDROID")
 LOCK_ID = 1_387_426_501
 USER_AGENT = "astral-party-patch-watcher/1.0"
 DISPATCH_RETRY_AFTER = timedelta(minutes=30)
@@ -69,7 +69,9 @@ def _host_for_route(route: str) -> str:
 
 def discover_remote_state(route: str, game_version: str) -> RemoteState:
     query = urllib.parse.urlencode({"route": route, "version": game_version})
-    hotaddress_url = f"http://{_host_for_route(route)}:7878/api/hotaddressExtend/get?{query}"
+    hotaddress_url = (
+        f"http://{_host_for_route(route)}:7878/api/hotaddressExtend/get?{query}"
+    )
     try:
         payload = json.loads(_fetch(hotaddress_url).decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -79,7 +81,9 @@ def discover_remote_state(route: str, game_version: str) -> RemoteState:
     if not isinstance(source_url, str) or not source_url.strip():
         raise RuntimeError(f"hotaddress response has no sourceUrl for {route}")
     source_url = source_url.rstrip("/")
-    path_parts = [part for part in urllib.parse.urlparse(source_url).path.split("/") if part]
+    path_parts = [
+        part for part in urllib.parse.urlparse(source_url).path.split("/") if part
+    ]
     if not path_parts:
         raise RuntimeError(f"sourceUrl has no revision for {route}: {source_url}")
     revision = path_parts[-1]
@@ -89,7 +93,9 @@ def discover_remote_state(route: str, game_version: str) -> RemoteState:
         catalog_hash = _fetch(hash_url).decode("ascii").strip().lower()
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"catalog hash is not ASCII for {route}") from exc
-    if len(catalog_hash) != 32 or any(char not in "0123456789abcdef" for char in catalog_hash):
+    if len(catalog_hash) != 32 or any(
+        char not in "0123456789abcdef" for char in catalog_hash
+    ):
         raise RuntimeError(f"invalid catalog hash for {route}: {catalog_hash!r}")
 
     return RemoteState(route, game_version, revision, catalog_hash, source_url)
@@ -122,7 +128,9 @@ def _load_observed(conn: psycopg.Connection, route: str) -> tuple[str, str, str]
     return str(row[0]), str(row[1]), str(row[2])
 
 
-def _load_last_dispatched(conn: psycopg.Connection, route: str) -> DispatchRecord | None:
+def _load_last_dispatched(
+    conn: psycopg.Connection, route: str
+) -> DispatchRecord | None:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -409,15 +417,27 @@ def _is_route_baseline(
     previous_observed: tuple[str, str, str] | None,
     last_dispatched: DispatchRecord | None,
 ) -> bool:
-    return (
-        processed is None
-        and previous_observed is None
-        and last_dispatched is None
+    return processed is None and previous_observed is None and last_dispatched is None
+
+
+def _should_initialize_route_baseline(
+    *,
+    watcher_baseline: bool,
+    processed: tuple[str, str, str] | None,
+    previous_observed: tuple[str, str, str] | None,
+    last_dispatched: DispatchRecord | None,
+) -> bool:
+    return watcher_baseline and _is_route_baseline(
+        processed=processed,
+        previous_observed=previous_observed,
+        last_dispatched=last_dispatched,
     )
 
 
 def _dispatch_patch(game_version: str) -> None:
-    repository = os.environ.get("GITHUB_REPOSITORY", "maynut02/astral-party-korean-patch").strip()
+    repository = os.environ.get(
+        "GITHUB_REPOSITORY", "maynut02/astral-party-korean-patch"
+    ).strip()
     token = _require_env("GITHUB_TOKEN")
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     url = f"{api_url}/repos/{repository}/dispatches"
@@ -442,7 +462,9 @@ def _dispatch_patch(game_version: str) -> None:
     try:
         with urllib.request.urlopen(request, timeout=15.0) as response:
             if response.status != 204:
-                raise RuntimeError(f"unexpected GitHub dispatch status: {response.status}")
+                raise RuntimeError(
+                    f"unexpected GitHub dispatch status: {response.status}"
+                )
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"GitHub workflow dispatch failed: {exc}") from exc
 
@@ -486,21 +508,19 @@ def run() -> int:
                 print("patch watcher is disabled")
                 return 0
 
-            previous_observed = {
-                route: _load_observed(conn, route)
-                for route in ROUTES
-            }
+            previous_observed = {route: _load_observed(conn, route) for route in ROUTES}
             last_dispatched = {
-                route: _load_last_dispatched(conn, route)
-                for route in ROUTES
+                route: _load_last_dispatched(conn, route) for route in ROUTES
             }
             processed = {
                 route: _load_latest_processed(conn, route, game_version)
                 for route in ROUTES
             }
-            baseline = all(previous_observed[route] is None for route in ROUTES) and all(
-                processed[route] is None for route in ROUTES
-            ) and all(last_dispatched[route] is None for route in ROUTES)
+            baseline = (
+                all(previous_observed[route] is None for route in ROUTES)
+                and all(processed[route] is None for route in ROUTES)
+                and all(last_dispatched[route] is None for route in ROUTES)
+            )
 
             states: list[RemoteState] = []
             changed: list[RemoteState] = []
@@ -518,7 +538,8 @@ def run() -> int:
                 try:
                     state = discover_remote_state(route, game_version)
                     _store_observed(conn, state)
-                    if _is_route_baseline(
+                    if _should_initialize_route_baseline(
+                        watcher_baseline=baseline,
                         processed=processed[route],
                         previous_observed=previous_observed[route],
                         last_dispatched=last_dispatched[route],
@@ -568,9 +589,12 @@ def run() -> int:
                     )
                     conn.commit()
 
-            error_summary = "; ".join(
-                f"{route}: {message}" for route, message in route_errors.items()
-            ) or None
+            error_summary = (
+                "; ".join(
+                    f"{route}: {message}" for route, message in route_errors.items()
+                )
+                or None
+            )
 
             if not states:
                 _finish_run(
@@ -699,7 +723,9 @@ def run_forever(interval_seconds: int) -> None:
     stopped = threading.Event()
 
     def request_stop(signum: int, _frame: object) -> None:
-        print(f"patch watcher received signal {signum}; stopping after the current check")
+        print(
+            f"patch watcher received signal {signum}; stopping after the current check"
+        )
         stopped.set()
 
     signal.signal(signal.SIGINT, request_stop)
@@ -711,7 +737,10 @@ def run_forever(interval_seconds: int) -> None:
         try:
             result = run()
             if result != 0:
-                print(f"patch watcher check completed with exit code {result}", file=sys.stderr)
+                print(
+                    f"patch watcher check completed with exit code {result}",
+                    file=sys.stderr,
+                )
         except Exception as exc:  # noqa: BLE001 - keep the daemon alive between checks
             print(f"patch watcher failed: {exc}", file=sys.stderr)
 
@@ -722,7 +751,9 @@ def run_forever(interval_seconds: int) -> None:
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Watch Astral Party patch source revisions")
+    parser = argparse.ArgumentParser(
+        description="Watch Astral Party patch source revisions"
+    )
     parser.add_argument(
         "--interval-seconds",
         type=int,

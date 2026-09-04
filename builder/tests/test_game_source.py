@@ -23,6 +23,14 @@ def test_discovers_int_source_revision() -> None:
     assert source.catalog_hash_url == "https://cdn.example/game/1042/catalog_3.2.0.hash"
 
 
+def test_cn_android_uses_cn_hotaddress_host() -> None:
+    client = GameSourceClient(fetch=lambda _url, _timeout: b"{}")
+    url = client.hotaddress_url("CN_ANDROID", "3.2.0")
+    assert "se-web-cn.feimogames.com:7878" in url
+    assert "route=CN_ANDROID" in url
+    assert "version=3.2.0" in url
+
+
 def test_rejects_unknown_route() -> None:
     client = GameSourceClient(fetch=lambda _url, _timeout: b"{}")
     with pytest.raises(SourceDiscoveryError, match="unsupported route"):
@@ -49,10 +57,12 @@ def test_download_catalog_is_atomic_and_hashed(tmp_path: Path) -> None:
 
 
 def test_download_rejects_non_catalog_json(tmp_path: Path) -> None:
-    responses = iter([
-        json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
-        b"{}",
-    ])
+    responses = iter(
+        [
+            json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
+            b"{}",
+        ]
+    )
     client = GameSourceClient(fetch=lambda _url, _timeout: next(responses))
     source = client.discover("INT_STEAM", "3.2.0")
     with pytest.raises(SourceDiscoveryError, match="not an Addressables catalog"):
@@ -60,20 +70,24 @@ def test_download_rejects_non_catalog_json(tmp_path: Path) -> None:
 
 
 def test_fetches_catalog_hash() -> None:
-    responses = iter([
-        json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
-        b"fd58ba01bbca5e5e389b5b73240df134\n",
-    ])
+    responses = iter(
+        [
+            json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
+            b"fd58ba01bbca5e5e389b5b73240df134\n",
+        ]
+    )
     client = GameSourceClient(fetch=lambda _url, _timeout: next(responses))
     source = client.discover("INT_STEAM", "3.2.0")
     assert client.fetch_catalog_hash(source) == "fd58ba01bbca5e5e389b5b73240df134"
 
 
 def test_rejects_invalid_catalog_hash() -> None:
-    responses = iter([
-        json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
-        b"not-a-hash",
-    ])
+    responses = iter(
+        [
+            json.dumps({"sourceUrl": "https://cdn.example/1042"}).encode(),
+            b"not-a-hash",
+        ]
+    )
     client = GameSourceClient(fetch=lambda _url, _timeout: next(responses))
     source = client.discover("INT_STEAM", "3.2.0")
     with pytest.raises(SourceDiscoveryError, match="32-character"):

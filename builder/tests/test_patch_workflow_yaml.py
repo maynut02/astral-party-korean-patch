@@ -28,10 +28,14 @@ def test_patch_workflow_is_split_into_parallel_roles() -> None:
     }
     check_routes = {item["route"] for item in jobs["check"]["strategy"]["matrix"]["include"]}
     sync_routes = {item["route"] for item in jobs["sync"]["strategy"]["matrix"]["include"]}
-    assert check_routes == {"INT_STEAM", "CN_STEAM", "INT_ANDROID"}
+    assert check_routes == {"INT_STEAM", "CN_STEAM", "INT_ANDROID", "CN_ANDROID"}
     assert sync_routes == check_routes
     assert jobs["build-steam"]["strategy"]["matrix"]["include"][0]["route"] == "INT_STEAM"
     assert jobs["build-steam"]["strategy"]["matrix"]["include"][1]["route"] == "CN_STEAM"
+    assert {item["route"] for item in jobs["build-android"]["strategy"]["matrix"]["include"]} == {
+        "INT_ANDROID",
+        "CN_ANDROID",
+    }
     assert set(jobs["publish"]["needs"]) == {"plan", "state", "build-steam", "build-android"}
 
 
@@ -48,9 +52,7 @@ def test_patch_workflow_uses_only_immutable_release_tags() -> None:
         if step.get("name") == "Define immutable release identity"
     )
     publish_script = next(
-        step["run"]
-        for step in jobs["publish"]["steps"]
-        if step.get("name") == "Publish release"
+        step["run"] for step in jobs["publish"]["steps"] if step.get("name") == "Publish release"
     )
     assert "tools/workflow/release_tag.py" in plan_script
     assert "patch-pre" not in plan_script
@@ -88,7 +90,7 @@ def test_patch_workflow_uses_one_unified_original_release() -> None:
     assert "original_mode=legacy" in plan_script
     assert "publish_original=true" in plan_script
     assert "publish_original=false" in plan_script
-    assert '${base}_p*-original' not in plan_script
+    assert "${base}_p*-original" not in plan_script
     assert "--source-asset-base-url" in steam_build
     assert "--source-asset-base-url" in android_build
     assert "needs.plan.outputs.original_tag" in steam_build
@@ -96,10 +98,10 @@ def test_patch_workflow_uses_one_unified_original_release() -> None:
     assert "needs.plan.outputs.original_mode" in steam_build
     assert "needs.plan.outputs.original_mode" in android_build
     assert 'source_tag="original-${{ matrix.route }}-' in steam_build
-    assert 'source_tag="original-INT_ANDROID-' in android_build
+    assert 'source_tag="original-${{ matrix.route }}-' in android_build
     assert "tools/workflow/manual_patch.py" in android_build
-    assert "INT_ANDROID_manual_patch.zip" in android_build
-    assert "for route in INT_STEAM CN_STEAM INT_ANDROID" in original_publish
+    assert "${{ matrix.route }}_manual_patch.zip" in android_build
+    assert "for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID" in original_publish
     assert 'if [ "$ORIGINAL_MODE" = legacy ]; then' in original_publish
     assert "reusing legacy per-route original releases" in original_publish
     assert 'gh release create "$ORIGINAL_TAG"' in original_publish
@@ -129,8 +131,8 @@ def test_patch_workflow_separates_watcher_and_manual_sources() -> None:
     assert "sort_by(.publishedAt)" in source_script
     assert "createdAt" not in source_script
     assert "manual patch requires an existing patch release" in source_script
-    assert r'^v.+_r[0-9]+(_p[0-9]+)?$' in source_script
-    assert r'^v.+_r[^_]+(_p[0-9]+)?$' not in source_script
+    assert r"^v.+_r[0-9]+(_p[0-9]+)?$" in source_script
+    assert r"^v.+_r[^_]+(_p[0-9]+)?$" not in source_script
 
     check_steps = jobs["check"]["steps"]
     automatic_check = next(
@@ -161,9 +163,7 @@ def test_patch_workflow_notifies_discord_after_successful_finalize() -> None:
     assert set(notify["needs"]) == {"plan", "state", "finalize"}
     assert "needs.finalize.result == 'success'" in notify["if"]
 
-    step = next(
-        item for item in notify["steps"] if item.get("name") == "Send release notification"
-    )
+    step = next(item for item in notify["steps"] if item.get("name") == "Send release notification")
     assert step["continue-on-error"] is True
     assert step["env"]["DISCORD_WEBHOOK"] == "${{ secrets.DISCORD_WEBHOOK }}"
     assert "tools/workflow/notify_discord.py" in step["run"]
@@ -172,3 +172,4 @@ def test_patch_workflow_notifies_discord_after_successful_finalize() -> None:
     assert "needs.state.outputs.int_steam_revision" in step["run"]
     assert "needs.state.outputs.cn_steam_revision" in step["run"]
     assert "needs.state.outputs.int_android_revision" in step["run"]
+    assert "needs.state.outputs.cn_android_revision" in step["run"]

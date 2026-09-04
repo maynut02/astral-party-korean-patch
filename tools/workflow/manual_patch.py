@@ -18,7 +18,8 @@ class SteamRouteLayout:
 
 @dataclass(frozen=True)
 class AndroidRouteLayout:
-    package_name: str
+    package_names: tuple[str, ...]
+    archive_root: str | None
 
 
 RouteLayout = SteamRouteLayout | AndroidRouteLayout
@@ -36,7 +37,12 @@ ROUTE_LAYOUTS: dict[str, RouteLayout] = {
         data_dir="AstralParty_CN_Data",
     ),
     "INT_ANDROID": AndroidRouteLayout(
-        package_name="com.feimo.astralpartyjpn",
+        package_names=("com.feimo.astralpartyjpn",),
+        archive_root="com.feimo.astralpartyjpn",
+    ),
+    "CN_ANDROID": AndroidRouteLayout(
+        package_names=("com.feimo.astralparty", "com.feimo.astralparty.bilibili"),
+        archive_root=None,
     ),
 }
 
@@ -67,7 +73,9 @@ def _payload_name(download_url: str) -> str:
     return name[:-3]
 
 
-def _archive_path(layout: RouteLayout, target: str, relative_path: str) -> PurePosixPath:
+def _archive_path(
+    layout: RouteLayout, target: str, relative_path: str
+) -> PurePosixPath:
     relative = _safe_relative_path(relative_path)
     if isinstance(layout, SteamRouteLayout):
         if target == "addressables":
@@ -80,13 +88,12 @@ def _archive_path(layout: RouteLayout, target: str, relative_path: str) -> PureP
         if target == "game-data" and relative == PurePosixPath("data.unity3d"):
             return PurePosixPath(layout.executable_dir) / layout.data_dir / relative
     elif isinstance(layout, AndroidRouteLayout) and target == "addressables":
-        return (
-            PurePosixPath(layout.package_name)
-            / "files"
-            / "com.unity.addressables"
-            / "AssetBundles"
-            / relative
+        root = (
+            PurePosixPath(layout.archive_root)
+            if layout.archive_root
+            else PurePosixPath()
         )
+        return root / "files" / "com.unity.addressables" / "AssetBundles" / relative
     raise ValueError(f"unsupported manual patch target/path: {target}/{relative}")
 
 
@@ -112,28 +119,54 @@ def _readme(route: str, manifest: dict[str, object]) -> str:
 """
 
     if isinstance(layout, AndroidRouteLayout):
-        return header + f"""
-[설치 방법]
-1. 게임에서 필요한 리소스 다운로드를 먼저 완료한 뒤 게임을 종료합니다.
-
-2. 압축파일 안의 {layout.package_name} 폴더를 아래 경로에 복사하고 기존 파일을 덮어씁니다.
+        if len(layout.package_names) == 1:
+            package_name = layout.package_names[0]
+            copy_step = f"""2. 압축파일 안의 {layout.archive_root} 폴더를 아래 경로에 복사하고 기존 파일을 덮어씁니다.
    /storage/emulated/0/Android/data/
 
 3. 최종 파일 경로는 다음 형태가 됩니다.
-   /storage/emulated/0/Android/data/{layout.package_name}/files/com.unity.addressables/AssetBundles/...
+   /storage/emulated/0/Android/data/{package_name}/files/com.unity.addressables/AssetBundles/..."""
+            package_note = f"- 대상 패키지: {package_name}"
+            final_step = 4
+        else:
+            packages = "\n".join(f"   - {name}" for name in layout.package_names)
+            copy_step = f"""2. 설치된 중국판의 패키지명을 확인합니다.
+{packages}
 
-4. 게임을 실행합니다.
+3. 압축파일 안의 files 폴더를 설치된 패키지 경로 아래에 복사하고 기존 파일을 덮어씁니다.
+   /storage/emulated/0/Android/data/<설치된 패키지>/
+
+4. 최종 파일 경로는 다음 형태가 됩니다.
+   /storage/emulated/0/Android/data/<설치된 패키지>/files/com.unity.addressables/AssetBundles/..."""
+            package_note = (
+                "- CN 일반판과 bilibili판은 동일한 패치 payload를 사용합니다."
+            )
+            final_step = 5
+
+        return (
+            header
+            + f"""
+[설치 방법]
+1. 게임에서 필요한 리소스 다운로드를 먼저 완료한 뒤 게임을 종료합니다.
+
+{copy_step}
+
+{final_step}. 게임을 실행합니다.
 
 [참고]
 - Android 11 이상에서는 일반 파일 관리자가 Android/data 쓰기를 제한할 수 있습니다.
   ADB, Shizuku, root 또는 Android/data에 쓸 수 있는 파일 관리 방법을 사용하세요.
 - 기기의 기존 Addressables 캐시 파일명이 __data__로 끝나는 경우, 압축파일의 대응 __data 파일을
   기존 파일명인 __data__에 맞춰 덮어쓰세요. 새 파일을 추가하는 것이 아니라 기존 캐시를 교체해야 합니다.
-- 이 압축파일은 수동 설치용이며 INT_ANDROID({layout.package_name}) 전용입니다.
+{package_note}
+- 이 압축파일은 수동 설치용이며 {route} 전용입니다.
 - 자동 설치/업데이트 및 원본 복구가 필요하면 AndroidPatcher 사용을 권장합니다.
 """
+        )
 
-    return header + f"""
+    return (
+        header
+        + f"""
 [설치 방법]
 1. {layout.locallow_dir} 폴더를 아래 경로에 복사하고 기존 파일을 덮어씁니다.
    %USERPROFILE%\\AppData\\LocalLow\\feimo\\
@@ -147,9 +180,12 @@ def _readme(route: str, manifest: dict[str, object]) -> str:
 - 이 압축파일은 수동 설치용입니다.
 - 자동 설치/업데이트 및 원본 복구가 필요하면 WindowsPatcher 사용을 권장합니다.
 """
+    )
 
 
-def build_manual_patch(manifest_path: Path, payloads_dir: Path, output_path: Path) -> Path:
+def build_manual_patch(
+    manifest_path: Path, payloads_dir: Path, output_path: Path
+) -> Path:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schemaVersion") != 2:
         raise ValueError("unsupported patch manifest schema")
@@ -215,11 +251,16 @@ def build_manual_patch(manifest_path: Path, payloads_dir: Path, output_path: Pat
         readme.external_attr = 0o100644 << 16
         archive.writestr(readme, _readme(route, manifest).encode("utf-8"))
 
-        for payload, archive_path in sorted(entries, key=lambda item: item[1].as_posix()):
+        for payload, archive_path in sorted(
+            entries, key=lambda item: item[1].as_posix()
+        ):
             info = zipfile.ZipInfo(archive_path.as_posix(), ZIP_TIMESTAMP)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
-            with payload.open("rb") as source, archive.open(info, "w", force_zip64=True) as target:
+            with (
+                payload.open("rb") as source,
+                archive.open(info, "w", force_zip64=True) as target,
+            ):
                 while chunk := source.read(1024 * 1024):
                     target.write(chunk)
 

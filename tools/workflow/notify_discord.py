@@ -11,6 +11,7 @@ ROUTE_LABELS = {
     "INT_STEAM": "Steam 글로벌 버전",
     "CN_STEAM": "Steam 중국 버전",
     "INT_ANDROID": "Android 일본 버전",
+    "CN_ANDROID": "Android 중국 버전",
 }
 ROUTES = tuple(ROUTE_LABELS)
 
@@ -62,7 +63,9 @@ def build_payload(
 
     release_url = f"https://github.com/{repository}/releases/tag/{tag}"
     actions_url = f"https://github.com/{repository}/actions/runs/{run_id}"
-    run_timestamp = timestamp or datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    run_timestamp = timestamp or datetime.now(UTC).isoformat(
+        timespec="seconds"
+    ).replace("+00:00", "Z")
     display_tag = _escape_markdown(tag)
 
     description = "\n".join(
@@ -105,7 +108,9 @@ def build_payload(
 def send_webhook(webhook: str, payload: dict[str, object]) -> None:
     request = urllib.request.Request(
         webhook,
-        data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        ),
         method="POST",
         headers={
             "Content-Type": "application/json",
@@ -118,13 +123,16 @@ def send_webhook(webhook: str, payload: dict[str, object]) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Send a Discord notification for a patch release")
+    parser = argparse.ArgumentParser(
+        description="Send a Discord notification for a patch release"
+    )
     parser.add_argument("--tag", required=True)
     parser.add_argument("--updated-routes", default="")
     parser.add_argument("--game-version", required=True)
     parser.add_argument("--int-steam-revision", required=True)
     parser.add_argument("--cn-steam-revision", required=True)
     parser.add_argument("--int-android-revision", required=True)
+    parser.add_argument("--cn-android-revision", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--run-id", required=True)
     return parser
@@ -145,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             "INT_STEAM": args.int_steam_revision,
             "CN_STEAM": args.cn_steam_revision,
             "INT_ANDROID": args.int_android_revision,
+            "CN_ANDROID": args.cn_android_revision,
         },
         repository=args.repository,
         run_id=args.run_id,

@@ -9,6 +9,7 @@ Astral Party 비공식 한국어 패치의 게임 업데이트 감지, 번역 �
 | `INT_STEAM` | Windows(Steam) | WindowsPatcher |
 | `CN_STEAM` | Windows(Steam) | WindowsPatcher |
 | `INT_ANDROID` | Android(JP) | AndroidPatcher + Shizuku |
+| `CN_ANDROID` | Android(CN) | AndroidPatcher + Shizuku |
 
 릴리즈 파일은 GitHub의 [Releases](https://github.com/maynut02/astral-party-korean-patch/releases)에서 배포합니다.
 
@@ -27,7 +28,7 @@ Android 패치는 Google Play 서명의 원본 게임 APK를 수정하지 않고
 
 ## Patch watcher
 
-DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때 `repository_dispatch`로 `patch.yml`을 실행합니다. 새 게임 version/revision의 첫 자동 패치는 `_p0` 정식 Release로 생성됩니다. GitHub Actions에서 Patch workflow를 수동 실행하면 별도의 버전 입력 없이 가장 최근에 배포된 Patch Release의 세 manifest를 기준으로 동일한 game version/revision을 재사용하고 `_p1`, `_p2` 순서로 새 immutable Release를 생성합니다. 따라서 수동 실행은 아직 watcher가 배포하지 않은 원격 revision으로 넘어가지 않습니다. 복원용 원본은 새 game version/revision의 최초 `_p0` 자동 패치에서만 세 route를 하나의 `v<game-version>_r<revision>-original` Release로 생성하며 수동 재빌드는 기존 원본 Release를 그대로 재사용합니다.
+DB migration은 `astral-patch-site/database/migrations`에서 관리합니다. 해당 migration 적용 후 관리 사이트는 `patch_watch_config.game_version`만 변경하면 됩니다. watcher는 `INT_STEAM`, `CN_STEAM`, `INT_ANDROID`, `CN_ANDROID`의 현재 revision과 catalog hash를 `patch_watch_routes`에 기록하고, 변경이 있을 때 `repository_dispatch`로 `patch.yml`을 실행합니다. 새 게임 version/revision의 첫 자동 패치는 `_p0` 정식 Release로 생성됩니다. GitHub Actions에서 Patch workflow를 수동 실행하면 별도의 버전 입력 없이 가장 최근에 배포된 Patch Release의 네 manifest를 기준으로 동일한 game version/revision을 재사용하고 `_p1`, `_p2` 순서로 새 immutable Release를 생성합니다. 따라서 수동 실행은 아직 watcher가 배포하지 않은 원격 revision으로 넘어가지 않습니다. 복원용 원본은 새 game version/revision의 최초 `_p0` 자동 패치에서만 네 route를 하나의 `v<game-version>_r<revision>-original` Release로 생성하며 수동 재빌드는 기존 원본 Release를 그대로 재사용합니다.
 
 ```sql
 UPDATE patch_watch_config

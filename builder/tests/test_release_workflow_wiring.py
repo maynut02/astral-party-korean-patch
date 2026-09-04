@@ -13,6 +13,7 @@ def test_patch_release_uses_generated_notes_file() -> None:
     assert "--int-steam-revision '${{ needs.state.outputs.int_steam_revision }}'" in text
     assert "--cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}'" in text
     assert "--int-android-revision '${{ needs.state.outputs.int_android_revision }}'" in text
+    assert "--cn-android-revision '${{ needs.state.outputs.cn_android_revision }}'" in text
     assert "--notes-file .work/patch-release-notes.md" in text
 
 
@@ -23,4 +24,5 @@ def test_unified_original_release_uses_all_route_revisions() -> None:
     assert "--int-steam-revision '${{ needs.state.outputs.int_steam_revision }}'" in text
     assert "--cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}'" in text
     assert "--int-android-revision '${{ needs.state.outputs.int_android_revision }}'" in text
+    assert "--cn-android-revision '${{ needs.state.outputs.cn_android_revision }}'" in text
     assert "${{ needs.plan.outputs.original_tag }}" in text

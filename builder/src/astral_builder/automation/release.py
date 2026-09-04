@@ -72,7 +72,9 @@ def update_release_index(
         patch_version=metadata.patch_version,
         manifest_url=manifest_url,
         manifest_sha256=manifest_digest(manifest_path.read_bytes()),
-        addressables_paths=(metadata.addressables_paths if metadata.route == "INT_ANDROID" else ()),
+        addressables_paths=(
+            metadata.addressables_paths if metadata.route in {"INT_ANDROID", "CN_ANDROID"} else ()
+        ),
     )
     updated = index.upsert(entry)
     index_file.parent.mkdir(parents=True, exist_ok=True)

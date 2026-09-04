@@ -72,6 +72,8 @@ jobs:
             slug: cn_steam
           - route: INT_ANDROID
             slug: int_android
+          - route: CN_ANDROID
+            slug: cn_android
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-database-tunnel
@@ -215,6 +217,9 @@ jobs:
           - route: INT_ANDROID
             slug: int_android
             config: routes/int_android.yaml
+          - route: CN_ANDROID
+            slug: cn_android
+            config: routes/cn_android.yaml
     steps:
       - uses: actions/checkout@v6
       - name: Download route check
@@ -280,9 +285,11 @@ jobs:
       int_steam_revision_id: ${{ steps.collect.outputs.int_steam_revision_id }}
       cn_steam_revision_id: ${{ steps.collect.outputs.cn_steam_revision_id }}
       int_android_revision_id: ${{ steps.collect.outputs.int_android_revision_id }}
+      cn_android_revision_id: ${{ steps.collect.outputs.cn_android_revision_id }}
       int_steam_revision: ${{ steps.collect.outputs.int_steam_revision }}
       cn_steam_revision: ${{ steps.collect.outputs.cn_steam_revision }}
       int_android_revision: ${{ steps.collect.outputs.int_android_revision }}
+      cn_android_revision: ${{ steps.collect.outputs.cn_android_revision }}
       source_added: ${{ steps.collect.outputs.source_added }}
       source_modified: ${{ steps.collect.outputs.source_modified }}
       source_removed: ${{ steps.collect.outputs.source_removed }}
@@ -315,7 +322,7 @@ jobs:
             local key="$2"
             sed -n "s/^${key}=//p" "$file" | tail -1
           }
-          for slug in int_steam cn_steam int_android; do
+          for slug in int_steam cn_steam int_android cn_android; do
             file=".work/state/${slug}.env"
             revision_id="$(read_output "$file" revision_id)"
             revision="$(read_output "$file" revision)"
@@ -516,13 +523,23 @@ jobs:
           retention-days: 14
 
   build-android:
-    name: Build INT_ANDROID
+    name: Build ${{ matrix.route }}
     needs: [plan, state]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
       DATABASE_URL_DIRECT: ${{ secrets.ASTRAL_DATABASE_URL }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - route: INT_ANDROID
+            slug: int_android
+            config: routes/int_android.yaml
+          - route: CN_ANDROID
+            slug: cn_android
+            config: routes/cn_android.yaml
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-database-tunnel
@@ -534,22 +551,32 @@ jobs:
       - uses: ./.github/actions/setup-builder
       - name: Build and validate
         shell: bash
+        env:
+          INT_ANDROID_REVISION_ID: ${{ needs.state.outputs.int_android_revision_id }}
+          CN_ANDROID_REVISION_ID: ${{ needs.state.outputs.cn_android_revision_id }}
+          INT_ANDROID_REVISION: ${{ needs.state.outputs.int_android_revision }}
+          CN_ANDROID_REVISION: ${{ needs.state.outputs.cn_android_revision }}
         run: |
           set -euo pipefail
-          root=output/patch/int_android
-          output_file=.work/build-output.env
+          case '${{ matrix.route }}' in
+            INT_ANDROID) REVISION_ID="$INT_ANDROID_REVISION_ID"; REVISION="$INT_ANDROID_REVISION" ;;
+            CN_ANDROID) REVISION_ID="$CN_ANDROID_REVISION_ID"; REVISION="$CN_ANDROID_REVISION" ;;
+            *) echo 'unsupported Android route' >&2; exit 1 ;;
+          esac
+          root='output/patch/${{ matrix.slug }}'
+          work='.work/build-${{ matrix.slug }}'
+          output_file='.work/build-output-${{ matrix.slug }}.env'
           asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ needs.plan.outputs.tag }}"
-          revision='${{ needs.state.outputs.int_android_revision }}'
           if [ '${{ needs.plan.outputs.original_mode }}' = legacy ]; then
-            source_tag="original-INT_ANDROID-${{ needs.plan.outputs.game_version }}_r${revision#r}"
+            source_tag="original-${{ matrix.route }}-${{ needs.plan.outputs.game_version }}_r${REVISION#r}"
           else
             source_tag='${{ needs.plan.outputs.original_tag }}'
           fi
           source_asset_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${source_tag}"
           astral-builder build \
-            --revision-id '${{ needs.state.outputs.int_android_revision_id }}' \
-            --route-config routes/int_android.yaml \
-            --work-dir .work/build-int_android \
+            --revision-id "$REVISION_ID" \
+            --route-config '${{ matrix.config }}' \
+            --work-dir "$work" \
             --output-dir "$root" \
             --asset-base-url "$asset_base" \
             --source-asset-base-url "$source_asset_base" \
@@ -560,23 +587,23 @@ jobs:
           astral-builder validate-build \
             --manifest "$root/manifest.json" \
             --assets-dir "$root/assets" \
-            --route-config routes/int_android.yaml
+            --route-config '${{ matrix.config }}'
           mkdir -p output/release
-          cp "$root/manifest.json" output/release/INT_ANDROID_manifest.json
+          cp "$root/manifest.json" 'output/release/${{ matrix.route }}_manifest.json'
           cp "$root"/assets/* output/release/
-          mkdir -p output/originals/INT_ANDROID
-          cp "$root"/originals/* output/originals/INT_ANDROID/
+          mkdir -p 'output/originals/${{ matrix.route }}'
+          cp "$root"/originals/* 'output/originals/${{ matrix.route }}/'
           python tools/workflow/manual_patch.py \
             --manifest "$root/manifest.json" \
-            --payloads-dir .work/build-int_android/payloads \
-            --output output/release/INT_ANDROID_manual_patch.zip
+            --payloads-dir "$work/payloads" \
+            --output 'output/release/${{ matrix.route }}_manual_patch.zip'
           build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
           test -n "$build_id"
-          printf '%s\n' "$build_id" > output/release/INT_ANDROID_build_id.txt
+          printf '%s\n' "$build_id" > 'output/release/${{ matrix.route }}_build_id.txt'
       - name: Upload route build
         uses: actions/upload-artifact@v7
         with:
-          name: patch-build-int_android
+          name: patch-build-${{ matrix.slug }}
           path: output/release/
           if-no-files-found: error
           compression-level: 0
@@ -584,8 +611,8 @@ jobs:
       - name: Upload route originals
         uses: actions/upload-artifact@v7
         with:
-          name: patch-originals-int_android
-          path: output/originals/INT_ANDROID/
+          name: patch-originals-${{ matrix.slug }}
+          path: output/originals/${{ matrix.route }}/
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -622,10 +649,15 @@ jobs:
         with:
           name: patch-originals-int_android
           path: output/originals/INT_ANDROID
+      - name: Download CN_ANDROID originals
+        uses: actions/download-artifact@v7
+        with:
+          name: patch-originals-cn_android
+          path: output/originals/CN_ANDROID
       - name: Verify complete release set
         run: |
           set -euo pipefail
-          for route in INT_STEAM CN_STEAM INT_ANDROID; do
+          for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID; do
             test -s "output/release/${route}_manifest.json"
             test -s "output/release/${route}_build_id.txt"
             test -d "output/originals/${route}"
@@ -641,7 +673,7 @@ jobs:
           mkdir -p .work
 
           if [ "$ORIGINAL_MODE" = legacy ]; then
-            for route in INT_STEAM CN_STEAM INT_ANDROID; do
+            for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID; do
               manifest="output/release/${route}_manifest.json"
               game_version="$(jq -r '.game.version' "$manifest")"
               revision="$(jq -r '.game.revision' "$manifest")"
@@ -675,7 +707,7 @@ jobs:
 
           expected_assets_file=.work/original-assets.txt
           : > "$expected_assets_file"
-          for route in INT_STEAM CN_STEAM INT_ANDROID; do
+          for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID; do
             manifest="output/release/${route}_manifest.json"
             jq -e --arg prefix "$source_prefix" \
               'all(.files[]; (.sourceDownloadUrl | type == "string") and (.sourceDownloadUrl | startswith($prefix)))' \
@@ -726,6 +758,7 @@ jobs:
                 --int-steam-revision '${{ needs.state.outputs.int_steam_revision }}' \
                 --cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}' \
                 --int-android-revision '${{ needs.state.outputs.int_android_revision }}' \
+                --cn-android-revision '${{ needs.state.outputs.cn_android_revision }}' \
                 --repository "$GITHUB_REPOSITORY" \
                 --run-id "$GITHUB_RUN_ID" \
                 --run-number "$GITHUB_RUN_NUMBER"
@@ -762,6 +795,7 @@ jobs:
             --int-steam-revision '${{ needs.state.outputs.int_steam_revision }}' \
             --cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}' \
             --int-android-revision '${{ needs.state.outputs.int_android_revision }}' \
+            --cn-android-revision '${{ needs.state.outputs.cn_android_revision }}' \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID" \
             --run-number "$GITHUB_RUN_NUMBER"
@@ -828,7 +862,7 @@ jobs:
                 --dir .work/distribution || true
             fi
           fi
-          for route in INT_STEAM CN_STEAM INT_ANDROID; do
+          for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID; do
             astral-builder update-index \
               --manifest "output/release/${route}_manifest.json" \
               --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${route}_manifest.json" \
@@ -870,7 +904,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for route in INT_STEAM CN_STEAM INT_ANDROID; do
+          for route in INT_STEAM CN_STEAM INT_ANDROID CN_ANDROID; do
             build_id="$(tr -d '\r\n' < "output/release/${route}_build_id.txt")"
             test -n "$build_id"
             astral-builder mark-released --build-id "$build_id"
@@ -898,5 +932,6 @@ jobs:
           --int-steam-revision '${{ needs.state.outputs.int_steam_revision }}'
           --cn-steam-revision '${{ needs.state.outputs.cn_steam_revision }}'
           --int-android-revision '${{ needs.state.outputs.int_android_revision }}'
+          --cn-android-revision '${{ needs.state.outputs.cn_android_revision }}'
           --repository "$GITHUB_REPOSITORY"
           --run-id "$GITHUB_RUN_ID"
