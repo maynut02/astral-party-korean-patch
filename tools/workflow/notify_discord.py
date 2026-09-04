@@ -34,8 +34,8 @@ def _changed_platforms(updated_routes: str) -> str:
     if unknown:
         raise ValueError(f"unknown updated routes: {', '.join(unknown)}")
     if not routes:
-        return "✦ 없음"
-    return "\n".join(f"✦ {ROUTE_LABELS[route]}" for route in routes)
+        return "✦ 번역 수정"
+    return "\n".join(f"✦ {ROUTE_LABELS[route]} 업데이트" for route in routes)
 
 
 def _platform_versions(game_version: str, revisions: dict[str, str]) -> str:
@@ -72,7 +72,7 @@ def build_payload(
         [
             f"# {display_tag}",
             "",
-            "**변경된 플랫폼**",
+            "**변경사항**",
             _changed_platforms(updated_routes),
             "",
             "**현재 플랫폼 버전**",
