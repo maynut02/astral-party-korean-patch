@@ -31,7 +31,7 @@ def render_patch_notes(
     if updated:
         lines.extend(f"- `{route}`" for route in updated)
     else:
-        lines.append("- 없음")
+        lines.append("- 번역 수정")
 
     lines.extend(
         [

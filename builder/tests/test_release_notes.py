@@ -34,6 +34,23 @@ def test_patch_notes_put_updated_routes_before_platform_status() -> None:
     assert "https://github.com/owner/repo/actions/runs/123" in text
 
 
+def test_patch_notes_report_translation_change_without_updated_routes() -> None:
+    text = MODULE.render_patch_notes(
+        updated_routes="",
+        game_version="3.2.0",
+        revisions={
+            "INT_STEAM": "120",
+            "CN_STEAM": "119",
+            "INT_ANDROID": "121",
+            "CN_ANDROID": "122",
+        },
+        repository="owner/repo",
+        run_id="123",
+        run_number="45",
+    )
+    assert "- 번역 수정" in text
+
+
 def test_patch_notes_reject_unknown_route() -> None:
     with pytest.raises(ValueError, match="unknown updated routes"):
         MODULE.render_patch_notes(
