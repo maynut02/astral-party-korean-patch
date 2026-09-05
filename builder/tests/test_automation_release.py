@@ -46,13 +46,16 @@ def test_updates_release_index_from_exact_manifest_bytes(tmp_path: Path) -> None
         manifest_path=manifest,
         manifest_url="https://example.test/v1/manifest.json",
         index_path=index_path,
+        uploaded_at="2026-09-04T16:12Z",
     )
     assert len(updated.releases) == 1
+    assert updated.releases[0].uploaded_at == "2026-09-04T16:12Z"
     assert updated.releases[0].addressables_paths == (
         "BundleA/hash/__data",
         "BundleB/hash/__data",
     )
     raw = json.loads(index_path.read_text())
+    assert raw["releases"][0]["uploadedAt"] == "2026-09-04T16:12Z"
     assert raw["releases"][0]["addressablesPaths"] == [
         "BundleA/hash/__data",
         "BundleB/hash/__data",

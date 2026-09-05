@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from astral_builder.release.index import ReleaseIndex, ReleaseIndexEntry, manifest_digest
@@ -55,6 +56,7 @@ def update_release_index(
     manifest_path: str | Path,
     manifest_url: str,
     index_path: str | Path,
+    uploaded_at: str | None = None,
 ) -> ReleaseIndex:
     manifest_path = Path(manifest_path)
     metadata = read_release_metadata(manifest_path)
@@ -72,6 +74,8 @@ def update_release_index(
         patch_version=metadata.patch_version,
         manifest_url=manifest_url,
         manifest_sha256=manifest_digest(manifest_path.read_bytes()),
+        uploaded_at=uploaded_at
+        or datetime.now(UTC).isoformat(timespec="minutes").replace("+00:00", "Z"),
         addressables_paths=(
             metadata.addressables_paths if metadata.route in {"INT_ANDROID", "CN_ANDROID"} else ()
         ),

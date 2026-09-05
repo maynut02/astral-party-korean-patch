@@ -18,6 +18,7 @@ class ReleaseIndexEntry:
     patch_version: str
     manifest_url: str
     manifest_sha256: str
+    uploaded_at: str | None = None
     addressables_paths: tuple[str, ...] = ()
 
     @property
@@ -64,6 +65,8 @@ class ReleaseIndexEntry:
             "manifestUrl": self.manifest_url,
             "manifestSha256": self.manifest_sha256,
         }
+        if self.uploaded_at:
+            result["uploadedAt"] = self.uploaded_at
         if self.addressables_paths:
             result["addressablesPaths"] = list(self.addressables_paths)
         return result
@@ -107,6 +110,7 @@ class ReleaseIndex:
                 patch_version=item["patchVersion"],
                 manifest_url=item["manifestUrl"],
                 manifest_sha256=item["manifestSha256"],
+                uploaded_at=item.get("uploadedAt"),
                 addressables_paths=tuple(item.get("addressablesPaths", ())),
             )
             for item in data.get("releases", [])

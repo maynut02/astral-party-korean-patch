@@ -58,6 +58,10 @@
           "manifestSha256": {
             "$ref": "#/$defs/sha256"
           },
+          "uploadedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "addressablesPaths": {
             "type": "array",
             "uniqueItems": true,

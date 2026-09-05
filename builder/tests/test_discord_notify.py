@@ -48,10 +48,10 @@ def test_payload_uses_compact_description_style() -> None:
     )
     assert payload["allowed_mentions"] == {"parse": ["everyone"]}
     assert description.startswith("# v3.3.0\\_r001\\_p0")
-    assert "**변경된 플랫폼**" in description
+    assert "**변경사항**" in description
     assert "✦ Steam 글로벌 버전" in description
     assert "✦ Android 일본 버전" in description
-    changed_section = description.split("**변경된 플랫폼**", 1)[1].split("**현재 플랫폼 버전**", 1)[
+    changed_section = description.split("**변경사항**", 1)[1].split("**현재 플랫폼 버전**", 1)[
         0
     ]
     assert "Steam 중국 버전" not in changed_section
@@ -70,9 +70,9 @@ def test_payload_uses_compact_description_style() -> None:
     assert "fields" not in embed
 
 
-def test_manual_rebuild_reports_no_platform_revision_change() -> None:
+def test_manual_rebuild_reports_translation_change() -> None:
     description = str(_embed(_payload(updated_routes=""))["description"])
-    assert "✦ 없음 (수동 재빌드)" in description
+    assert "✦ 번역 수정" in description
 
 
 def test_payload_rejects_unknown_platform() -> None:
