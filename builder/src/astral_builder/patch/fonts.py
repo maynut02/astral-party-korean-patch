@@ -27,12 +27,17 @@ class FontPatchResult:
     size: int
 
 
-def _save_environment_atomic(environment: Any, output_path: str | Path) -> Path:
+def _save_environment_atomic(
+    environment: Any,
+    output_path: str | Path,
+    *,
+    packer: str | None = None,
+) -> Path:
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     temp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     try:
-        temp.write_bytes(environment.file.save())
+        temp.write_bytes(environment.file.save(packer=packer))
         temp.replace(output)
     finally:
         temp.unlink(missing_ok=True)
@@ -167,7 +172,7 @@ def patch_legacy_font(
     if not found:
         raise FontPatchError(f"Font target not found: {font_name}")
 
-    output = _save_environment_atomic(environment, output_path)
+    output = _save_environment_atomic(environment, output_path, packer="original")
     _verify_legacy_font(output, font_name=font_name, font_payload=font_payload, loader=loader)
     data = output.read_bytes()
     return FontPatchResult(output, font_name, hashlib.sha256(data).hexdigest(), len(data))
