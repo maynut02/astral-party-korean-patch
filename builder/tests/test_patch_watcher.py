@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from tools.patch_watcher import (
@@ -17,6 +20,43 @@ from tools.patch_watcher import (
     _route_status,
     _should_initialize_route_baseline,
 )
+
+
+def test_watcher_revision_discovery_runs_without_builder_or_site_packages(tmp_path: Path) -> None:
+    watcher = Path(__file__).resolve().parents[2] / "tools" / "patch_watcher.py"
+    script = tmp_path / "patch_watcher.py"
+    script.write_bytes(watcher.read_bytes())
+    code = """
+import json
+import runpy
+import sys
+
+namespace = runpy.run_path(sys.argv[1])
+source_url = "https://cdn.example/INT_STEAM/3.3.0/012/TmvW1l"
+requested = []
+
+def fetch(url):
+    requested.append(url)
+    if "hotaddressExtend" in url:
+        return json.dumps({"sourceUrl": source_url + "/"}).encode()
+    return b"a" * 32
+
+namespace["discover_remote_state"].__globals__["_fetch"] = fetch
+state = namespace["discover_remote_state"]("INT_STEAM", "3.3.0")
+assert state.revision == "012"
+assert state.source_url == source_url
+assert requested[-1] == source_url + "/catalog_3.3.0.hash"
+assert "astral_builder" not in sys.modules
+assert "psycopg" not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", code, str(script)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_dispatch_uses_repository_event_payload(monkeypatch) -> None:

@@ -26,7 +26,7 @@ class GameSource:
 
     @property
     def catalog_hash_url(self) -> str:
-        return f"{self.source_url}/catalog_{self.version}.hash"
+        return _source_file_url(self.source_url, f"catalog_{self.version}.hash")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,14 +60,38 @@ def _host_for_route(route: str) -> str:
     raise SourceDiscoveryError(f"unsupported route: {route}")
 
 
-def _revision_from_source_url(source_url: str) -> str:
-    path_parts = [part for part in urllib.parse.urlparse(source_url).path.split("/") if part]
-    if not path_parts:
-        raise SourceDiscoveryError(f"sourceUrl has no revision path segment: {source_url}")
-    revision = path_parts[-1]
-    if not revision or any(char in revision for char in '<>:"/\\|?*\x00'):
-        raise SourceDiscoveryError(f"invalid revision in sourceUrl: {source_url}")
+def _revision_from_source_url(source_url: str, route: str, version: str) -> str:
+    # Keep this grammar in sync with the standalone tools/patch_watcher.py parser.
+    error = f"invalid route/version/revision in sourceUrl for {route}/{version}: {source_url}"
+    try:
+        parsed = urllib.parse.urlsplit(source_url)
+    except ValueError as exc:
+        raise SourceDiscoveryError(error) from exc
+    path_parts = parsed.path.removeprefix("/").removesuffix("/").split("/")
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or any(
+        part in ("", ".", "..") for part in path_parts
+    ):
+        raise SourceDiscoveryError(error)
+
+    if route in path_parts:
+        # A CDN prefix is allowed, but the route/version/revision tail is fixed.
+        tail = path_parts[path_parts.index(route) :]
+        if len(tail) not in (3, 4) or tail[1] != version:
+            raise SourceDiscoveryError(error)
+        revision = tail[2]
+    elif len(path_parts) == 1 or (len(path_parts) == 2 and path_parts[0] == "game"):
+        # Compatibility for short, unstructured numeric source URLs only.
+        revision = path_parts[-1]
+    else:
+        raise SourceDiscoveryError(error)
+    if not revision.isascii() or not revision.isdecimal():
+        raise SourceDiscoveryError(error)
     return revision
+
+
+def _source_file_url(source_url: str, filename: str) -> str:
+    parsed = urllib.parse.urlsplit(source_url)
+    return parsed._replace(path=f"{parsed.path.rstrip('/')}/{filename}").geturl()
 
 
 class GameSourceClient:
@@ -94,14 +118,15 @@ class GameSourceClient:
         source_url = payload.get("sourceUrl")
         if not isinstance(source_url, str) or not source_url.strip():
             raise SourceDiscoveryError("hotaddress response has no sourceUrl")
-        source_url = source_url.rstrip("/")
-        revision = _revision_from_source_url(source_url)
+        revision = _revision_from_source_url(source_url, route, version)
+        parsed = urllib.parse.urlsplit(source_url)
+        source_url = parsed._replace(path=parsed.path.rstrip("/")).geturl()
         return GameSource(
             route=route,
             version=version,
             revision=revision,
             source_url=source_url,
-            catalog_url=f"{source_url}/catalog_{version}.json",
+            catalog_url=_source_file_url(source_url, f"catalog_{version}.json"),
         )
 
     def fetch_catalog_hash(self, source: GameSource) -> str:

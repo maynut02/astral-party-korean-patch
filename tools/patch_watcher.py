@@ -67,7 +67,38 @@ def _host_for_route(route: str) -> str:
     raise RuntimeError(f"unsupported route: {route}")
 
 
+def _revision_from_source_url(source_url: str, route: str, version: str) -> str:
+    # Keep this grammar in sync with astral_builder.game.source without importing it:
+    # the watcher Docker image only contains this script and psycopg.
+    error = f"invalid route/version/revision in sourceUrl for {route}/{version}: {source_url}"
+    try:
+        parsed = urllib.parse.urlsplit(source_url)
+    except ValueError as exc:
+        raise RuntimeError(error) from exc
+    path_parts = parsed.path.removeprefix("/").removesuffix("/").split("/")
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or any(
+        part in ("", ".", "..") for part in path_parts
+    ):
+        raise RuntimeError(error)
+
+    if route in path_parts:
+        # A CDN prefix is allowed, but the route/version/revision tail is fixed.
+        tail = path_parts[path_parts.index(route) :]
+        if len(tail) not in (3, 4) or tail[1] != version:
+            raise RuntimeError(error)
+        revision = tail[2]
+    elif len(path_parts) == 1 or (len(path_parts) == 2 and path_parts[0] == "game"):
+        # Compatibility for short, unstructured numeric source URLs only.
+        revision = path_parts[-1]
+    else:
+        raise RuntimeError(error)
+    if not revision.isascii() or not revision.isdecimal():
+        raise RuntimeError(error)
+    return revision
+
+
 def discover_remote_state(route: str, game_version: str) -> RemoteState:
+    route = route.upper()
     query = urllib.parse.urlencode({"route": route, "version": game_version})
     hotaddress_url = (
         f"http://{_host_for_route(route)}:7878/api/hotaddressExtend/get?{query}"
@@ -80,15 +111,12 @@ def discover_remote_state(route: str, game_version: str) -> RemoteState:
     source_url = payload.get("sourceUrl") if isinstance(payload, dict) else None
     if not isinstance(source_url, str) or not source_url.strip():
         raise RuntimeError(f"hotaddress response has no sourceUrl for {route}")
-    source_url = source_url.rstrip("/")
-    path_parts = [
-        part for part in urllib.parse.urlparse(source_url).path.split("/") if part
-    ]
-    if not path_parts:
-        raise RuntimeError(f"sourceUrl has no revision for {route}: {source_url}")
-    revision = path_parts[-1]
-
-    hash_url = f"{source_url}/catalog_{game_version}.hash"
+    revision = _revision_from_source_url(source_url, route, game_version)
+    parsed = urllib.parse.urlsplit(source_url)
+    source_url = parsed._replace(path=parsed.path.rstrip("/")).geturl()
+    hash_url = parsed._replace(
+        path=f"{parsed.path.rstrip('/')}/catalog_{game_version}.hash"
+    ).geturl()
     try:
         catalog_hash = _fetch(hash_url).decode("ascii").strip().lower()
     except UnicodeDecodeError as exc:

@@ -3,7 +3,9 @@ import json
 from pathlib import Path
 
 import pytest
+from test_addressables_catalog import _catalog_json
 
+from astral_builder.addressables import AddressablesCatalog, resolve_target
 from astral_builder.game.source import GameSourceClient, SourceDiscoveryError
 
 
@@ -92,3 +94,41 @@ def test_rejects_invalid_catalog_hash() -> None:
     source = client.discover("INT_STEAM", "3.2.0")
     with pytest.raises(SourceDiscoveryError, match="32-character"):
         client.fetch_catalog_hash(source)
+
+
+@pytest.mark.parametrize("suffix", ("TmvW1l", "999"))
+def test_catalog_and_bundles_keep_source_suffix(tmp_path: Path, suffix: str) -> None:
+    source_url = f"https://cdn.example/INT_STEAM/3.3.0/012/{suffix}"
+    catalog = _catalog_json().encode()
+    requested = []
+
+    def fetch(url: str, _timeout: float) -> bytes:
+        requested.append(url)
+        if "hotaddress" in url:
+            return json.dumps({"sourceUrl": source_url + "/"}).encode()
+        return catalog
+
+    client = GameSourceClient(fetch=fetch)
+    source = client.discover("INT_STEAM", "3.3.0")
+    downloaded = client.download_catalog(source, tmp_path / "catalog.json")
+    target = resolve_target(
+        AddressablesCatalog.from_json(downloaded.path.read_text(encoding="utf-8")),
+        source,
+        logical_name="lang.en",
+        catalog_key="English",
+    )
+
+    assert source.revision == "012"
+    assert source.source_url == source_url
+    assert requested[-1] == f"{source_url}/catalog_3.3.0.json"
+    assert target.bundles[0].download_url == f"{source_url}/target.bundle"
+
+
+def test_invalid_revision_raises_source_discovery_error() -> None:
+    client = GameSourceClient(
+        fetch=lambda _url, _timeout: (
+            b'{"sourceUrl":"https://cdn.example/INT_STEAM/3.3.0/TmvW1l/012"}'
+        )
+    )
+    with pytest.raises(SourceDiscoveryError, match="invalid route/version/revision"):
+        client.discover("INT_STEAM", "3.3.0")
