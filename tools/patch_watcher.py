@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -290,7 +290,7 @@ def _finish_run(
     workflow_dispatched: bool = False,
     error_message: str | None = None,
 ) -> None:
-    finished_at = datetime.now(timezone.utc)
+    finished_at = datetime.now(UTC)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -348,7 +348,7 @@ def _finish_route_run(
     dispatch_due: bool,
     error_message: str | None = None,
 ) -> None:
-    finished_at = datetime.now(timezone.utc)
+    finished_at = datetime.now(UTC)
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -509,7 +509,7 @@ def run() -> int:
 
     database_url = _require_env("DATABASE_URL")
     with psycopg.connect(database_url) as conn:
-        run_started_at = datetime.now(timezone.utc)
+        run_started_at = datetime.now(UTC)
         run_id: int | None = None
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (LOCK_ID,))
@@ -563,10 +563,10 @@ def run() -> int:
             route_dispatch_due: dict[str, bool] = {}
             route_started_at: dict[str, datetime] = {}
             route_errors: dict[str, str] = {}
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             for route in ROUTES:
-                started_at = datetime.now(timezone.utc)
+                started_at = datetime.now(UTC)
                 route_started_at[route] = started_at
                 _start_route_run(conn, run_id, route, game_version, started_at)
                 conn.commit()
