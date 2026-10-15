@@ -27,6 +27,7 @@ STEAM_LAYOUTS = {
     "INT_STEAM": ("AstralParty_INT", "8vJXnINT/AstralParty_INT_Data"),
     "CN_STEAM": ("AstralParty_CN", "8vJXn6CN/AstralParty_CN_Data"),
 }
+STEAM_GAME_DATA_CACHE = {"3.2.0": False, "3.3.0": True, "3.10.0": True}
 
 
 def _write_catalog(
@@ -70,18 +71,35 @@ def _write_catalog(
     return path
 
 
-def _bundle_path(route: str, origin: str, *, relative: str = RUNTIME_PATH) -> str:
+def _bundle_path(
+    route: str,
+    origin: str,
+    *,
+    relative: str = RUNTIME_PATH,
+    identity: str = "bundle-name/bundle-hash/__data",
+    version: str = "3.2.0",
+) -> str:
     locallow, game_data = STEAM_LAYOUTS[route]
     if origin == "remote":
-        return f"{locallow}/com.unity.addressables/AssetBundles/bundle-name/bundle-hash/__data"
+        cache_root = game_data if STEAM_GAME_DATA_CACHE[version] else locallow
+        return f"{cache_root}/com.unity.addressables/AssetBundles/{identity}"
     return f"{game_data}/StreamingAssets/aa/{relative}"
+
+
+def _assert_game_folder_only(archive: zipfile.ZipFile, route: str) -> None:
+    locallow, game_data = STEAM_LAYOUTS[route]
+    payload_entries = [name for name in archive.namelist() if name != "설치방법.txt"]
+    assert {name.split("/", 1)[0] for name in payload_entries} == {game_data.split("/")[0]}
+    assert not any(name.startswith(f"{locallow}/") for name in archive.namelist())
 
 
 def _internal_id(origin: str, relative: str = RUNTIME_PATH) -> str:
     return (REMOTE_PREFIX if origin == "remote" else RUNTIME_PREFIX) + relative
 
 
-def _write_manifest(tmp_path: Path, route: str) -> tuple[Path, Path, dict[str, bytes]]:
+def _write_manifest(
+    tmp_path: Path, route: str, *, version: str = "3.2.0"
+) -> tuple[Path, Path, dict[str, bytes]]:
     payloads = tmp_path / "payloads"
     payloads.mkdir()
     raw = {
@@ -109,8 +127,8 @@ def _write_manifest(tmp_path: Path, route: str) -> tuple[Path, Path, dict[str, b
     ]
     manifest = {
         "schemaVersion": 2,
-        "patch": {"route": route, "version": "v3.2.0_r116_p5"},
-        "game": {"version": "3.2.0", "revision": "116"},
+        "patch": {"route": route, "version": f"v{version}_r116_p5"},
+        "game": {"version": version, "revision": "116"},
         "files": files,
     }
     path = tmp_path / "manifest.json"
@@ -126,6 +144,7 @@ def _write_manifest(tmp_path: Path, route: str) -> tuple[Path, Path, dict[str, b
     ],
 )
 @pytest.mark.parametrize("origin", ["remote", "runtime"])
+@pytest.mark.parametrize("version", STEAM_GAME_DATA_CACHE)
 def test_builds_manual_zip_with_install_ready_tree(
     tmp_path: Path,
     route: str,
@@ -133,33 +152,93 @@ def test_builds_manual_zip_with_install_ready_tree(
     executable: str,
     data_dir: str,
     origin: str,
+    version: str,
 ) -> None:
-    manifest, payloads, raw = _write_manifest(tmp_path, route)
+    manifest, payloads, raw = _write_manifest(tmp_path, route, version=version)
     catalog = _write_catalog(
         tmp_path, ("bundle-name", "bundle-hash", _internal_id(origin))
     )
     manifest_before = manifest.read_bytes()
+    manifest_data = json.loads(manifest_before)
     output = tmp_path / f"{route}_manual_patch.zip"
+    bundle_path = _bundle_path(route, origin, version=version)
+    game_data_path = f"{executable}/{data_dir}/data.unity3d"
 
     assert MODULE.build_manual_patch(manifest, payloads, output, catalog_path=catalog) == output
 
     with zipfile.ZipFile(output) as archive:
         assert sorted(archive.namelist()) == sorted(
-            ["설치방법.txt", _bundle_path(route, origin), f"{executable}/{data_dir}/data.unity3d"]
+            ["설치방법.txt", bundle_path, game_data_path]
         )
-        assert archive.read(_bundle_path(route, origin)) == raw["lang.bin"]
-        assert archive.read(f"{executable}/{data_dir}/data.unity3d") == raw["data.unity3d"]
+        assert archive.read(bundle_path) == raw["lang.bin"]
+        assert archive.read(game_data_path) == raw["data.unity3d"]
+        for archive_path, item in zip(
+            (bundle_path, game_data_path), manifest_data["files"], strict=True
+        ):
+            payload = archive.read(archive_path)
+            assert hashlib.sha256(payload).hexdigest() == item["sha256"]
+            assert len(payload) == item["size"]
         readme = archive.read("설치방법.txt").decode("utf-8")
-        assert readme == MODULE._readme(route, json.loads(manifest_before))
+        assert readme == MODULE._readme(route, manifest_data)
         assert f"Astral Party 한국어 패치 - {route} 수동 설치" in readme
-        assert locallow in readme
+        assert f"게임 버전: {version}" in readme
+        assert f"{executable} 폴더를 Astral Party 설치 폴더에 복사" in readme
+        if STEAM_GAME_DATA_CACHE[version]:
+            _assert_game_folder_only(archive, route)
+            assert "%USERPROFILE%" not in readme
+            assert "LocalLow" not in readme
+            assert f"{locallow} 폴더를" not in readme
+        else:
+            assert f"{locallow} 폴더를 아래 경로에 복사" in readme
+            assert "%USERPROFILE%\\AppData\\LocalLow\\feimo\\" in readme
         assert executable in readme
         assert "WindowsPatcher" in readme
     assert manifest.read_bytes() == manifest_before
 
 
-def test_builds_android_manual_zip_with_install_ready_tree(tmp_path: Path) -> None:
-    manifest, payloads, raw = _write_manifest(tmp_path, "INT_ANDROID")
+@pytest.mark.parametrize("route", STEAM_LAYOUTS)
+@pytest.mark.parametrize(
+    ("version", "patch_version"),
+    [
+        ("3.2.0", "v3.3.0_r014_p2"),
+        ("3.3.0", "v3.2.0_r116_p5"),
+        ("3.10.0", "v3.2.0_r116_p5"),
+    ],
+)
+def test_steam_cache_layout_uses_game_version_instead_of_patch_version(
+    tmp_path: Path, route: str, version: str, patch_version: str
+) -> None:
+    manifest, payloads, raw = _write_manifest(tmp_path, route, version=version)
+    manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_data["patch"]["version"] = patch_version
+    manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+    catalog = _write_catalog(
+        tmp_path, ("bundle-name", "bundle-hash", _internal_id("remote"))
+    )
+    output = tmp_path / "manual.zip"
+
+    MODULE.build_manual_patch(manifest, payloads, output, catalog_path=catalog)
+
+    with zipfile.ZipFile(output) as archive:
+        bundle_path = _bundle_path(route, "remote", version=version)
+        assert set(archive.namelist()) == {
+            "설치방법.txt", bundle_path, f"{STEAM_LAYOUTS[route][1]}/data.unity3d"
+        }
+        assert archive.read(bundle_path) == raw["lang.bin"]
+        readme = archive.read("설치방법.txt").decode("utf-8")
+        assert f"패치 버전: {patch_version}" in readme
+        assert f"게임 버전: {version}" in readme
+        if STEAM_GAME_DATA_CACHE[version]:
+            _assert_game_folder_only(archive, route)
+            assert "%USERPROFILE%" not in readme
+            assert "LocalLow" not in readme
+        else:
+            assert "%USERPROFILE%\\AppData\\LocalLow\\feimo\\" in readme
+
+
+@pytest.mark.parametrize("version", STEAM_GAME_DATA_CACHE)
+def test_builds_android_manual_zip_with_install_ready_tree(tmp_path: Path, version: str) -> None:
+    manifest, payloads, raw = _write_manifest(tmp_path, "INT_ANDROID", version=version)
     manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
     manifest_data["files"] = [manifest_data["files"][0]]
     manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
@@ -191,8 +270,11 @@ def test_builds_android_manual_zip_with_install_ready_tree(tmp_path: Path) -> No
         assert "AndroidPatcher" in readme
 
 
-def test_builds_cn_android_manual_zip_without_duplicate_payload(tmp_path: Path) -> None:
-    manifest, payloads, raw = _write_manifest(tmp_path, "CN_ANDROID")
+@pytest.mark.parametrize("version", STEAM_GAME_DATA_CACHE)
+def test_builds_cn_android_manual_zip_without_duplicate_payload(
+    tmp_path: Path, version: str
+) -> None:
+    manifest, payloads, raw = _write_manifest(tmp_path, "CN_ANDROID", version=version)
     manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
     manifest_data["files"] = [manifest_data["files"][0]]
     manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
@@ -248,8 +330,11 @@ def test_steam_requires_catalog_before_creating_output(tmp_path: Path, route: st
 
 
 @pytest.mark.parametrize("route", STEAM_LAYOUTS)
-def test_catalog_origin_switch_replaces_previous_zip(tmp_path: Path, route: str) -> None:
-    manifest, payloads, raw = _write_manifest(tmp_path, route)
+@pytest.mark.parametrize("version", STEAM_GAME_DATA_CACHE)
+def test_catalog_origin_switch_replaces_previous_zip(
+    tmp_path: Path, route: str, version: str
+) -> None:
+    manifest, payloads, raw = _write_manifest(tmp_path, route, version=version)
     output = tmp_path / "manual.zip"
     previous_readme = None
     for origin in ("remote", "runtime", "remote"):
@@ -258,12 +343,16 @@ def test_catalog_origin_switch_replaces_previous_zip(tmp_path: Path, route: str)
         )
         MODULE.build_manual_patch(manifest, payloads, output, catalog_path=catalog)
         with zipfile.ZipFile(output) as archive:
+            bundle_path = _bundle_path(route, origin, version=version)
             assert set(archive.namelist()) == {
                 "설치방법.txt",
-                _bundle_path(route, origin),
+                bundle_path,
                 f"{STEAM_LAYOUTS[route][1]}/data.unity3d",
             }
-            assert archive.read(_bundle_path(route, origin)) == raw["lang.bin"]
+            assert archive.read(bundle_path) == raw["lang.bin"]
+            assert archive.read(f"{STEAM_LAYOUTS[route][1]}/data.unity3d") == raw["data.unity3d"]
+            if STEAM_GAME_DATA_CACHE[version]:
+                _assert_game_folder_only(archive, route)
             readme = archive.read("설치방법.txt")
             if previous_readme is not None:
                 assert readme == previous_readme
@@ -272,12 +361,16 @@ def test_catalog_origin_switch_replaces_previous_zip(tmp_path: Path, route: str)
 
 @pytest.mark.parametrize("route", STEAM_LAYOUTS)
 @pytest.mark.parametrize("origin", ["remote", "runtime"])
+@pytest.mark.parametrize("font_origin", ["remote", "runtime"])
+@pytest.mark.parametrize("version", STEAM_GAME_DATA_CACHE)
 def test_maps_every_manifest_bundle_and_ignores_unpatched_catalog_dependencies(
-    tmp_path: Path, route: str, origin: str
+    tmp_path: Path, route: str, origin: str, font_origin: str, version: str
 ) -> None:
-    manifest, payloads, raw = _write_manifest(tmp_path, route)
+    manifest, payloads, raw = _write_manifest(tmp_path, route, version=version)
     script_payload = b"patched-script-bundle"
     (payloads / "scripts.bin").write_bytes(script_payload)
+    font_payload = b"patched-font-dependency"
+    (payloads / "font.bin").write_bytes(font_payload)
     # Even locally available dependency payloads must not be included implicitly.
     (payloads / "unpatched.bin").write_bytes(b"unpatched dependency")
     data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -290,13 +383,24 @@ def test_maps_every_manifest_bundle_and_ignores_unpatched_catalog_dependencies(
             "size": len(script_payload),
         }
     )
+    data["files"].append(
+        {
+            "target": "addressables",
+            "path": "font-root/font-hash/__data",
+            "downloadUrl": "https://example.test/font.bin.gz",
+            "sha256": hashlib.sha256(font_payload).hexdigest(),
+            "size": len(font_payload),
+        }
+    )
     manifest.write_text(json.dumps(data), encoding="utf-8")
     script_origin = "runtime" if origin == "remote" else "remote"
     script_relative = "StandaloneWindows64/scripts-current.bundle"
+    font_relative = "StandaloneWindows64/font-current.bundle"
     catalog = _write_catalog(
         tmp_path,
         ("bundle-name", "bundle-hash", _internal_id(origin)),
         ("script-root", "script-hash", _internal_id(script_origin, script_relative)),
+        ("font-root", "font-hash", _internal_id(font_origin, font_relative)),
         ("bundle-name", "unpatched-hash", "https://unsupported.example/unpatched.bundle"),
         ("unpatched-name", "bundle-hash", _internal_id("runtime", "unused.bundle")),
         dependencies=True,
@@ -305,19 +409,40 @@ def test_maps_every_manifest_bundle_and_ignores_unpatched_catalog_dependencies(
 
     MODULE.build_manual_patch(manifest, payloads, output, catalog_path=catalog)
 
-    locallow, game_data = STEAM_LAYOUTS[route]
-    script_path = (
-        f"{game_data}/StreamingAssets/aa/{script_relative}"
-        if script_origin == "runtime"
-        else f"{locallow}/com.unity.addressables/AssetBundles/script-root/script-hash/__data"
+    game_data = STEAM_LAYOUTS[route][1]
+    bundle_path = _bundle_path(route, origin, version=version)
+    script_path = _bundle_path(
+        route,
+        script_origin,
+        relative=script_relative,
+        identity="script-root/script-hash/__data",
+        version=version,
+    )
+    font_path = _bundle_path(
+        route,
+        font_origin,
+        relative=font_relative,
+        identity="font-root/font-hash/__data",
+        version=version,
     )
     with zipfile.ZipFile(output) as archive:
         assert set(archive.namelist()) == {
-            "설치방법.txt", _bundle_path(route, origin), script_path, f"{game_data}/data.unity3d"
+            "설치방법.txt", bundle_path, script_path, font_path, f"{game_data}/data.unity3d"
         }
-        assert archive.read(_bundle_path(route, origin)) == raw["lang.bin"]
+        assert archive.read(bundle_path) == raw["lang.bin"]
         assert archive.read(script_path) == script_payload
+        assert archive.read(font_path) == font_payload
         assert archive.read(f"{game_data}/data.unity3d") == raw["data.unity3d"]
+        for archive_path, item in zip(
+            (bundle_path, f"{game_data}/data.unity3d", script_path, font_path),
+            data["files"],
+            strict=True,
+        ):
+            payload = archive.read(archive_path)
+            assert hashlib.sha256(payload).hexdigest() == item["sha256"]
+            assert len(payload) == item["size"]
+        if STEAM_GAME_DATA_CACHE[version]:
+            _assert_game_folder_only(archive, route)
 
 
 @pytest.mark.parametrize("origin", ["remote", "runtime"])

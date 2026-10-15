@@ -5,7 +5,7 @@ import hashlib
 import json
 import urllib.parse
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 from astral_builder.addressables.catalog import AddressablesCatalog
@@ -19,6 +19,7 @@ class SteamRouteLayout:
     locallow_dir: str
     executable_dir: str
     data_dir: str
+    bundle_cache_in_game_data: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,25 @@ ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 README_NAME = "설치방법.txt"
 
 
+def _route_layout(route: str, manifest: dict[str, object]) -> RouteLayout:
+    layout = ROUTE_LAYOUTS[route]
+    if isinstance(layout, AndroidRouteLayout):
+        return layout
+    game = manifest.get("game")
+    version = game.get("version") if isinstance(game, dict) else None
+    if not isinstance(version, str):
+        raise TypeError("Steam manifest is missing game.version")
+    parts = version.split(".")
+    if len(parts) != 3 or any(not part.isascii() or not part.isdecimal() for part in parts):
+        raise ValueError(f"invalid Steam game version: {version!r}")
+    # Steam 3.3.0 moved its CDN cache into Application.dataPath. Catalog
+    # JSON/hash files remain in LocalLow; older clients use that cache too.
+    return replace(
+        layout,
+        bundle_cache_in_game_data=tuple(int(part) for part in parts) >= (3, 3, 0),
+    )
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -84,8 +104,13 @@ def _archive_path(
     relative = _safe_relative_path(relative_path)
     if isinstance(layout, SteamRouteLayout):
         if target == "addressables":
+            root = (
+                PurePosixPath(layout.executable_dir) / layout.data_dir
+                if layout.bundle_cache_in_game_data
+                else PurePosixPath(layout.locallow_dir)
+            )
             return (
-                PurePosixPath(layout.locallow_dir)
+                root
                 / "com.unity.addressables"
                 / "AssetBundles"
                 / relative
@@ -147,7 +172,7 @@ def _steam_archive_paths(
 
 
 def _readme(route: str, manifest: dict[str, object]) -> str:
-    layout = ROUTE_LAYOUTS[route]
+    layout = _route_layout(route, manifest)
     game = manifest.get("game")
     patch = manifest.get("patch")
     if not isinstance(game, dict) or not isinstance(patch, dict):
@@ -213,6 +238,28 @@ def _readme(route: str, manifest: dict[str, object]) -> str:
 """
         )
 
+    if layout.bundle_cache_in_game_data:
+        return (
+            header
+            + f"""
+[설치 방법]
+1. 게임에서 필요한 리소스 다운로드를 먼저 완료한 뒤 게임을 종료합니다.
+
+2. 압축파일 안의 {layout.executable_dir} 폴더를 Astral Party 설치 폴더에 복사하고 기존 파일을 덮어씁니다.
+   예: ...\\Steam\\steamapps\\common\\Astral Party\\
+
+3. 게임을 실행합니다.
+
+[패치 파일 위치]
+- CDN 번들: {layout.executable_dir}\\{layout.data_dir}\\com.unity.addressables\\AssetBundles\\...
+- 게임 내장 번들과 data.unity3d도 같은 게임 데이터 폴더 아래에 배치됩니다.
+
+[참고]
+- 이 압축파일은 수동 설치용입니다.
+- 자동 설치/업데이트 및 원본 복구가 필요하면 WindowsPatcher 사용을 권장합니다.
+"""
+        )
+
     return (
         header
         + f"""
@@ -251,7 +298,7 @@ def build_manual_patch(
     route = patch.get("route")
     if not isinstance(route, str) or route not in ROUTE_LAYOUTS:
         raise ValueError(f"manual patch is not supported for route: {route!r}")
-    layout = ROUTE_LAYOUTS[route]
+    layout = _route_layout(route, manifest)
     steam_paths = (
         _steam_archive_paths(route, layout, files, catalog_path)
         if isinstance(layout, SteamRouteLayout)
