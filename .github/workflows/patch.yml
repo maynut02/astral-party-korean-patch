@@ -384,19 +384,46 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   steam-inputs:
-    name: Fetch Steam legacy inputs
-    needs: plan
+    name: Fetch Steam inputs
+    needs: [plan, state]
     if: needs.plan.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     env:
+      DATABASE_URL: ${{ secrets.ASTRAL_DATABASE_URL }}
       STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
       DEPOTDOWNLOADER_LOGIN_TOKEN: ${{ secrets.STEAM_REFRESH_TOKEN }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-database-tunnel
+        with:
+          host: ${{ secrets.DB_SSH_HOST }}
+          user: ${{ secrets.DB_SSH_USER }}
+          private-key: ${{ secrets.DB_SSH_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DB_SSH_KNOWN_HOSTS }}
+      - uses: ./.github/actions/setup-builder
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 9.0.x
-      - name: Download both data.unity3d files
+      - name: Plan catalog-driven Steam inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .work/steam-plan
+          astral-builder steam-inputs \
+            --revision-id '${{ needs.state.outputs.int_steam_revision_id }}' \
+            --route-config routes/int_steam.yaml \
+            --work-dir .work/steam-plan/int_steam \
+            --filelist .work/steam-plan/int_steam.files \
+            --plan-output .work/steam-plan/int_steam.json
+          astral-builder steam-inputs \
+            --revision-id '${{ needs.state.outputs.cn_steam_revision_id }}' \
+            --route-config routes/cn_steam.yaml \
+            --work-dir .work/steam-plan/cn_steam \
+            --filelist .work/steam-plan/cn_steam.files \
+            --plan-output .work/steam-plan/cn_steam.json
+          cat .work/steam-plan/int_steam.files .work/steam-plan/cn_steam.files \
+            > .work/steam-filelist.txt
+      - name: Download planned Steam files
         shell: bash
         run: |
           set -euo pipefail
@@ -408,10 +435,6 @@ jobs:
           test "$(git -C .work/DepotDownloader rev-parse HEAD)" = c553ef4d60c00a4f5fd16c9fe017f569001589ff
           dotnet build .work/DepotDownloader/DepotDownloader/DepotDownloader.csproj -c Release --nologo
           mkdir -p .work/steam-download
-          cat > .work/legacy-filelist.txt <<'EOF'
-          8vJXnINT/AstralParty_INT_Data/data.unity3d
-          8vJXn6CN/AstralParty_CN_Data/data.unity3d
-          EOF
           dotnet run \
             --project .work/DepotDownloader/DepotDownloader/DepotDownloader.csproj \
             -c Release \
@@ -422,23 +445,23 @@ jobs:
             -username "$STEAM_USERNAME" \
             -remember-password \
             -os windows \
-            -filelist .work/legacy-filelist.txt \
+            -filelist .work/steam-filelist.txt \
             -dir .work/steam-download
           test -s .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d
           test -s .work/steam-download/8vJXn6CN/AstralParty_CN_Data/data.unity3d
-      - name: Upload INT_STEAM legacy input
+      - name: Upload INT_STEAM inputs
         uses: actions/upload-artifact@v7
         with:
           name: patch-steam-int_steam
-          path: .work/steam-download/8vJXnINT/AstralParty_INT_Data/data.unity3d
+          path: .work/steam-download/8vJXnINT/AstralParty_INT_Data/
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
-      - name: Upload CN_STEAM legacy input
+      - name: Upload CN_STEAM inputs
         uses: actions/upload-artifact@v7
         with:
           name: patch-steam-cn_steam
-          path: .work/steam-download/8vJXn6CN/AstralParty_CN_Data/data.unity3d
+          path: .work/steam-download/8vJXn6CN/AstralParty_CN_Data/
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -519,6 +542,7 @@ jobs:
             --github-run-id "$GITHUB_RUN_ID" \
             --git-commit "$GITHUB_SHA" \
             --legacy-data '${{ matrix.legacy_path }}' \
+            --steam-data-dir '${{ matrix.legacy_dir }}' \
             --github-output "$output_file"
           astral-builder validate-build \
             --manifest "$root/manifest.json" \

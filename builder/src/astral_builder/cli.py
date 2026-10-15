@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from dataclasses import asdict
+from pathlib import Path
 from uuid import UUID
 
 import psycopg
@@ -17,6 +19,7 @@ from astral_builder.automation.reuse import (
 from astral_builder.automation.reuse import (
     write_github_output as write_reused_github_output,
 )
+from astral_builder.automation.steam_inputs import plan_steam_inputs
 from astral_builder.automation.sync import (
     load_route_sync_config,
     persist_prepared_revision,
@@ -69,7 +72,19 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--github-run-id")
     build.add_argument("--git-commit")
     build.add_argument("--legacy-data")
+    build.add_argument(
+        "--steam-data-dir", help="Steam game data directory containing StreamingAssets/aa."
+    )
     build.add_argument("--github-output")
+
+    steam_inputs = subparsers.add_parser(
+        "steam-inputs", help="Plan Steam input files from a stored revision's catalog."
+    )
+    steam_inputs.add_argument("--revision-id", required=True)
+    steam_inputs.add_argument("--route-config", required=True)
+    steam_inputs.add_argument("--work-dir", default=".work/steam-inputs")
+    steam_inputs.add_argument("--filelist", required=True)
+    steam_inputs.add_argument("--plan-output")
 
     validate_build = subparsers.add_parser(
         "validate-build", help="Validate a built patch in a fresh process."
@@ -232,6 +247,7 @@ def _run_build(args: argparse.Namespace) -> int:
             github_run_id=args.github_run_id,
             git_commit=args.git_commit,
             legacy_data_path=args.legacy_data,
+            steam_data_dir=args.steam_data_dir,
         )
     if args.github_output:
         write_build_github_output(result, args.github_output)
@@ -247,6 +263,24 @@ def _run_build(args: argparse.Namespace) -> int:
             sort_keys=True,
         )
     )
+    return 0
+
+
+def _run_steam_inputs(args: argparse.Namespace) -> int:
+    with psycopg.connect(_database_url()) as conn:
+        result = plan_steam_inputs(
+            conn,
+            revision_id=UUID(args.revision_id),
+            route_config=args.route_config,
+            work_dir=args.work_dir,
+            filelist_path=args.filelist,
+        )
+    payload = json.dumps(asdict(result), ensure_ascii=False, indent=2, sort_keys=True)
+    if args.plan_output:
+        output = Path(args.plan_output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(payload + "\n", encoding="utf-8", newline="\n")
+    print(payload)
     return 0
 
 
@@ -345,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_sync(args)
     if args.command == "build":
         return _run_build(args)
+    if args.command == "steam-inputs":
+        return _run_steam_inputs(args)
     if args.command == "validate-build":
         return _run_validate_build(args)
     if args.command == "update-index":

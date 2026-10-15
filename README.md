@@ -13,6 +13,12 @@ Astral Party 비공식 한국어 패치의 게임 업데이트 감지, 번역 �
 
 릴리즈 파일은 GitHub의 [Releases](https://github.com/maynut02/astral-party-korean-patch/releases)에서 배포합니다.
 
+### Steam 폰트 입력
+
+`INT_STEAM`과 `CN_STEAM`은 각 revision에 저장된 Addressables catalog를 기준으로 TMP 폰트의 원본 위치를 결정합니다. CDN 번들은 기존 다운로드 경로를 사용하고, `Addressables.RuntimePath` 번들은 Steam의 `StreamingAssets/aa`에서 가져옵니다. 번들 파일명과 의존 번들은 catalog에서 매번 계산하므로 업데이트마다 다운로드 목록을 수정할 필요가 없습니다.
+
+`Patch` workflow의 `steam-inputs` job은 동기화된 revision ID로 `astral-builder steam-inputs`를 실행해 DepotDownloader 파일 목록을 생성합니다. `data.unity3d`와 필요한 로컬 번들을 같은 route artifact로 전달하고, 빌더는 `--steam-data-dir` 아래에서 파일 크기·번들 이름과 실제 폰트/Atlas 대상을 검증합니다. CDN 원본의 기존 DB 해시 검증과 manifest의 원본 백업 정보는 유지합니다. Android 입력과 빌드 방식은 변경하지 않습니다.
+
 ### Android
 
 Android 패치는 Google Play 서명의 원본 게임 APK를 수정하지 않고 외부 Addressables 캐시의 LANG, STR, TMP 폰트 bundle만 대상으로 생성합니다. 실제 설치·복원과 원본 split APK 배포는 `maynut02/astral-party-auto-patcher`의 AndroidPatcher에서 담당합니다.

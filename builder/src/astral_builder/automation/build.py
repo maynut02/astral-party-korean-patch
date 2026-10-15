@@ -7,7 +7,7 @@ from uuid import UUID
 import psycopg
 
 from astral_builder.addressables.catalog import AddressablesCatalog
-from astral_builder.addressables.resolver import ResolvedBundle, resolve_target
+from astral_builder.addressables.resolver import BundleOrigin, ResolvedBundle, resolve_target
 from astral_builder.automation.sync import RouteSyncConfig, load_route_sync_config
 from astral_builder.database.builds import (
     BuildFileRecord,
@@ -29,6 +29,7 @@ from astral_builder.release.manifest import (
 )
 from astral_builder.release.transport import gzip_payload
 from astral_builder.source.downloader import DownloadedBundle, RemoteBundleDownloader
+from astral_builder.source.runtime import load_runtime_bundle
 from astral_builder.validate.assets import validate_file
 
 
@@ -145,6 +146,43 @@ def _one_bundle_with_text_asset(items: tuple[DownloadedBundle, ...], name: str) 
     return matches[0]
 
 
+def _load_steam_tmp_target(
+    catalog: AddressablesCatalog,
+    source: GameSource,
+    catalog_key: str,
+    stored: tuple[StoredBundle, ...],
+    downloader: RemoteBundleDownloader,
+    root: Path,
+    steam_data_dir: str | Path | None,
+) -> tuple[DownloadedBundle, ...]:
+    target = resolve_target(catalog, source, logical_name="tmp-font", catalog_key=catalog_key)
+    runtime_bundles = tuple(
+        bundle for bundle in target.bundles if bundle.origin is BundleOrigin.RUNTIME
+    )
+    if runtime_bundles and steam_data_dir is None:
+        required = ", ".join(bundle.internal_id for bundle in runtime_bundles)
+        raise RuntimeError(
+            "steam_data_dir (--steam-data-dir) is required for TMP runtime dependencies: "
+            f"{required}; provide the Steam game data directory containing StreamingAssets/aa"
+        )
+    remote_bundles = tuple(
+        bundle for bundle in target.bundles if bundle.origin is BundleOrigin.REMOTE
+    )
+    items = list(downloader.download_target(remote_bundles, root))
+    for item in items:
+        _verify_download("tmp-font", item, stored)
+
+    seen: set[tuple[str, str]] = set()
+    for bundle in runtime_bundles:
+        identity = (bundle.bundle_name, bundle.cache_hash)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        assert steam_data_dir is not None
+        items.append(load_runtime_bundle(bundle, Path(steam_data_dir)))
+    return tuple(items)
+
+
 def _release_name(route: str, prefix: str, bundle: ResolvedBundle) -> str:
     route_slug = route.lower().replace("_", "-")
     return f"{route_slug}-{prefix}-{bundle.bundle_name}-{bundle.cache_hash}.bin"
@@ -174,6 +212,7 @@ def build_patch(
     github_run_id: str | None = None,
     legacy_data_path: str | Path | None,
     resources_root: str | Path | None = None,
+    steam_data_dir: str | Path | None = None,
     client: GameSourceClient | None = None,
     downloader: RemoteBundleDownloader | None = None,
 ) -> BuiltPatch:
@@ -283,9 +322,26 @@ def build_patch(
         )
     )
 
-    tmp_items = _download_target(
-        "tmp-font", catalog, source, config.tmp_catalog_key, stored, bundle_downloader, bundles_root
-    )
+    if revision.route in {"INT_STEAM", "CN_STEAM"}:
+        tmp_items = _load_steam_tmp_target(
+            catalog,
+            source,
+            config.tmp_catalog_key,
+            stored,
+            bundle_downloader,
+            bundles_root,
+            steam_data_dir,
+        )
+    else:
+        tmp_items = _download_target(
+            "tmp-font",
+            catalog,
+            source,
+            config.tmp_catalog_key,
+            stored,
+            bundle_downloader,
+            bundles_root,
+        )
     tmp_candidates = [
         item
         for item in tmp_items
@@ -294,7 +350,14 @@ def build_patch(
         in extract_object_names(item.path, type_name="Texture2D")
     ]
     if len(tmp_candidates) != 1:
-        raise RuntimeError("expected exactly one remote bundle containing the TMP font assets")
+        candidates = ", ".join(
+            f"{item.resolved.origin}:{item.resolved.internal_id}" for item in tmp_candidates
+        ) or "none"
+        raise RuntimeError(
+            f"expected exactly one bundle containing TMP MonoBehaviour {config.tmp_asset_name!r} "
+            f"and Texture2D {config.tmp_asset_name + ' Atlas'!r}; "
+            f"found {len(tmp_candidates)} (candidates: {candidates})"
+        )
     tmp_item = tmp_candidates[0]
     resource_root = Path(resources_root or config.resources_root)
     tmp_release_name = _release_name(revision.route, "tmp-font", tmp_item.resolved)
