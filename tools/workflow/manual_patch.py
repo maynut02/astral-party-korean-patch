@@ -8,6 +8,11 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from astral_builder.addressables.catalog import AddressablesCatalog
+from astral_builder.addressables.resolver import BundleOrigin, resolve_bundle
+from astral_builder.game.source import GameSource
+from astral_builder.source.runtime import runtime_bundle_relative_path
+
 
 @dataclass(frozen=True)
 class SteamRouteLayout:
@@ -97,6 +102,50 @@ def _archive_path(
     raise ValueError(f"unsupported manual patch target/path: {target}/{relative}")
 
 
+def _steam_archive_paths(
+    route: str, layout: SteamRouteLayout, files: list[object], catalog_path: Path | None
+) -> dict[str, PurePosixPath]:
+    if catalog_path is None:
+        raise ValueError("catalog is required for Steam manual patches")
+    requested = {
+        _safe_relative_path(item["path"]).as_posix()
+        for item in files
+        if isinstance(item, dict)
+        and item.get("target") == "addressables"
+        and isinstance(item.get("path"), str)
+    }
+    catalog = AddressablesCatalog.from_path(catalog_path)
+    # Only the origin and bundle identity are used here; no remote URLs are fetched.
+    source = GameSource(route, "", "", "", "")
+    paths: dict[str, PurePosixPath] = {}
+    for location in catalog.locations:
+        options = location.bundle_options
+        if options is None:
+            continue
+        identity = f"{options.bundle_name}/{options.hash}/__data"
+        if identity not in requested:
+            continue
+        bundle = resolve_bundle(location, source)
+        if bundle.origin is BundleOrigin.RUNTIME:
+            relative = runtime_bundle_relative_path(bundle)
+            destination = (
+                PurePosixPath(layout.executable_dir)
+                / layout.data_dir
+                / "StreamingAssets"
+                / "aa"
+                / relative
+            )
+        else:
+            destination = _archive_path(layout, "addressables", identity)
+        if identity in paths and paths[identity] != destination:
+            raise ValueError(f"ambiguous catalog bundle destination: {identity}")
+        paths[identity] = destination
+    missing = requested - paths.keys()
+    if missing:
+        raise ValueError(f"manifest bundles not found in catalog: {', '.join(sorted(missing))}")
+    return paths
+
+
 def _readme(route: str, manifest: dict[str, object]) -> str:
     layout = ROUTE_LAYOUTS[route]
     game = manifest.get("game")
@@ -184,7 +233,11 @@ def _readme(route: str, manifest: dict[str, object]) -> str:
 
 
 def build_manual_patch(
-    manifest_path: Path, payloads_dir: Path, output_path: Path
+    manifest_path: Path,
+    payloads_dir: Path,
+    output_path: Path,
+    *,
+    catalog_path: Path | None = None,
 ) -> Path:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schemaVersion") != 2:
@@ -199,6 +252,11 @@ def build_manual_patch(
     if not isinstance(route, str) or route not in ROUTE_LAYOUTS:
         raise ValueError(f"manual patch is not supported for route: {route!r}")
     layout = ROUTE_LAYOUTS[route]
+    steam_paths = (
+        _steam_archive_paths(route, layout, files, catalog_path)
+        if isinstance(layout, SteamRouteLayout)
+        else {}
+    )
 
     entries: list[tuple[Path, PurePosixPath]] = []
     archive_paths: set[PurePosixPath] = set()
@@ -233,7 +291,11 @@ def build_manual_patch(
                 f"expected {expected_sha256}, actual {actual_sha256}"
             )
 
-        archive_path = _archive_path(layout, target, relative_path)
+        archive_path = (
+            steam_paths[_safe_relative_path(relative_path).as_posix()]
+            if isinstance(layout, SteamRouteLayout) and target == "addressables"
+            else _archive_path(layout, target, relative_path)
+        )
         if archive_path in archive_paths:
             raise ValueError(f"duplicate manual patch archive path: {archive_path}")
         archive_paths.add(archive_path)
@@ -271,9 +333,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build a manual-install patch ZIP.")
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--payloads-dir", required=True, type=Path)
+    parser.add_argument("--catalog", type=Path, help="Verified build catalog; required for Steam.")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    output = build_manual_patch(args.manifest, args.payloads_dir, args.output)
+    output = build_manual_patch(
+        args.manifest, args.payloads_dir, args.output, catalog_path=args.catalog
+    )
     print(output)
     return 0
 

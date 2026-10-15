@@ -556,6 +556,7 @@ jobs:
           python tools/workflow/manual_patch.py \
             --manifest "$root/manifest.json" \
             --payloads-dir "$work/payloads" \
+            --catalog "$work/catalog/catalog_${{ needs.plan.outputs.game_version }}.json" \
             --output 'output/release/${{ matrix.route }}_manual_patch.zip'
           build_id="$(sed -n 's/^build_id=//p' "$output_file" | tail -1)"
           test -n "$build_id"
