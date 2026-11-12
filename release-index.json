@@ -121,12 +121,12 @@
       "catalogHash": "1fd3b20873342823ae16cb1e141cfac2",
       "channel": "release",
       "gameVersion": "3.3.0",
-      "manifestSha256": "05448b8d1767868db6b20e08a5a41ede04a75755bafce3a0b824b89e4bab0800",
-      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p0/CN_ANDROID_manifest.json",
-      "patchVersion": "v3.3.0_r150_p0",
+      "manifestSha256": "244fa4eb611239360631f9cd256bc8d471f7c3db13bb3293d5b42eb55dfb9684",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p1/CN_ANDROID_manifest.json",
+      "patchVersion": "v3.3.0_r150_p1",
       "revision": "150",
       "route": "CN_ANDROID",
-      "uploadedAt": "2026-11-12T04:57Z"
+      "uploadedAt": "2026-11-12T08:44Z"
     },
     {
       "catalogHash": "e957842cd48cf573fe2cdb5109480c59",
@@ -218,12 +218,12 @@
       "catalogHash": "99afbbc5c4f3063bf270f455c9013b09",
       "channel": "release",
       "gameVersion": "3.3.0",
-      "manifestSha256": "041b8c8ccdc23dbc3f0e5002a3332ec6958ddcfaeec01e3c3c3162ceff1c53d1",
-      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p0/CN_STEAM_manifest.json",
-      "patchVersion": "v3.3.0_r150_p0",
+      "manifestSha256": "69f8d86a2d9d8bc7d4668952b480395b536c6ec60fa9cd1af31fa57d4b4cec20",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p1/CN_STEAM_manifest.json",
+      "patchVersion": "v3.3.0_r150_p1",
       "revision": "150",
       "route": "CN_STEAM",
-      "uploadedAt": "2026-11-12T04:57Z"
+      "uploadedAt": "2026-11-12T08:44Z"
     },
     {
       "addressablesPaths": [
@@ -344,12 +344,12 @@
       "catalogHash": "ff827aa865154d806556c72400d7bcea",
       "channel": "release",
       "gameVersion": "3.3.0",
-      "manifestSha256": "929ad44cd535960b6ffb923c254a7832e2e0455af8bfba6b79fca3ecf3b9bcb2",
-      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p0/INT_ANDROID_manifest.json",
-      "patchVersion": "v3.3.0_r150_p0",
+      "manifestSha256": "51bbf96c958695dec9696dc27f4bb83f36094cebc3e51e78f6dee185027816d2",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p1/INT_ANDROID_manifest.json",
+      "patchVersion": "v3.3.0_r150_p1",
       "revision": "150",
       "route": "INT_ANDROID",
-      "uploadedAt": "2026-11-12T04:57Z"
+      "uploadedAt": "2026-11-12T08:44Z"
     },
     {
       "catalogHash": "fd58ba01bbca5e5e389b5b73240df134",
@@ -430,12 +430,12 @@
       "catalogHash": "f5bdab165541a09956d3fc1ee254d269",
       "channel": "release",
       "gameVersion": "3.3.0",
-      "manifestSha256": "aea315d1f68cdbb8ee3e65664c5d40c7ba5b3589f691ba36cb2dbfb2032ab5d3",
-      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p0/INT_STEAM_manifest.json",
-      "patchVersion": "v3.3.0_r150_p0",
+      "manifestSha256": "acfca51fb522a5c2407306b46cf49fffc8361ee67f311a0efd474373abadbe06",
+      "manifestUrl": "https://github.com/maynut02/astral-party-korean-patch/releases/download/v3.3.0_r150_p1/INT_STEAM_manifest.json",
+      "patchVersion": "v3.3.0_r150_p1",
       "revision": "150",
       "route": "INT_STEAM",
-      "uploadedAt": "2026-11-12T04:57Z"
+      "uploadedAt": "2026-11-12T08:44Z"
     }
   ],
   "schemaVersion": 1
