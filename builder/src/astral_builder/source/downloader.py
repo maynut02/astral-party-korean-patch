@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import os
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -26,17 +28,33 @@ class DownloadedBundle:
 
 FetchBytes = Callable[[str, float], bytes]
 
+FETCH_ATTEMPTS = 4
+FETCH_RETRY_BASE_DELAY = 2.0
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or exc.code >= 500
+    return True
+
 
 def _default_fetch(url: str, timeout: float) -> bytes:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "astral-party-korean-builder/0.1"},
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read()
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
-        raise BundleDownloadError(f"bundle request failed: {url}: {exc}") from exc
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except (OSError, http.client.HTTPException) as exc:
+            # CDN resets surface from getresponse()/read() unwrapped, not as URLError.
+            if attempt == FETCH_ATTEMPTS or not _is_retryable(exc):
+                raise BundleDownloadError(
+                    f"bundle request failed after {attempt} attempt(s): {url}: {exc!r}"
+                ) from exc
+            time.sleep(FETCH_RETRY_BASE_DELAY * 2 ** (attempt - 1))
+    raise AssertionError("unreachable")
 
 
 class RemoteBundleDownloader:
